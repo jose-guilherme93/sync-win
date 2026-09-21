@@ -1,0 +1,35 @@
+FROM golang:1.25-alpine AS build
+WORKDIR /src
+COPY server/go.mod server/go.sum ./server/
+RUN cd server && go mod download
+COPY server ./server
+COPY agent ./agent
+RUN cd server && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/server ./cmd/server
+RUN cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/lem-agent ./cmd/agent
+
+# Extract agent version from contract.json (single source of truth)
+RUN apk add --no-cache jq && \
+    jq -r '.agent_version' agent/internal/contract/contract.json > /out/agent-version.txt
+
+FROM node:22-alpine AS web
+WORKDIR /src
+COPY web/package.json web/package-lock.json* ./
+RUN npm ci || npm install
+COPY web .
+RUN npm run build
+
+FROM alpine:3.20
+RUN apk add --no-cache curl
+WORKDIR /app
+RUN mkdir -p /data && chmod 0777 /data
+COPY --from=build /out/server /app/server
+COPY --from=build /out/lem-agent /app/lem-agent
+COPY --from=build /out/agent-version.txt /app/agent-version.txt
+COPY --from=web /src/dist /app/web
+COPY scripts/install.sh /app/install.sh
+COPY server/lem-agent.service /app/lem-agent.service
+RUN sha256sum /app/lem-agent | awk '{print $1 "  lem-agent"}' > /app/checksums.txt
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -fs http://localhost:8080/health || exit 1
+CMD ["/app/server"]

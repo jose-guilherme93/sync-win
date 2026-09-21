@@ -1,0 +1,162 @@
+// Package contract embeds the collection contract that defines everything
+// the agent collects and how it talks to the server. The JSON file is the
+// single source of truth; runtime constants must match it (enforced by tests).
+package contract
+
+import (
+	_ "embed"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+//go:embed contract.json
+var raw []byte
+
+type Contract struct {
+	ContractVersion string `json:"contract_version"`
+	AgentVersion    string `json:"agent_version"`
+	Collection      struct {
+		MaxFileBytes         int64    `json:"max_file_bytes"`
+		DefaultFiles         []string `json:"default_preference_files"`
+		ExtraAllowlistPath   string   `json:"extra_allowlist_path"`
+		ExcludedFilesPath    string   `json:"excluded_files_path"`
+		Categories           []string `json:"categories"`
+		RejectedContentRules struct {
+			BinaryOrInvalidUTF8 bool     `json:"binary_or_invalid_utf8"`
+			EmptyContent        bool     `json:"empty_content"`
+			SecretPatterns      []string `json:"secret_patterns"`
+			SensitiveFilenames  []string `json:"sensitive_filenames"`
+		} `json:"rejected_content_rules"`
+		Saves struct {
+			Roots                 []string `json:"roots"`
+			IncludeExtensions     []string `json:"include_extensions"`
+			ExcludedDirs          []string `json:"excluded_dirs"`
+			ExcludedExtensions    []string `json:"excluded_extensions"`
+			MaxSaveFileBytes      int64    `json:"max_save_file_bytes"`
+			MaxTotalBytesPerCycle int64    `json:"max_total_bytes_per_cycle"`
+			MaxDepth              int      `json:"max_depth"`
+		} `json:"saves"`
+	} `json:"collection"`
+	Telemetry struct {
+		IntervalSecondsDefault int      `json:"interval_seconds_default"`
+		Fields                 []string `json:"fields"`
+	} `json:"telemetry"`
+	AppsInventory struct {
+		Sources                []string `json:"sources"`
+		RefreshIntervalSeconds int      `json:"refresh_interval_seconds"`
+	} `json:"apps_inventory"`
+	PreferencesSync struct {
+		IntervalSecondsDefault int    `json:"interval_seconds_default"`
+		StatePath              string `json:"state_path"`
+	} `json:"preferences_sync"`
+	Commands struct {
+		Transport             string   `json:"transport"`
+		SupportedTypes        []string `json:"supported_types"`
+		TimeoutSecondsDefault int      `json:"timeout_seconds_default"`
+		OutputCapBytes        int64    `json:"output_cap_bytes"`
+		PolicyPath            string   `json:"policy_path"`
+	} `json:"commands"`
+	Resilience struct {
+		HTTPTimeoutSeconds    int     `json:"http_timeout_seconds"`
+		BackoffBaseMultiplier int     `json:"backoff_base_multiplier"`
+		BackoffMaxSeconds     int     `json:"backoff_max_seconds"`
+		JitterFraction        float64 `json:"jitter_fraction"`
+	} `json:"resilience"`
+	ServerLimitsMirrored struct {
+		MaxRequestBytes    int64 `json:"max_request_bytes"`
+		MaxFileBytesServer int64 `json:"max_file_bytes_server"`
+		MaxSaveBytesServer int64 `json:"max_save_bytes_server"`
+	} `json:"server_limits_mirrored"`
+	SecurityAudit struct {
+		Enabled            bool `json:"enabled"`
+		LynisTimeoutSeconds int `json:"lynis_timeout_seconds"`
+		ReportMaxBytes     int `json:"report_max_bytes"`
+	} `json:"security_audit"`
+}
+
+// SaveUploadFileBytes is the smaller of the local and mirrored server caps
+// for a single save-game file.
+func (c *Contract) SaveUploadFileBytes() int64 {
+	limit := c.Collection.Saves.MaxSaveFileBytes
+	if c.ServerLimitsMirrored.MaxSaveBytesServer > 0 && c.ServerLimitsMirrored.MaxSaveBytesServer < limit {
+		limit = c.ServerLimitsMirrored.MaxSaveBytesServer
+	}
+	return limit
+}
+
+// Load parses the embedded contract. It never fails in practice; a broken
+// embed is a build-time bug and surfaces as an error here.
+func Load() (*Contract, error) {
+	var c Contract
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return nil, fmt.Errorf("parse embedded contract: %w", err)
+	}
+	return &c, nil
+}
+
+// MustLoad panics on an unreadable embedded contract.
+func MustLoad() *Contract {
+	c, err := Load()
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
+
+// ExpandPath resolves a contract path like "~/.config/lem/policy.json"
+// against the user's home directory and environment.
+func ExpandPath(path string) string {
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			return filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(path, "~"), "/"))
+		}
+	}
+	return os.ExpandEnv(path)
+}
+
+// StatePath returns the agent state file location, honoring XDG_STATE_HOME.
+func StatePath() string {
+	if dir := os.Getenv("XDG_STATE_HOME"); dir != "" {
+		return filepath.Join(dir, "lem", "agent-state.json")
+	}
+	return ExpandPath(cachedContract.PreferencesSync.StatePath)
+}
+
+// cachedContract backs StatePath; loaded lazily by SetStateSource/SetContract.
+var cachedContract = mustLoadForPaths()
+
+func mustLoadForPaths() Contract {
+	c, err := Load()
+	if err != nil {
+		panic(err)
+	}
+	return *c
+}
+
+// Durations helpers keep call sites terse.
+
+func (c *Contract) HTTPTimeout() time.Duration {
+	return time.Duration(c.Resilience.HTTPTimeoutSeconds) * time.Second
+}
+
+func (c *Contract) BackoffMax() time.Duration {
+	return time.Duration(c.Resilience.BackoffMaxSeconds) * time.Second
+}
+
+func (c *Contract) CommandTimeout(overrideSeconds int) time.Duration {
+	if overrideSeconds > 0 {
+		return time.Duration(overrideSeconds) * time.Second
+	}
+	return time.Duration(c.Commands.TimeoutSecondsDefault) * time.Second
+}
+
+func (c *Contract) LynisTimeout() time.Duration {
+	if c.SecurityAudit.LynisTimeoutSeconds > 0 {
+		return time.Duration(c.SecurityAudit.LynisTimeoutSeconds) * time.Second
+	}
+	return 600 * time.Second
+}

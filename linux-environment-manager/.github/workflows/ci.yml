@@ -1,0 +1,134 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.25"
+  NODE_VERSION: "22"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Go: Lint (server + agent)
+  # ---------------------------------------------------------------------------
+  lint-go:
+    name: Lint Go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.62.2
+
+      - name: Lint server
+        run: cd server && golangci-lint run ./...
+
+      - name: Lint agent
+        run: cd agent && golangci-lint run ./...
+
+  # ---------------------------------------------------------------------------
+  # Go: Test (server + agent)
+  # ---------------------------------------------------------------------------
+  test-go:
+    name: Test Go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Test server
+        run: cd server && go test -race -count=1 ./...
+
+      - name: Test agent
+        run: cd agent && go test -race -count=1 ./...
+
+  # ---------------------------------------------------------------------------
+  # Go: Build verification
+  # ---------------------------------------------------------------------------
+  build-go:
+    name: Build Go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Build server
+        run: cd server && CGO_ENABLED=0 go build -o /dev/null ./cmd/server
+
+      - name: Build agent
+        run: cd agent && CGO_ENABLED=0 go build -o /dev/null ./cmd/agent
+
+  # ---------------------------------------------------------------------------
+  # Web: Build + Type-check
+  # ---------------------------------------------------------------------------
+  web:
+    name: Build Web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: cd web && npm ci
+
+      - name: Type-check
+        run: cd web && npm run check
+
+      - name: Build
+        run: cd web && npm run build
+
+  # ---------------------------------------------------------------------------
+  # Docker: Build verification
+  # ---------------------------------------------------------------------------
+  docker-build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: [test-go, web]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.server
+          push: false
+          tags: lem:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify healthcheck
+        run: |
+          docker run -d --name lem-test -p 8080:8080 \
+            -e LEM_ENV=development \
+            -e LEM_SECRET_KEY=test-key-for-ci-only-1234 \
+            lem:test
+          sleep 5
+          curl -fs http://localhost:8080/health || (docker logs lem-test && exit 1)
+          docker stop lem-test

@@ -1,0 +1,43 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Go
+bin/
+*.exe
+*.test
+*.out
+coverage.out
+server/server
+agent/agent
+
+# Node / Svelte
+web/node_modules/
+web/dist/
+web/.svelte-kit/
+web/.vite/
+
+# Docker / local data
+.data/
+/data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# Temporary
+/tmp/
+*.tmp

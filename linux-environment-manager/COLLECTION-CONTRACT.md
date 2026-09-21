@@ -1,0 +1,111 @@
+# Collection Contract
+
+Este documento é o contrato vinculante entre **agent (client)** e **server**. Tudo que o agent coleta e envia está definido aqui e no arquivo machine-readable `agent/internal/contract/contract.json` (embutido no binário). Nada fora deste contrato sai da máquina.
+
+## Princípios
+
+1. **O agent tem controle total** sobre o que executa localmente. Comandos vindos do servidor são *pull-only* (o agent pergunta), são validados localmente e podem ser recusados pela política local (`~/.config/lem/policy.json`) sem que o servidor tenha como forçar.
+2. **Allowlist explícita**: nenhum diretório é varrido; apenas os arquivos listados abaixo (mais os extras autorizados pelo operador).
+3. **Nada sensível trafega**: segredos, binários e arquivos de credencial são detectados e recusados antes do upload.
+4. **Nada se perde**: cada campo enviado está especificado aqui com tipo e limite; o estado do agent sobrevive a restarts (`~/.local/state/lem/agent-state.json`).
+
+## Arquivos de preferência coletados
+
+| Caminho padrão | Categoria |
+|---|---|
+| `~/.bashrc` | shell |
+| `~/.profile` | shell |
+| `~/.zshrc` | shell |
+| `~/.config/kdeglobals` | kde |
+| `~/.config/gtk-3.0/settings.ini` | desktop |
+| `~/.config/gtk-4.0/settings.ini` | desktop |
+| `~/.config/Code/User/settings.json` | app |
+
+- Extras: caminhos absolutos, um por linha, em `~/.config/lem/allowed-files`.
+- Exclusões: `~/.config/lem/excluded-files` (por caminho ou basename).
+- Limite por arquivo: **512 KiB** (agente) / espelhado no servidor: **256 KiB**, request total: **2 MiB**.
+- Categorias válidas: `kde`, `desktop`, `shell`, `app`, `general`, `saves`.
+- Recusas automáticas: conteúdo vazio, binário/Não-UTF8 (exceto categoria `saves` com `encoding: "base64"`), padrões de segredo (PEM private key, AWS AKIA, GitHub `ghp_`/`gho_`/etc., Slack `xox*-`, Stripe `sk_live_`, Google `AIza…`) e filenames sensíveis (`id_rsa*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`). Para `encoding: "base64"` a verificação de segredos é pulada.
+
+### Save Games (categoria `saves`)
+
+| Raiz padrão | Filtro |
+|---|---|
+| `~/.config/hydralauncher/wine-prefixes/*/drive_c/users/*/Documents` | ext allowlist + profundidade ≤12, exclui `Temp`, `Cache*`, `content` etc. |
+| `~/.config/hydralauncher/wine-prefixes/*/drive_c/users/*/Saved Games` | mesmo filtro |
+| `~/.config/hydralauncher/wine-prefixes/*/drive_c/users/*/AppData/Roaming` | apenas ext allowlist |
+| `~/.config/hydralauncher/ludusavi/config.yaml` | arquivo único |
+| `~/.steam/steam/userdata` | mesmo filtro |
+| `~/.var/app/com.valvesoftware.Steam/.steam/steam/userdata` | mesmo filtro |
+| `~/.config/unity3d` | mesmo filtro |
+
+- Extensões permitidas: `.save`, `.sav`, `.sgm`, `.srm`, `.mcr`, `.mcd`, `.savemeta`, `.bin`, `.dat`, `.cfg`, `.ini`, `.json`, `.yaml`, `.yml`, `.xml`, `.txt`, `.vdf`, `.prof`, `.litematic`
+- Diretórios excluídos (em qualquer nível): `Temp`, `temp`, `Cache`, `Code Cache`, `GPUCache`, `DawnGraphiteCache`, `DawnWebGPUCache`, `INetCache`, `INetCookies`, `History`, `Crashpad`, `blob_storage`, `Shared Dictionary`, `content`, `Content`, `CommonRedist`, `redist`, `__installer`, `shadercache`
+- Extensões lixo: `.tmp`, `.log`, `.dmp`, `.bak`, `.old`, `.lock`
+- Limites: **1 MiB** por arquivo, **16 MiB** total por ciclo de sync
+- Arquivos binários são enviados como base64 (`encoding: "base64"`); texto permanece como UTF-8
+- Extras do operador: configurados via dashboard (GET/PUT `/api/sync-config`) e servidos ao agent via `GET /api/devices/{id}/sync-config`
+
+### Payload de sync (`POST /api/devices/{id}/sync`)
+
+```json
+{
+  "device_token": "...",
+  "preferences": [
+    {
+      "category": "shell",
+      "filename": "bashrc",
+      "relative_path": ".bashrc",
+      "content": "<texto utf-8>"
+    },
+    {
+      "category": "saves",
+      "filename": "Slot_00000002.save",
+      "relative_path": ".config/hydralauncher/wine-prefixes/1222670/drive_c/users/steamuser/Documents/Electronic Arts/The Sims 4/saves/Slot_00000002.save",
+      "content": "<base64>",
+      "encoding": "base64"
+    }
+  ]
+}
+```
+
+Resposta: `{"saved": [PreferenceFile...], "rejected": [{"filename", "reason"}]}` — o servidor deduplica por hash de conteúdo.
+
+## Telemetria (`POST /api/devices/{id}/telemetry`)
+
+Campos enviados (todos opcionais no display, mas parte do contrato):
+
+`cpu_usage_percent, memory_used_bytes, memory_total_bytes, disk_read_bytes, disk_write_bytes, disk_read_rate, disk_write_rate, uptime_seconds, load_average, cpu_model, kernel, operating_system, power_watts, architecture, desktop_environment, locale, timezone, agent_version`
+
+Fontes: `/proc/stat`, `/proc/meminfo`, `/proc/diskstats`, `/proc/uptime`, `/proc/loadavg`, `/proc/cpuinfo`, `/sys/class/power_supply/*/power_now`, `/etc/os-release`, `$XDG_CURRENT_DESKTOP`, `$LANG`, `/etc/timezone`. Intervalo padrão: 10 s.
+
+## Inventário de apps (`POST /api/devices/{id}/apps`)
+
+Fontes: `apt-mark showmanual`, `flatpak --user list`, `pacman -Qqe` (menos `-Qmq`), `paru/yay -Qmq`, AppImages em `~/Applications` e `~/.local/bin`. Campos: `{name, version?, source, path?}` com `source ∈ {apt, flatpak, pacman, aur, appimage}`. Atualiza a cada 5 min junto do ciclo de preferências.
+
+## Heartbeat (`POST /api/devices/{id}/heartbeat`)
+
+Corpo: `{"device_token": "..."}` — zera contador de falhas e marca online. O server deriva status: online (<30 s), stale (>30 s), offline (>5 min), error (último erro mais novo que último seen).
+
+## Comandos (pull via `GET /api/devices/{id}/commands`, resultado via `POST .../commands/{cmd}`)
+
+| Tipo | Ação local | Validações do agent |
+|---|---|---|
+| `install_app` | apt-get/flatpak/pacman/paru/yay install | nome validado (charset restrito), fonte conhecida, **timeout** configurável (padrão 900 s), saída limitada a 64 KiB, exigível `allow_install_app=false` na policy |
+| `exclude_file` | adiciona linha em excluded-files | caminho relativo, sem `..`; idempotente |
+| `lynis_audit` | executa `lynis audit system --cronjob --no-colors` | Lynis deve estar instalado; timeout 120 s; parseia `lynis-report.dat` em JSON estruturado (hardening_index, warnings, suggestions, categories); resultado armazenado no servidor em `security_audits` |
+
+- **Policy local** (`~/.config/lem/policy.json`, criada pelo operador): `{"allow_install_app": true, "allow_exclude_file": true, "allow_lynis_audit": true, "command_timeout_seconds": 900}`. Comando recusado é reportado ao servidor com motivo — nada executa sem consentimento local.
+- Transporte: token via header `Authorization: Bearer`; polling apenas; o servidor nunca empurra nada.
+
+## Resiliência
+
+- HTTP timeout: 15 s por requisição.
+- Backoff exponencial em falhas consecutivas de ciclo: intervalo × 2^n até 10 min, com jitter de ~10% (evita sincronização de rebanho).
+- Estado persistente: hashes dos últimos conteúdos sincronizados + timestamp do último sync de preferências; restart não re-envia arquivo inalterado nem perde o agendamento.
+- systemd user unit gerada pelo `install.sh`: `Restart=always`, `RestartSec=15`, `StartLimitIntervalSec=0` (nunca entra em ban).
+- Arquivos individuais problemáticos são pulados com log — um arquivo ruim nunca aborta o lote.
+
+## Versionamento do contrato
+
+`contract_version` no JSON segue SemVer. Mudanças incompatíveis de schema exigem bump major e atualização simultânea deste arquivo. Testes automatizados garantem que constantes de runtime e o JSON embutido não divergem.

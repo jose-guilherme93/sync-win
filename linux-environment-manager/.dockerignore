@@ -1,0 +1,56 @@
+# Version control
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Node
+web/node_modules
+web/dist
+web/.svelte-kit
+web/.vite
+
+# Go build artifacts
+server/server
+server/bin
+agent/agent
+agent/bin
+*.exe
+*.test
+*.out
+*.log
+
+# Runtime data
+data/
+.tmp/
+tmp/
+
+# Documentation
+*.md
+LICENSE
+
+# Tests
+tests/
+
+# Docker
+compose.yaml
+compose.prod.yaml
+docker-compose*.yml
+.dockerignore
+Dockerfile*
+
+# CI/CD
+.github/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.env.*
+!.env.example
