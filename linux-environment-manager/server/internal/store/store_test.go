@@ -338,6 +338,16 @@ func TestCompleteCommandScopedToDevice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("queue install: %v", err)
 	}
+	pending, err := store.GetPendingCommands(deviceA.ID)
+	if err != nil {
+		t.Fatalf("get pending commands: %v", err)
+	}
+	if len(pending) != 1 || pending[0].ID != command.ID {
+		t.Fatalf("expected queued command to be pending, got %#v", pending)
+	}
+	if pending[0].CreatedAt.IsZero() {
+		t.Fatal("pending command created_at should be parsed")
+	}
 	if err := store.CompleteCommand(command.ID, deviceB.ID, "completed", ""); err == nil {
 		t.Fatal("completing another device's command must fail")
 	}
@@ -687,5 +697,62 @@ func TestResolutionForInterval(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("ResolutionForInterval(%s) = %s, want %s", tt.fromOffset, got, tt.want)
 		}
+	}
+}
+
+func TestListDeviceSummariesForOwner(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	device, err := store.RegisterDevice("summary-pc", "user", "owner-1", "")
+	if err != nil {
+		t.Fatalf("register device: %v", err)
+	}
+
+	if _, _, err := store.SavePreferenceBatch(device.ID, []PreferenceInput{
+		{Category: "kde", Filename: "kdeglobals", RelativePath: "kdeglobals", Content: "[General]\n"},
+		{Category: "saves", Filename: "slot1.sav", RelativePath: "slot1.sav", Content: "save-data\n"},
+	}); err != nil {
+		t.Fatalf("save preferences: %v", err)
+	}
+	if err := store.UpdateApps(device.ID, []AppInfo{
+		{Source: "flatpak", Name: "org.mozilla.firefox", Version: "1.0"},
+		{Source: "pacman", Name: "neovim", Version: "0.10"},
+	}); err != nil {
+		t.Fatalf("update apps: %v", err)
+	}
+	if _, err := store.UpdateHardwareStats(device.ID, HardwareStats{CPUUsagePercent: 12.5, AgentVersion: "0.6.1"}); err != nil {
+		t.Fatalf("update hardware: %v", err)
+	}
+
+	summaries, err := store.ListDeviceSummariesForOwner("owner-1")
+	if err != nil {
+		t.Fatalf("list summaries: %v", err)
+	}
+	if len(summaries) != 1 {
+		t.Fatalf("expected 1 summary, got %d", len(summaries))
+	}
+	got := summaries[0]
+	if got.PreferenceCount != 1 {
+		t.Errorf("preference_count = %d, want 1", got.PreferenceCount)
+	}
+	if got.SavesCount != 1 {
+		t.Errorf("saves_count = %d, want 1", got.SavesCount)
+	}
+	if got.SavesSizeBytes != int64(len("save-data\n")) {
+		t.Errorf("saves_size_bytes = %d, want %d", got.SavesSizeBytes, len("save-data\n"))
+	}
+	if got.AppCount != 2 {
+		t.Errorf("app_count = %d, want 2", got.AppCount)
+	}
+	if got.Hardware.CPUUsagePercent != 12.5 {
+		t.Errorf("cpu_usage_percent = %v, want 12.5", got.Hardware.CPUUsagePercent)
+	}
+	if got.Hardware.AgentVersion != "0.6.1" {
+		t.Errorf("agent_version = %q, want 0.6.1", got.Hardware.AgentVersion)
+	}
+	if got.HardwareFingerprint != "" {
+		t.Errorf("unexpected fingerprint %q", got.HardwareFingerprint)
 	}
 }

@@ -66,7 +66,7 @@ The web frontend is a Svelte 5 + TypeScript 6 + Vite 8 application that shows de
 
 - Account-first auth (sign in / create account)
 - Device grid with status badges and save counts
-- Real-time CPU/memory/disk I/O charts (Chart.js)
+- Real-time CPU/memory/network sparklines on device cards (lightweight canvas)
 - Device detail modal with tabs: System, Files, Packages, Saves, Notes, Docker
 - Docker container management (start/stop/restart/kill/remove, exec, compose editor, prune)
 - Telemetry history with time period selection
@@ -82,10 +82,42 @@ In production the server serves the built dashboard itself from `LEM_WEB_DIR` (d
 ### Quick start with Docker Compose
 
 ```bash
-docker compose up --build
+make prod
 ```
 
-The server starts at `http://localhost:8080`. Open the dashboard, create an account, and install the agent on your Linux devices.
+The production stack builds the image and starts the server at `http://localhost:8080` with persistent data in `./data`. Open the dashboard, create an account, and install the agent on your Linux devices.
+
+Before the first production run, create the environment file with a generated secret:
+
+```bash
+make env      # creates .env from .env.example and fills LEM_SECRET_KEY
+make prod
+```
+
+`make help` lists every target. If you prefer raw Compose, `docker compose -f compose.prod.yaml up -d --build` is equivalent.
+
+### Development environment
+
+```bash
+make dev
+```
+
+This brings up the whole application in containers with hot reload:
+
+| Service | URL | Behaviour |
+| --- | --- | --- |
+| Server | `http://localhost:8080` | Go server rebuilt by [air](https://github.com/air-verse/air) on every change |
+| Dashboard | `http://localhost:5173` | Vite dev server with HMR |
+
+Development data lives in `./data-dev`, separate from production `./data`. To run dev alongside a running production stack, publish dev on other ports:
+
+```bash
+LEM_HTTP_PORT=8081 WEB_PORT=5199 make dev
+```
+
+The Vite dev server automatically points at the dev API port via `VITE_API_BASE`.
+
+Useful targets: `make dev-d` (detached), `make dev-logs`, `make dev-down`, `make clean-dev`.
 
 ### Agent installation
 
@@ -100,18 +132,23 @@ See [QUICKSTART.md](QUICKSTART.md) for detailed instructions.
 
 ## Running from source
 
-From the repository root:
+The `Makefile` wraps the common commands:
+
+```bash
+make build        # server + agent + web
+make test         # go test (server, agent) + svelte-check
+make lint         # go vet + svelte-check
+make run-server   # go run the API on :8080 against ./data-dev
+make run-web      # Vite dev server on :5173
+make run-agent    # run the agent daemon locally
+```
+
+Individual builds remain available:
 
 ```bash
 cd server && go build ./...
 cd ../agent && go build ./...
 cd ../web && npm install && npm run build
-```
-
-You can also start the server container with Docker Compose:
-
-```bash
-docker compose up --build
 ```
 
 ### Debug logs

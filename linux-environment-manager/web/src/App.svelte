@@ -2,10 +2,11 @@
   import { onMount } from 'svelte'
   import DeviceModal from './components/DeviceModal.svelte'
   import SimpleMetrics from './components/SimpleMetrics.svelte'
-  import DashboardCharts from './components/DashboardCharts.svelte'
+  import Sparkline from './components/Sparkline.svelte'
   import NotificationsModal from './components/NotificationsModal.svelte'
   import NotificationToast from './components/NotificationToast.svelte'
   import { addTelemetryPoint } from './lib/telemetry-store'
+  import { serverBase } from './lib/api'
 
   type Device = {
     id: string
@@ -15,7 +16,6 @@
     last_seen_at: string
     last_sync_at: string
     created_at?: string
-    device_token?: string
     hardware?: HardwareStats
     apps?: AppInfo[]
     app_count: number
@@ -87,7 +87,6 @@
   type StatusFilter = 'all' | 'online' | 'degraded' | 'errors'
   type LiveState = 'live' | 'paused' | 'reconnecting'
 
-  const serverBase = `${window.location.protocol}//${window.location.hostname}:8080`
   // The address embedded in the install command. It defaults to how the
   // dashboard is being accessed right now, but stays editable so the user can
   // point agents at the server's LAN address when the dashboard was opened
@@ -138,6 +137,7 @@
   let password = ''
   let authMode: 'login' | 'register' = 'login'
   let authError = ''
+  let sessionExpired = false
   let accountEmail = ''
 
   $: signedIn = Boolean(authToken && ownerIdentity && accountEmail)
@@ -153,7 +153,12 @@
   type MetricsMode = 'simple' | 'complex'
   let metricsMode: MetricsMode = (localStorage.getItem('lem-metrics-mode') as MetricsMode) || 'simple'
   let deviceModalOpen = false
-  let modalDevice: Device | null = null
+  let deviceDetails: Record<string, Device> = {}
+  // The modal prefers the full detail payload (logs, processes, Docker state)
+  // and falls back to the lightweight list entry while it loads.
+  $: modalDevice = selectedDeviceId
+    ? deviceDetails[selectedDeviceId] || devices.find((d) => d.id === selectedDeviceId) || null
+    : null
 
   let toastMessage = ''
   let toastKind: 'success' | 'error' = 'success'
@@ -293,6 +298,9 @@
           authToken = ''
           ownerIdentity = ''
           accountEmail = ''
+          devices = []
+          lastDevicesJson = ''
+          sessionExpired = true
         }
       }).catch(() => {
         // Network error — keep using cached credentials
@@ -310,7 +318,10 @@
 
   function connectNotifSSE() {
     if (notifSSE) return
-    notifSSE = new EventSource(`${serverBase}/api/notifications/stream`)
+    // EventSource cannot set Authorization headers, so the owner is passed as
+    // a query parameter — the server accepts owner_id as a fallback.
+    const owner = encodeURIComponent(ownerIdentity || 'anonymous')
+    notifSSE = new EventSource(`${serverBase}/api/notifications/stream?owner_id=${owner}`)
     notifSSE.onmessage = (ev) => {
       try {
         const event = JSON.parse(ev.data)
@@ -322,9 +333,9 @@
     notifSSE.onerror = () => {
       notifSSE?.close()
       notifSSE = null
-      // Reconnect after 5 seconds on error
+      // Reconnect after 5 seconds unless the component is being torn down.
       setTimeout(() => {
-        if (signedIn) connectNotifSSE()
+        if (!notifSSE) connectNotifSSE()
       }, 5000)
     }
   }
@@ -365,12 +376,13 @@
       const response = await fetch(`${serverBase}/api/devices`, { headers: ownerHeaders })
       if (!response.ok) throw new Error(`request failed: ${response.status}`)
       const payload = await response.json()
+      if (!Array.isArray(payload)) throw new Error('invalid devices response')
       const serialized = JSON.stringify(payload)
       if (serialized !== lastDevicesJson) {
         lastDevicesJson = serialized
         devices = payload
         for (const dev of payload) {
-          if (dev.hardware) {
+          if (dev?.id && dev.hardware) {
             addTelemetryPoint(dev.id, dev.hardware)
           }
         }
@@ -402,6 +414,9 @@
       return
     }
     await Promise.all([loadDevices(false), pollNotifications()])
+    if (deviceModalOpen && selectedDeviceId) {
+      void loadDeviceDetail(selectedDeviceId)
+    }
     schedulePoll(Math.min(POLL_MS * 2 ** Math.min(consecutiveFailures, 4), MAX_POLL_MS))
   }
 
@@ -434,6 +449,7 @@
       const response = await fetch(`${serverBase}/api/devices/${deviceId}`, { headers: ownerHeaders })
       if (!response.ok) throw new Error(`file request failed: ${response.status}`)
       const payload = await response.json()
+      if (!Array.isArray(payload)) throw new Error('invalid files response')
       filesByDevice = { ...filesByDevice, [deviceId]: payload }
       // Cache to localStorage for instant access on next visit
       localStorage.setItem(`lem-files-${deviceId}`, JSON.stringify(payload))
@@ -614,16 +630,29 @@
   }
 
   function selectDevice(deviceId: string) {
-    modalDevice = devices.find(d => d.id === deviceId) || null
-    if (modalDevice) {
-      deviceModalOpen = true
-      selectPanels(deviceId)
+    if (!deviceId) return
+    selectedDeviceId = deviceId
+    deviceModalOpen = true
+    void loadDeviceDetail(deviceId)
+    selectPanels(deviceId)
+  }
+
+  async function loadDeviceDetail(deviceId: string) {
+    if (!deviceId) return
+    try {
+      const response = await fetch(`${serverBase}/api/devices/${deviceId}/detail`, { headers: ownerHeaders })
+      if (!response.ok) return
+      const payload = await response.json()
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload) || !payload.id) return
+      deviceDetails = { ...deviceDetails, [deviceId]: payload }
+    } catch {
+      // Keep the last known detail; the list summary still renders.
     }
   }
 
   function closeDeviceModal() {
     deviceModalOpen = false
-    modalDevice = null
+    selectedDeviceId = ''
   }
 
   function setMetricsMode(mode: MetricsMode) {
@@ -809,12 +838,15 @@
       authToken = payload.token
       ownerIdentity = payload.owner_id
       accountEmail = payload.email
+      sessionExpired = false
       localStorage.setItem('lem-auth-token', authToken)
       localStorage.setItem('lem-owner-id', ownerIdentity)
       localStorage.setItem('lem-account-email', accountEmail)
       devices = []
       lastDevicesJson = ''
       password = ''
+      disconnectNotifSSE()
+      connectNotifSSE()
       notify(`Signed in as ${accountEmail}`)
       await loadDevices(true)
     } catch (err) {
@@ -824,6 +856,7 @@
 
   function signOut() {
     clearAccountStorage()
+    disconnectNotifSSE()
     authToken = ''
     accountEmail = ''
     ownerIdentity = ''
@@ -1261,13 +1294,13 @@
 
     if (agentCpu > 5) insights.push({ text: `Agent ${agentCpu.toFixed(1)}%`, type: 'warn' })
 
-    if (h.kernel) {
-      const parts = h.kernel.split('.')
+    if (h.kernel_version) {
+      const parts = h.kernel_version.split('.')
       if (parts.length >= 2) {
         const major = parseInt(parts[0])
         const minor = parseInt(parts[1])
         if (major < 5 || (major === 5 && minor < 15)) {
-          insights.push({ text: `Kernel ${h.kernel}`, type: 'warn' })
+          insights.push({ text: `Kernel ${h.kernel_version}`, type: 'warn' })
         }
       }
     }
@@ -1327,6 +1360,9 @@
         <p class="eyebrow">Linux Environment Manager</p>
         <h1 id="auth-gate-title">{authMode === 'login' ? 'Sign in' : 'Create your account'}</h1>
         <p class="gate-hint">Every device and agent install is registered under your account. Sign in first — then copy the install command to your Linux machines.</p>
+        {#if sessionExpired && authMode === 'login'}
+          <p class="error-inline">Your session expired. Sign in again to see your devices.</p>
+        {/if}
         {#if authError}
           <p class="error-inline">{authError}</p>
         {/if}
@@ -1533,7 +1569,7 @@
             <p class="card-user">{device.user_id}</p>
 
             {#if metricsMode === 'complex'}
-              <DashboardCharts {device} authHeaders={ownerHeaders} />
+              <Sparkline {device} />
             {:else}
               <div class="device-summary">
                 <div class="stat"><strong>{cpu.toFixed(0)}%</strong><span>CPU</span></div>
@@ -1853,7 +1889,7 @@
   </div>
 {/if}
 
-<NotificationsModal open={notificationsOpen} {authHeaders} on:close={closeNotifications} />
+<NotificationsModal open={notificationsOpen} authHeaders={ownerHeaders} on:close={closeNotifications} />
 
 {#if notifEvents.length > 0}
   <div class="notif-toast-stack">

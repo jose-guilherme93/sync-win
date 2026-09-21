@@ -1,4 +1,4 @@
-import { writable, derived, get } from 'svelte/store'
+import { writable, derived, type Readable } from 'svelte/store'
 
 export type ChartPoint = {
   timestamp: string
@@ -11,32 +11,18 @@ export type ChartPoint = {
 
 const MAX_POINTS = 120
 
+// Single shared map of device id -> recent telemetry points. Components
+// subscribe to `deviceHistoryStore(id)` instead of polling `get()` inside
+// reactive blocks, so updates propagate without recreating charts.
 const store = writable<Map<string, ChartPoint[]>>(new Map())
 
-let subscribers = 0
-let unsubscribeFn: (() => void) | null = null
-
-function ensureSubscription() {
-  if (subscribers > 0) return
-  subscribers++
-}
-
-export function subscribeToDevice(deviceId: string): ChartPoint[] {
-  ensureSubscription()
-  const map = get(store)
-  return map.get(deviceId) || []
-}
-
-export function addTelemetryPoint(deviceId: string, hw: Record<string, any>) {
-  const map = get(store)
-  const existing = map.get(deviceId) || []
-
+function pointFromHardware(hw: Record<string, any>, timestamp: string): ChartPoint {
   const memTotal = hw.memory_total_bytes || 1
   const memPct = hw.memory_used_bytes ? (hw.memory_used_bytes / memTotal) * 100 : 0
 
   let netRx = 0
   let netTx = 0
-  if (hw.network_ifaces && Array.isArray(hw.network_ifaces)) {
+  if (Array.isArray(hw.network_ifaces)) {
     for (const iface of hw.network_ifaces) {
       if (iface.name === 'lo') continue
       netRx += iface.rx_rate || 0
@@ -44,39 +30,44 @@ export function addTelemetryPoint(deviceId: string, hw: Record<string, any>) {
     }
   }
 
-  const point: ChartPoint = {
-    timestamp: new Date().toISOString(),
+  return {
+    timestamp,
     cpu: hw.cpu_usage_percent || 0,
     memory: memPct,
     netRx,
     netTx,
     temp: hw.cpu_temperature || null
   }
-
-  const updated = [...existing, point]
-  if (updated.length > MAX_POINTS) {
-    updated.splice(0, updated.length - MAX_POINTS)
-  }
-
-  const newMap = new Map(map)
-  newMap.set(deviceId, updated)
-  store.set(newMap)
 }
 
+export function addTelemetryPoint(deviceId: string, hw: Record<string, any>) {
+  store.update((map) => {
+    const existing = map.get(deviceId) || []
+    const updated = [...existing, pointFromHardware(hw, new Date().toISOString())]
+    if (updated.length > MAX_POINTS) {
+      updated.splice(0, updated.length - MAX_POINTS)
+    }
+    const next = new Map(map)
+    next.set(deviceId, updated)
+    return next
+  })
+}
+
+// setHistoryFromAPI seeds the store from the server history. Live points that
+// arrived while the request was in flight are preserved and appended after the
+// API points, so the chart never loses data or ignores the fetched history.
 export function setHistoryFromAPI(deviceId: string, points: ChartPoint[]) {
-  const map = get(store)
-  const existing = map.get(deviceId) || []
-  if (existing.length > 0) return
-  const newMap = new Map(map)
-  newMap.set(deviceId, points.slice(-MAX_POINTS))
-  store.set(newMap)
+  store.update((map) => {
+    const existing = map.get(deviceId) || []
+    const lastApiTs = points.length > 0 ? new Date(points[points.length - 1].timestamp).getTime() : 0
+    const liveNewer = existing.filter((p) => new Date(p.timestamp).getTime() > lastApiTs)
+    const merged = [...points, ...liveNewer].slice(-MAX_POINTS)
+    const next = new Map(map)
+    next.set(deviceId, merged)
+    return next
+  })
 }
 
-export function getDeviceHistory(deviceId: string): ChartPoint[] {
-  const map = get(store)
-  return map.get(deviceId) || []
-}
-
-export function deviceHistoryStore(deviceId: string) {
+export function deviceHistoryStore(deviceId: string): Readable<ChartPoint[]> {
   return derived(store, ($map) => $map.get(deviceId) || [])
 }

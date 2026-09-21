@@ -1,6 +1,7 @@
 package app
 
 import (
+	"compress/gzip"
 	"context"
 	"crypto/subtle"
 	"database/sql"
@@ -230,7 +231,7 @@ func Run() error {
 	}
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           corsMiddleware(logging.HTTPMiddleware(structLogger, limitBody(mux))),
+		Handler:           corsMiddleware(logging.HTTPMiddleware(structLogger, gzipMiddleware(limitBody(mux)))),
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      0, // no timeout: SSE needs long-lived connections
 		IdleTimeout:       15 * time.Second,
@@ -332,6 +333,70 @@ func limitBody(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// gzipMiddleware compresses JSON API responses when the client advertises
+// gzip support. Streaming endpoints (SSE) and non-API paths are passed
+// through untouched.
+func gzipMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/") ||
+			r.URL.Path == "/api/notifications/stream" ||
+			!strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		gz := gzip.NewWriter(w)
+		grw := &gzipResponseWriter{ResponseWriter: w, gz: gz}
+		next.ServeHTTP(grw, r)
+		if grw.compress {
+			_ = gz.Close()
+		}
+	})
+}
+
+// gzipResponseWriter decides lazily whether a response should be compressed,
+// so empty (204) and redirect responses are left alone.
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	gz          *gzip.Writer
+	wroteHeader bool
+	compress    bool
+}
+
+func (g *gzipResponseWriter) WriteHeader(status int) {
+	if g.wroteHeader {
+		return
+	}
+	g.wroteHeader = true
+	if status >= 200 && status != http.StatusNoContent && status != http.StatusNotModified {
+		g.compress = true
+		g.Header().Del("Content-Length")
+		g.Header().Set("Content-Encoding", "gzip")
+		g.Header().Add("Vary", "Accept-Encoding")
+	}
+	g.ResponseWriter.WriteHeader(status)
+}
+
+func (g *gzipResponseWriter) Write(b []byte) (int, error) {
+	if !g.wroteHeader {
+		g.WriteHeader(http.StatusOK)
+	}
+	if !g.compress {
+		return g.ResponseWriter.Write(b)
+	}
+	return g.gz.Write(b)
+}
+
+// Flush forwards to the underlying writer so streaming handlers keep working
+// even if a response is later switched to a streaming content type.
+func (g *gzipResponseWriter) Flush() {
+	if g.compress && g.gz != nil {
+		_ = g.gz.Flush()
+	}
+	if f, ok := g.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
@@ -641,7 +706,7 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		devices, err := s.store.ListDevicesForOwner(s.ownerID(r))
+		devices, err := s.store.ListDeviceSummariesForOwner(s.ownerID(r))
 		if err != nil {
 			s.writeError(w, http.StatusInternalServerError, err)
 			return
@@ -799,6 +864,10 @@ func (s *Server) handleDeviceDetail(w http.ResponseWriter, r *http.Request) {
 		s.handleDockerGetResult(w, r, parts[0], parts[3])
 		return
 	}
+	if len(parts) == 2 && parts[1] == "detail" && r.Method == http.MethodGet {
+		s.handleDeviceDetailFull(w, r, parts[0])
+		return
+	}
 	// Docker sub-path endpoints: the UI posts to /docker/action, /docker/logs, etc.
 	// Translate these into the canonical handleDockerRequest format.
 	if len(parts) == 3 && parts[1] == "docker" && r.Method == http.MethodPost {
@@ -806,6 +875,18 @@ func (s *Server) handleDeviceDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.handleDeviceFiles(w, r, parts[0])
+}
+
+// handleDeviceDetailFull returns a single device with its full hardware payload
+// (including logs, processes and Docker state) for the detail modal.
+func (s *Server) handleDeviceDetailFull(w http.ResponseWriter, r *http.Request, deviceID string) {
+	device, err := s.store.GetDeviceDetail(deviceID)
+	if err != nil || device.OwnerID != s.ownerID(r) {
+		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(device)
 }
 
 func (s *Server) handleAppInstall(w http.ResponseWriter, r *http.Request, deviceID string) {

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher, onMount, onDestroy } from 'svelte'
+  import { serverBase } from '../lib/api'
 
   type DockerContainer = {
     id: string
@@ -54,7 +55,6 @@
   export let authHeaders: Record<string, string> = {}
 
   const dispatch = createEventDispatcher()
-  const serverBase = `${window.location.protocol}//${window.location.hostname}:8080`
 
   let containers: DockerContainer[] = []
   let dockerInfo: DockerInfo | null = null

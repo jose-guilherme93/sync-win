@@ -3,6 +3,7 @@
   import SystemMetrics from './SystemMetrics.svelte'
   import DockerTab from './DockerTab.svelte'
   import SecurityTab from './SecurityTab.svelte'
+  import { serverBase } from '../lib/api'
 
   type AppInfo = { name: string; version: string; source: string; path?: string }
 
@@ -53,7 +54,7 @@
     memory_buffers_bytes?: number
     memory_cached_bytes?: number
     disk_partitions?: { mount: string; device: string; total_bytes: number; used_bytes: number; free_bytes: number; used_percent: number }[]
-    network_ifaces?: { name: string; rx_bytes: number; tx_bytes: number; rx_rate?: number; tx_rate?: number }[]
+    network_ifaces?: { name: string; rx_bytes: number; tx_bytes: number; rx_rate?: number; tx_rate?: number; rx_packets: number; tx_packets: number; rx_errors: number; tx_errors: number }[]
     top_cpu_processes?: { pid: number; name: string; cpu_percent: number; mem_rss_bytes: number }[]
     top_mem_processes?: { pid: number; name: string; cpu_percent: number; mem_rss_bytes: number }[]
     docker_available?: boolean
@@ -67,7 +68,6 @@
     id: string
     hostname: string
     user_id: string
-    device_token: string
     status: string
     last_seen_at: string
     last_sync_at: string
@@ -94,7 +94,6 @@
   export let initialFiles: PreferenceFile[] = []
 
   const dispatch = createEventDispatcher()
-  const serverBase = `${window.location.protocol}//${window.location.hostname}:8080`
   const authToken = localStorage.getItem('lem-auth-token') || ''
   const attAuth = authToken ? `?token=${encodeURIComponent(authToken)}` : ''
 
@@ -139,7 +138,7 @@
   let clock = 0
 
   type DeviceNote = { id: string; device_id: string; owner_id: string; content: string; created_at: string; updated_at: string }
-  type DeviceAttachment = { id: string; device_id: string; owner_id: string; filename: string; mime_type: string; size_bytes: number; created_at: string }
+  type DeviceAttachment = { id: string; device_id: string; owner_id: string; filename: string; mime_type: string; size_bytes: number; caption?: string; created_at: string }
   let notes: DeviceNote[] = []
   let attachments: DeviceAttachment[] = []
   let notesLoading = false
@@ -890,7 +889,6 @@
           <div class="panel" role="tabpanel" id="panel-security" aria-labelledby="tab-security">
             <SecurityTab
               deviceId={device.id}
-              deviceToken={device.device_token}
               {authHeaders}
               lynisAvailable={hw?.lynis_available ?? false}
               lynisInstallCmd={hw?.lynis_install_cmd ?? ''}

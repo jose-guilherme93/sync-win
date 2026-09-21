@@ -8,7 +8,7 @@
 
 ## FASE 1 — Server mínimo
 - [x] Go
-- [x] SQLite (modernc.org/sqlite, WAL, migrações embutidas, import automático do estado JSON legado)
+- [x] SQLite (modernc.org/sqlite, WAL, schema em initSchema, import automático do estado JSON legado)
 - [x] HTTP server
 - [x] health endpoint
 - [x] upload de pequenos arquivos de texto
@@ -181,7 +181,7 @@
 - [x] Agent collectors: CPU, memory, disk I/O, network, temperatures, battery, disk partitions, swap, top processes
 - [x] Agent self-impact measurement (CPU and memory usage)
 - [x] Hardware fingerprint collection for device identification
-- [x] Real-time telemetry charts (DashboardCharts.svelte)
+- [x] Real-time telemetry sparklines (Sparkline.svelte, canvas, no Chart.js)
 - [x] Detailed system metrics view (SystemMetrics.svelte)
 - [x] Telemetry history with time period selection (HistoryModal.svelte)
 - [x] Telemetry data caching with 60s TTL
@@ -208,6 +208,24 @@
 - [x] SECURITY.md
 - [x] API.md
 
+## FASE 21 — Reliability and Performance Hardening
+- [x] Fix TEXT→time.Time scans that broke remote commands and file dedup
+- [x] Unique files index `(device_id, category, relative_path, filename)` + legacy dedupe
+- [x] Lightweight `/api/devices` summary projection + gzip on JSON API responses
+- [x] `GET /api/devices/{id}/detail` for full hardware on demand
+- [x] Device token no longer returned to the browser; security tab uses session auth
+- [x] Agent: real power watts, throttled log sampling, state writes only on change
+- [x] Dashboard: canvas sparklines replace per-card Chart.js; store-driven updates
+- [x] Fix modal staleness, SSE owner scoping, and `kernel_version` field mismatch
+
+## FASE 22 — Development and Production Environments
+- [x] `make dev` / `make prod` / `make test` / `make help` with environment separation
+- [x] Dev stack with containers: server hot-reload (air) + Vite HMR, data in `data-dev/`
+- [x] Production stack: built image, persistent `./data`, required `LEM_SECRET_KEY`
+- [x] `VITE_API_BASE` so the dashboard can target any API port/host
+- [x] Session lifetime configurable via `LEM_SESSION_TTL_HOURS` (default 30 days)
+- [x] Fresh databases create the `logs`, `http_access` and `metrics` tables
+
 ## Regras do produto
 
 - salvar somente pequenos arquivos de texto e saves binários (base64)
@@ -223,7 +241,7 @@
 
 Server:
 - Go 1.25
-- SQLite (modernc.org/sqlite, WAL, migrações embutidas)
+- SQLite (modernc.org/sqlite, WAL, schema em initSchema)
 - AES-GCM para criptografia de credenciais de notificações
 
 Agent:

@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,9 +26,13 @@ const (
 	maxCategoryLength    = 64
 	maxRelPathLength     = 512
 	maxFileTotalBytes    = 10 << 20
-	sessionTTL           = 24 * time.Hour
+	// Sessions last 30 days by default; override with LEM_SESSION_TTL_HOURS.
+	defaultSessionTTL    = 30 * 24 * time.Hour
 	deviceColumns        = "id, user_id, owner_id, hostname, device_token, last_seen_at, last_sync_at, sync_failures, last_error, last_error_at, hardware_json, apps_json, status, created_at, updated_at, hardware_fingerprint"
 )
+
+// sessionTTL is the session lifetime; it can be overridden at startup.
+var sessionTTL = defaultSessionTTL
 
 var (
 	errInvalidFilename   = errors.New("invalid filename")
@@ -55,7 +60,7 @@ type Device struct {
 	UserID             string    `json:"user_id"`
 	OwnerID            string    `json:"owner_id"`
 	Hostname           string    `json:"hostname"`
-	DeviceToken        string    `json:"device_token"`
+	DeviceToken        string    `json:"-"`
 	LastSeenAt         time.Time `json:"last_seen_at"`
 	LastSyncAt         time.Time `json:"last_sync_at"`
 	SyncFailures       int       `json:"sync_failures"`
@@ -69,6 +74,58 @@ type Device struct {
 	HardwareFingerprint string   `json:"hardware_fingerprint,omitempty"`
 }
 
+// DeviceSummary is the lightweight device projection served by the dashboard
+// list endpoint. It omits heavy fields (app inventory, device token, system
+// logs, top processes, Docker containers, per-core usage) that are only needed
+// when a single device is opened.
+type DeviceSummary struct {
+	ID                  string          `json:"id"`
+	UserID              string          `json:"user_id"`
+	OwnerID             string          `json:"owner_id"`
+	Hostname            string          `json:"hostname"`
+	LastSeenAt          time.Time       `json:"last_seen_at"`
+	LastSyncAt          time.Time       `json:"last_sync_at"`
+	SyncFailures        int             `json:"sync_failures"`
+	LastError           string          `json:"last_error"`
+	LastErrorAt         time.Time       `json:"last_error_at"`
+	Status              string          `json:"status"`
+	Hardware            HardwareSummary `json:"hardware"`
+	PreferenceCount     int             `json:"preference_count"`
+	AppCount            int             `json:"app_count"`
+	SavesCount          int             `json:"saves_count"`
+	SavesSizeBytes      int64           `json:"saves_size_bytes"`
+	CreatedAt           time.Time       `json:"created_at"`
+	UpdatedAt           time.Time       `json:"updated_at"`
+	HardwareFingerprint string          `json:"hardware_fingerprint,omitempty"`
+}
+
+// HardwareSummary is the subset of HardwareStats the dashboard list renders.
+type HardwareSummary struct {
+	CPUUsagePercent    float64         `json:"cpu_usage_percent"`
+	MemoryUsedBytes    uint64          `json:"memory_used_bytes"`
+	MemoryTotalBytes   uint64          `json:"memory_total_bytes"`
+	CPUTemperature     float64         `json:"cpu_temperature"`
+	PowerWatts         float64         `json:"power_watts"`
+	BatteryPercent     float64         `json:"battery_percent"`
+	BatteryStatus      string          `json:"battery_status"`
+	AgentCPUUsage      float64         `json:"agent_cpu_usage"`
+	AgentMemoryBytes   uint64          `json:"agent_memory_bytes"`
+	AgentVersion       string          `json:"agent_version,omitempty"`
+	KernelVersion      string          `json:"kernel_version"`
+	OperatingSystem    string          `json:"operating_system"`
+	DesktopEnvironment string          `json:"desktop_environment"`
+	UptimeSeconds      int64           `json:"uptime_seconds"`
+	LoadAverage        string          `json:"load_average"`
+	NetworkIFaces      []NetworkIface  `json:"network_ifaces,omitempty"`
+	DiskReadRate       float64         `json:"disk_read_rate"`
+	DiskWriteRate      float64         `json:"disk_write_rate"`
+	DiskPartitions     []DiskPartition `json:"disk_partitions,omitempty"`
+	SwapUsedBytes      uint64          `json:"swap_used_bytes"`
+	SwapTotalBytes     uint64          `json:"swap_total_bytes"`
+	LynisAvailable     bool            `json:"lynis_available"`
+	CollectedAt        string          `json:"collected_at"`
+}
+
 type HardwareStats struct {
 	CPUUsagePercent    float64           `json:"cpu_usage_percent"`
 	MemoryUsedBytes    uint64            `json:"memory_used_bytes"`
@@ -80,6 +137,7 @@ type HardwareStats struct {
 	BatteryStatus      string            `json:"battery_status"`
 	AgentCPUUsage      float64           `json:"agent_cpu_usage"`
 	AgentMemoryBytes   uint64            `json:"agent_memory_bytes"`
+	AgentVersion       string            `json:"agent_version,omitempty"`
 	OperatingSystem    string            `json:"operating_system"`
 	Architecture       string            `json:"architecture"`
 	CPUModel           string            `json:"cpu_model"`
@@ -161,6 +219,10 @@ type NetworkIface struct {
 	TXBytes   uint64  `json:"tx_bytes"`
 	RXRate    float64 `json:"rx_rate"`
 	TXRate    float64 `json:"tx_rate"`
+	RXPackets uint64  `json:"rx_packets"`
+	TXPackets uint64  `json:"tx_packets"`
+	RXErrors  uint64  `json:"rx_errors"`
+	TXErrors  uint64  `json:"tx_errors"`
 }
 
 type AppInfo struct {
@@ -226,6 +288,11 @@ type Session struct {
 func NewStore(root string) (*Store, error) {
 	if root == "" {
 		return nil, errors.New("store root is required")
+	}
+	if hours := strings.TrimSpace(os.Getenv("LEM_SESSION_TTL_HOURS")); hours != "" {
+		if parsed, err := strconv.Atoi(hours); err == nil && parsed > 0 {
+			sessionTTL = time.Duration(parsed) * time.Hour
+		}
 	}
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, fmt.Errorf("create store root: %w", err)
@@ -456,8 +523,71 @@ func (s *Store) initSchema() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_security_audits_device ON security_audits(device_id, created_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_security_audits_owner ON security_audits(owner_id, created_at DESC);
+	CREATE TABLE IF NOT EXISTS logs (
+		id             INTEGER PRIMARY KEY AUTOINCREMENT,
+		ts             TEXT NOT NULL,
+		level          TEXT NOT NULL,
+		category       TEXT NOT NULL,
+		event          TEXT NOT NULL,
+		message        TEXT NOT NULL DEFAULT '',
+		device_id      TEXT NOT NULL DEFAULT '',
+		user_id        TEXT NOT NULL DEFAULT '',
+		request_id     TEXT NOT NULL DEFAULT '',
+		correlation_id TEXT NOT NULL DEFAULT '',
+		duration_ms    INTEGER NOT NULL DEFAULT 0,
+		status         INTEGER NOT NULL DEFAULT 0,
+		metadata       TEXT NOT NULL DEFAULT '{}',
+		redacted       INTEGER NOT NULL DEFAULT 0
+	);
+	CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs(ts);
+	CREATE INDEX IF NOT EXISTS idx_logs_level ON logs(level);
+	CREATE INDEX IF NOT EXISTS idx_logs_device ON logs(device_id, ts);
+	CREATE INDEX IF NOT EXISTS idx_logs_request ON logs(request_id);
+	CREATE INDEX IF NOT EXISTS idx_logs_correlation ON logs(correlation_id);
+	CREATE INDEX IF NOT EXISTS idx_logs_event ON logs(event);
+	CREATE INDEX IF NOT EXISTS idx_logs_level_ts ON logs(level, ts);
+	CREATE INDEX IF NOT EXISTS idx_logs_device_level ON logs(device_id, level, ts);
+	CREATE TABLE IF NOT EXISTS http_access (
+		id              INTEGER PRIMARY KEY AUTOINCREMENT,
+		method          TEXT NOT NULL,
+		path            TEXT NOT NULL,
+		status_class    TEXT NOT NULL,
+		count           INTEGER NOT NULL DEFAULT 1,
+		avg_duration_ms REAL NOT NULL DEFAULT 0,
+		max_duration_ms INTEGER NOT NULL DEFAULT 0,
+		window_start    TEXT NOT NULL,
+		window_end      TEXT NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_http_access_window ON http_access(window_start, window_end);
+	CREATE INDEX IF NOT EXISTS idx_http_access_path ON http_access(path, window_start);
+	CREATE TABLE IF NOT EXISTS metrics (
+		id     INTEGER PRIMARY KEY AUTOINCREMENT,
+		name   TEXT NOT NULL,
+		value  REAL NOT NULL,
+		ts     TEXT NOT NULL,
+		labels TEXT NOT NULL DEFAULT '{}'
+	);
+	CREATE INDEX IF NOT EXISTS idx_metrics_name_ts ON metrics(name, ts);
 	`
-	_, err := s.db.Exec(schema)
+	if _, err := s.db.Exec(schema); err != nil {
+		return err
+	}
+
+	// Enforce one files row per (device, category, relative path, filename).
+	// Older databases may hold duplicates produced before the dedup check was
+	// fixed, so collapse them onto the most recent row before creating the index.
+	var filesUniqueIndex int
+	_ = s.db.QueryRow(
+		"SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_files_unique'",
+	).Scan(&filesUniqueIndex)
+	if filesUniqueIndex == 0 {
+		_, _ = s.db.Exec(`DELETE FROM files WHERE rowid NOT IN (
+			SELECT MAX(rowid) FROM files GROUP BY device_id, category, relative_path, filename
+		)`)
+	}
+	_, err := s.db.Exec(
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_files_unique ON files(device_id, category, relative_path, filename)",
+	)
 	return err
 }
 
@@ -688,6 +818,21 @@ func (s *Store) getDeviceLocked(deviceID string) (Device, error) {
 	return scanDevice(row)
 }
 
+// GetDeviceDetail loads a single device with its full hardware payload but
+// without the (potentially large) app inventory, which the dashboard fetches
+// separately. The device token is not serialized (json:"-").
+func (s *Store) GetDeviceDetail(deviceID string) (Device, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	row := s.db.QueryRow(
+		`SELECT id, user_id, owner_id, hostname, device_token, last_seen_at, last_sync_at,
+		        sync_failures, last_error, last_error_at, hardware_json, '', status,
+		        created_at, updated_at, hardware_fingerprint
+		 FROM devices WHERE id = ?`, deviceID,
+	)
+	return scanDevice(row)
+}
+
 func scanDevice(row *sql.Row) (Device, error) {
 	var d Device
 	var lastSeen, lastSync, lastErrorAt, createdAt, updatedAt string
@@ -763,18 +908,29 @@ func (s *Store) SavePreferenceBatch(deviceID string, inputs []PreferenceInput) (
 		}
 		hash := hashContent(input.Content)
 		var existing PreferenceFile
+		var existingSyncedAt string
 		err := s.db.QueryRow(
 			"SELECT id, device_id, user_id, category, filename, relative_path, content, content_hash, size_bytes, synced_at, status FROM files WHERE device_id = ? AND category = ? AND relative_path = ? AND filename = ?",
 			deviceID, input.Category, input.RelativePath, input.Filename,
-		).Scan(&existing.ID, &existing.DeviceID, &existing.UserID, &existing.Category, &existing.Filename, &existing.RelativePath, &existing.Content, &existing.ContentHash, &existing.SizeBytes, &existing.SyncedAt, &existing.Status)
+		).Scan(&existing.ID, &existing.DeviceID, &existing.UserID, &existing.Category, &existing.Filename, &existing.RelativePath, &existing.Content, &existing.ContentHash, &existing.SizeBytes, &existingSyncedAt, &existing.Status)
 		if err == nil && existing.ContentHash == hash {
 			continue
 		}
 
 		id := newID()
+		if err == nil && existing.ID != "" {
+			id = existing.ID
+		}
 		now := time.Now().UTC()
 		_, err = s.db.Exec(
-			"INSERT OR REPLACE INTO files (id, device_id, user_id, category, filename, relative_path, content, content_hash, size_bytes, synced_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			`INSERT INTO files (id, device_id, user_id, category, filename, relative_path, content, content_hash, size_bytes, synced_at, status)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(device_id, category, relative_path, filename) DO UPDATE SET
+			   content = excluded.content,
+			   content_hash = excluded.content_hash,
+			   size_bytes = excluded.size_bytes,
+			   synced_at = excluded.synced_at,
+			   status = excluded.status`,
 			id, deviceID, "", input.Category, input.Filename, input.RelativePath, input.Content, hash, int64(len(input.Content)), timeText(now), "synced",
 		)
 		if err != nil {
@@ -794,6 +950,16 @@ func (s *Store) SavePreferenceBatch(deviceID string, inputs []PreferenceInput) (
 			SyncedAt:     now,
 			Status:       "synced",
 		})
+	}
+
+	// A completed sync batch marks the device as online and refreshes its
+	// last sync timestamp, even when every file was unchanged.
+	syncAt := timeText(time.Now().UTC())
+	if _, err := s.db.Exec(
+		"UPDATE devices SET last_sync_at = ?, status = 'online', updated_at = ? WHERE id = ?",
+		syncAt, syncAt, deviceID,
+	); err != nil {
+		return saved, rejected, err
 	}
 	return saved, rejected, nil
 }
@@ -939,11 +1105,11 @@ func (s *Store) getPendingCommandsLocked(deviceID string) ([]DeviceCommand, erro
 	var commands []DeviceCommand
 	for rows.Next() {
 		var c DeviceCommand
-		var completedAt string
-		if err := rows.Scan(&c.ID, &c.DeviceID, &c.Type, &c.Path, &c.Name, &c.Source, &c.Payload, &c.Status, &c.Message, &c.CreatedAt, &completedAt); err != nil {
+		var createdAt, completedAt string
+		if err := rows.Scan(&c.ID, &c.DeviceID, &c.Type, &c.Path, &c.Name, &c.Source, &c.Payload, &c.Status, &c.Message, &createdAt, &completedAt); err != nil {
 			return nil, err
 		}
-		c.CreatedAt = textTime(c.CreatedAt.String())
+		c.CreatedAt = textTime(createdAt)
 		if completedAt != "" {
 			c.CompletedAt = textTime(completedAt)
 		}
@@ -967,11 +1133,11 @@ func (s *Store) GetPendingDockerCommands(deviceID string) ([]DeviceCommand, erro
 	var commands []DeviceCommand
 	for rows.Next() {
 		var c DeviceCommand
-		var completedAt string
-		if err := rows.Scan(&c.ID, &c.DeviceID, &c.Type, &c.Path, &c.Name, &c.Source, &c.Payload, &c.Status, &c.Message, &c.CreatedAt, &completedAt); err != nil {
+		var createdAt, completedAt string
+		if err := rows.Scan(&c.ID, &c.DeviceID, &c.Type, &c.Path, &c.Name, &c.Source, &c.Payload, &c.Status, &c.Message, &createdAt, &completedAt); err != nil {
 			return nil, err
 		}
-		c.CreatedAt = textTime(c.CreatedAt.String())
+		c.CreatedAt = textTime(createdAt)
 		if completedAt != "" {
 			c.CompletedAt = textTime(completedAt)
 		}
@@ -1003,15 +1169,15 @@ func (s *Store) GetCommand(commandID, deviceID string) (DeviceCommand, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var c DeviceCommand
-	var completedAt string
+	var createdAt, completedAt string
 	err := s.db.QueryRow(
 		"SELECT id, device_id, type, path, name, source, payload, status, message, created_at, completed_at FROM commands WHERE id = ? AND device_id = ?",
 		commandID, deviceID,
-	).Scan(&c.ID, &c.DeviceID, &c.Type, &c.Path, &c.Name, &c.Source, &c.Payload, &c.Status, &c.Message, &c.CreatedAt, &completedAt)
+	).Scan(&c.ID, &c.DeviceID, &c.Type, &c.Path, &c.Name, &c.Source, &c.Payload, &c.Status, &c.Message, &createdAt, &completedAt)
 	if err != nil {
 		return c, err
 	}
-	c.CreatedAt = textTime(c.CreatedAt.String())
+	c.CreatedAt = textTime(createdAt)
 	if completedAt != "" {
 		c.CompletedAt = textTime(completedAt)
 	}
@@ -1315,6 +1481,54 @@ func (s *Store) ListDevicesForOwner(ownerID string) ([]Device, error) {
 		devices = append(devices, d)
 	}
 	return devices, rows.Err()
+}
+
+// ListDeviceSummariesForOwner returns the lightweight dashboard projection for
+// a user's devices, avoiding the heavy hardware/apps JSON payloads.
+func (s *Store) ListDeviceSummariesForOwner(ownerID string) ([]DeviceSummary, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rows, err := s.db.Query(`
+		SELECT d.id, d.user_id, d.owner_id, d.hostname, d.last_seen_at, d.last_sync_at,
+		       d.sync_failures, d.last_error, d.last_error_at, d.status, d.created_at, d.updated_at,
+		       d.hardware_fingerprint, COALESCE(d.hardware_json, ''),
+		       CASE WHEN d.apps_json IS NULL OR d.apps_json = '' THEN 0 ELSE json_array_length(d.apps_json) END,
+		       (SELECT COUNT(*) FROM files f WHERE f.device_id = d.id AND f.category != 'saves'),
+		       (SELECT COUNT(*) FROM files f WHERE f.device_id = d.id AND f.category = 'saves'),
+		       (SELECT COALESCE(SUM(f.size_bytes), 0) FROM files f WHERE f.device_id = d.id AND f.category = 'saves')
+		FROM devices d WHERE d.owner_id = ?`, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	summaries := []DeviceSummary{}
+	for rows.Next() {
+		var d DeviceSummary
+		var lastSeen, lastSync, lastErrorAt, createdAt, updatedAt, hardware string
+		if err := rows.Scan(
+			&d.ID, &d.UserID, &d.OwnerID, &d.Hostname, &lastSeen, &lastSync,
+			&d.SyncFailures, &d.LastError, &lastErrorAt, &d.Status, &createdAt, &updatedAt,
+			&d.HardwareFingerprint, &hardware, &d.AppCount,
+			&d.PreferenceCount, &d.SavesCount, &d.SavesSizeBytes,
+		); err != nil {
+			return nil, err
+		}
+		d.LastSeenAt = textTime(lastSeen)
+		if lastSync != "" {
+			d.LastSyncAt = textTime(lastSync)
+		}
+		if lastErrorAt != "" {
+			d.LastErrorAt = textTime(lastErrorAt)
+		}
+		d.CreatedAt = textTime(createdAt)
+		d.UpdatedAt = textTime(updatedAt)
+		if hardware != "" {
+			_ = json.Unmarshal([]byte(hardware), &d.Hardware)
+		}
+		summaries = append(summaries, d)
+	}
+	return summaries, rows.Err()
 }
 
 // RecordSyncError records a sync error on a device.

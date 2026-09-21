@@ -12,6 +12,7 @@
     Legend
   } from 'chart.js'
   import { getCachedHistory, setCachedHistory } from '../lib/telemetry-cache'
+  import { serverBase } from '../lib/api'
 
   Chart.register(LineController, LineElement, PointElement, LinearScale, CategoryScale, Filler, Tooltip, Legend)
 
@@ -19,7 +20,6 @@
   export let open = false
 
   const dispatch = createEventDispatcher()
-  const serverBase = ''
 
   type ChartPoint = { time: string; cpu: number; memory: number; netRx: number; netTx: number; temp: number; power: number }
 

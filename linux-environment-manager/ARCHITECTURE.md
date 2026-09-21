@@ -60,7 +60,7 @@ Key UI components:
 - `DeviceModal.svelte`: device detail with tabs (System, Files, Packages, Saves, Notes, Docker, Security)
 - `DockerTab.svelte`: container management (list, start/stop/restart/kill/remove, exec, compose editor, prune)
 - `SecurityTab.svelte`: Lynis security audit runner, hardening index gauge, warnings/suggestions, history
-- `DashboardCharts.svelte`: CPU/memory/disk I/O charts (Chart.js)
+- `Sparkline.svelte`: lightweight canvas CPU/memory/network sparklines for device cards (no Chart.js)
 - `SimpleMetrics.svelte`: device summary cards with save badges
 - `SystemMetrics.svelte`: detailed hardware telemetry display
 - `HistoryModal.svelte`: telemetry history with time period selection
@@ -186,6 +186,12 @@ The current project intentionally does not include:
 - Agent content hashes prevent re-uploading unchanged files.
 - Telemetry downsampled aggregation reduces query load.
 - Web dashboard uses lazy loading and 60-second cache TTL for large datasets.
+- `GET /api/devices` returns a lightweight summary projection (no app inventory,
+  no device token, trimmed hardware) and JSON API responses are gzip-compressed.
+- Device cards use canvas sparklines; Chart.js is only loaded in the detail and
+  history modals.
+- Agent samples system logs every 6th telemetry cycle and only rewrites its
+  state file when it changes.
 
 ## Future evolution
 

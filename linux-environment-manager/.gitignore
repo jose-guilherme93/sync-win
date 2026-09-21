@@ -26,6 +26,7 @@ web/.vite/
 # Docker / local data
 .data/
 /data/
+/data-dev/
 *.db
 *.sqlite
 *.sqlite3

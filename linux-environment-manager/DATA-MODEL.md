@@ -95,7 +95,7 @@ Rules:
 - sensitive files must be excluded by default
 - the server rejects binary content for non-saves categories, credential-like filenames, and content matching known secret patterns; rejected items are reported back to the agent with a reason
 - for base64-encoded saves, secret scanning is skipped (content cannot be inspected)
-- a unique index on `(device_id, category, relative_path)` prevents duplicate files
+- a unique index on `(device_id, category, relative_path, filename)` prevents duplicate files
 - content hashes enable skip-unchanged optimization on the agent side
 
 ## PreferenceSet

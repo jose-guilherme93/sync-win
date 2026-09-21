@@ -373,12 +373,33 @@ type deviceLog struct {
 	Message   string `json:"message"`
 }
 
+// toDeviceLogs converts collector log entries into the telemetry payload shape.
+func toDeviceLogs(logs []collectors.DeviceLog) []deviceLog {
+	if len(logs) == 0 {
+		return nil
+	}
+	out := make([]deviceLog, 0, len(logs))
+	for _, l := range logs {
+		out = append(out, deviceLog{
+			Timestamp: l.Timestamp,
+			Level:     l.Level,
+			Source:    l.Source,
+			Message:   l.Message,
+		})
+	}
+	return out
+}
+
 type networkIface struct {
-	Name    string  `json:"name"`
-	RXBytes uint64  `json:"rx_bytes"`
-	TXBytes uint64  `json:"tx_bytes"`
-	RXRate  float64 `json:"rx_rate"`
-	TXRate  float64 `json:"tx_rate"`
+	Name      string  `json:"name"`
+	RXBytes   uint64  `json:"rx_bytes"`
+	TXBytes   uint64  `json:"tx_bytes"`
+	RXRate    float64 `json:"rx_rate"`
+	TXRate    float64 `json:"tx_rate"`
+	RXPackets uint64  `json:"rx_packets"`
+	TXPackets uint64  `json:"tx_packets"`
+	RXErrors  uint64  `json:"rx_errors"`
+	TXErrors  uint64  `json:"tx_errors"`
 }
 
 type dockerContainer struct {
@@ -486,28 +507,37 @@ func cmdDaemon(args []string) {
 	var agentImpact collectors.AgentImpact
 	var previousCPUCores []uint64
 	consecutiveFailures := 0
-	
+	// Logs are heavier to collect (journalctl), so sample them less often
+	// than hardware telemetry: roughly every 60s at the default 10s interval.
+	const logCollectCycles = 6
+	logCycle := 0
+	lastStateJSON := ""
+
 	for {
 		now := time.Now()
 		log.Printf("cycle started device=%s failures=%d", *deviceID, consecutiveFailures)
 		hadError := false
-		
-		if err := processDockerRequests(*serverURL, *deviceID, *deviceToken); err != nil {
-			log.Printf("docker request processing failed: %v", err)
-			hadError = hadError || err != nil
+
+		if collectors.DockerIsAvailable() {
+			if err := processDockerRequests(*serverURL, *deviceID, *deviceToken); err != nil {
+				log.Printf("docker request processing failed: %v", err)
+				hadError = true
+			}
 		}
-		
+
 		if err := processCommands(*serverURL, *deviceID, *deviceToken); err != nil {
 			log.Printf("command processing failed: %v", err)
 			hadError = true
-		}
-		if err := checkAndUpdateAgent(*serverURL); err != nil {
-			log.Printf("auto-update check failed: %v", err)
 		}
 		stats, cpuTotal, idle, diskRead, diskWrite, newNetRX, newNetTX, newImpact, newCores, err := collectHardwareStats(previousCPU, previousIdle, previousDiskRead, previousDiskWrite, previousNetRX, previousNetTX, previousAt, now, agentImpact, previousCPUCores)
 		agentImpact = newImpact
 		previousCPUCores = newCores
 		if err == nil {
+			logCycle++
+			if logCycle >= logCollectCycles {
+				logCycle = 0
+				stats.Logs = toDeviceLogs(collectors.CollectDeviceLogs())
+			}
 			err = sendTelemetry(*serverURL, *deviceID, *deviceToken, stats)
 		}
 		if err != nil {
@@ -518,7 +548,10 @@ func cmdDaemon(args []string) {
 		}
 		previousCPU, previousIdle, previousDiskRead, previousDiskWrite, previousAt = cpuTotal, idle, diskRead, diskWrite, now
 		previousNetRX, previousNetTX = newNetRX, newNetTX
-		saveAgentState(state)
+		if serialized, err := json.Marshal(state); err == nil && string(serialized) != lastStateJSON {
+			saveAgentState(state)
+			lastStateJSON = string(serialized)
+		}
 		
 		wait := *interval
 		if hadError {
@@ -680,9 +713,6 @@ func executeCommand(cmd struct {
 		return commandResult{"failed", "unsupported command type: " + cmd.Type}
 	}
 }
-
-// checkAndUpdateAgent is a placeholder for future agent auto-update functionality.
-func checkAndUpdateAgent(serverURL string) error { return nil }
 
 // lynisReport represents the structured output of a Lynis security audit.
 type lynisReport struct {
@@ -996,6 +1026,14 @@ func collectHardwareStats(prevCPU, prevIdle, prevDiskRead, prevDiskWrite uint64,
 		batteryPercent, batteryStatus = collectors.CollectBattery()
 	}()
 
+	// Instantaneous power draw (watts), independent from battery percentage
+	var powerWatts float64
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		powerWatts = collectors.CollectPowerWatts()
+	}()
+
 	// Agent impact
 	var newImpact collectors.AgentImpact
 	wg.Add(1)
@@ -1131,7 +1169,7 @@ func collectHardwareStats(prevCPU, prevIdle, prevDiskRead, prevDiskWrite uint64,
 	// Merge results
 	stats.CPUTemperature = temp
 	stats.GPUTemperature = gpuTemp
-	stats.PowerWatts = batteryPercent
+	stats.PowerWatts = powerWatts
 	stats.BatteryPercent = batteryPercent
 	stats.BatteryStatus = batteryStatus
 	stats.AgentCPUUsage = newImpact.CPUPercent
@@ -1238,11 +1276,15 @@ func collectHardwareStats(prevCPU, prevIdle, prevDiskRead, prevDiskWrite uint64,
 		newNetRXFinal[iface.Name] = iface.RXBytes
 		newNetTXFinal[iface.Name] = iface.TXBytes
 		netIfaces = append(netIfaces, networkIface{
-			Name:    iface.Name,
-			RXBytes: iface.RXBytes,
-			TXBytes: iface.TXBytes,
-			RXRate:  rxRate,
-			TXRate:  txRate,
+			Name:      iface.Name,
+			RXBytes:   iface.RXBytes,
+			TXBytes:   iface.TXBytes,
+			RXRate:    rxRate,
+			TXRate:    txRate,
+			RXPackets: iface.RXPackets,
+			TXPackets: iface.TXPackets,
+			RXErrors:  iface.RXErrors,
+			TXErrors:  iface.TXErrors,
 		})
 	}
 	stats.NetworkIFaces = netIfaces

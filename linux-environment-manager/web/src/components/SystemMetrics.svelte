@@ -11,7 +11,8 @@
     Tooltip,
     Legend
   } from 'chart.js'
-  import { getDeviceHistory, setHistoryFromAPI, addTelemetryPoint, type ChartPoint } from '../lib/telemetry-store'
+  import { setHistoryFromAPI, addTelemetryPoint, deviceHistoryStore, type ChartPoint } from '../lib/telemetry-store'
+  import { serverBase } from '../lib/api'
 
   Chart.register(LineController, LineElement, PointElement, LinearScale, CategoryScale, Filler, Tooltip, Legend)
 
@@ -72,7 +73,6 @@
   export let device: Device
   export let authHeaders: Record<string, string> = {}
 
-  const serverBase = `${window.location.protocol}//${window.location.hostname}:8080`
   const REFRESH_OPTIONS = [1000, 5000, 10000, 30000, 60000] as const
 
   let refreshInterval = 5000
@@ -325,7 +325,6 @@
           temp: point.cpu_temperature || point.temp || null
         }))
         setHistoryFromAPI(device.id, points)
-        history = points.slice(-MAX_POINTS)
       }
       chartError = ''
     } catch (e) {
@@ -335,15 +334,30 @@
     }
   }
 
-  $: {
-    const storeHistory = getDeviceHistory(device.id)
-    if (storeHistory.length > 0 && storeHistory.length !== history.length) {
-      history = storeHistory.slice(-MAX_POINTS)
+  // Keep charts in sync with the shared telemetry store through a real
+  // subscription instead of length-only polling, and coalesce rebuilds so we
+  // never stack setTimeout calls.
+  let historyUnsub: (() => void) | null = null
+  let subscribedDeviceId = ''
+  let buildTimer: ReturnType<typeof setTimeout> | null = null
+
+  function scheduleBuild() {
+    if (buildTimer) return
+    buildTimer = setTimeout(() => {
+      buildTimer = null
+      buildCharts()
+    }, 50)
+  }
+
+  $: if (device.id && device.id !== subscribedDeviceId) {
+    historyUnsub?.()
+    subscribedDeviceId = device.id
+    historyUnsub = deviceHistoryStore(device.id).subscribe((points) => {
+      if (points.length === 0) return
+      history = points.slice(-MAX_POINTS)
       if (cpuChart) updateCharts()
-      else if (history.length > 0 && !loadingHistory) {
-        setTimeout(() => buildCharts(), 50)
-      }
-    }
+      else if (!loadingHistory) scheduleBuild()
+    })
   }
 
   let localLogs: DeviceLog[] | null = null
@@ -351,7 +365,7 @@
   async function refreshLogs() {
     loadingLogs = true
     try {
-      const response = await fetch(`${serverBase}/api/devices/${device.id}`, {
+      const response = await fetch(`${serverBase}/api/devices/${device.id}/detail`, {
         headers: authHeaders
       })
       if (!response.ok) throw new Error(`${response.status}`)
@@ -449,13 +463,13 @@
       }
     }
 
-    if (h.kernel) {
-      const kernelParts = h.kernel.split('.')
+    if (h.kernel_version) {
+      const kernelParts = h.kernel_version.split('.')
       if (kernelParts.length >= 2) {
         const major = parseInt(kernelParts[0])
         const minor = parseInt(kernelParts[1])
         if (major < 5 || (major === 5 && minor < 15)) {
-          insights.push({ text: `Kernel ${h.kernel} is outdated - consider updating for security patches`, type: 'warn' })
+          insights.push({ text: `Kernel ${h.kernel_version} is outdated - consider updating for security patches`, type: 'warn' })
         }
       }
     }
@@ -494,13 +508,15 @@
 
   onMount(() => {
     void loadInitialHistory().then(() => {
-      if (history.length > 0) {
-        setTimeout(() => buildCharts(), 50)
+      if (history.length > 0 && !cpuChart) {
+        scheduleBuild()
       }
     })
   })
 
   onDestroy(() => {
+    historyUnsub?.()
+    if (buildTimer) clearTimeout(buildTimer)
     destroyCharts()
   })
 </script>

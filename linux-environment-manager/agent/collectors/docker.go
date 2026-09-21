@@ -708,7 +708,8 @@ func DockerComposeLogs(composePath string) (string, error) {
 
 // runDockerComposeCommand executes a docker compose command in the given directory.
 func runDockerComposeCommand(dir, name string, args ...string) (string, error) {
-	ctx := contextWithTimeout(60 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	var out bytes.Buffer
@@ -723,12 +724,6 @@ func runDockerComposeCommand(dir, name string, args ...string) (string, error) {
 		return output, fmt.Errorf("%s: %w: %s", name, err, output)
 	}
 	return output, nil
-}
-
-// contextWithTimeout creates a context with a deadline.
-func contextWithTimeout(d time.Duration) context.Context {
-	ctx, _ := context.WithTimeout(context.Background(), d)
-	return ctx
 }
 
 // validContainerID validates a Docker container ID (hex chars, 1-128 chars).

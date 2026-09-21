@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
+  import { serverBase } from '../lib/api'
 
   type LynisFinding = {
     id: string
@@ -48,12 +49,9 @@
   }
 
   export let deviceId: string
-  export let deviceToken: string = ''
   export let authHeaders: Record<string, string> = {}
   export let lynisAvailable: boolean = false
   export let lynisInstallCmd: string = ''
-
-  const serverBase = `${window.location.protocol}//${window.location.hostname}:8080`
 
   let audits: SecurityAudit[] = []
   let latestReport: LynisReport | null = null
@@ -70,17 +68,6 @@
       opts.headers = { ...opts.headers, 'Content-Type': 'application/json' }
       opts.body = JSON.stringify(body)
     }
-    const res = await fetch(`${serverBase}${path}`, opts)
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: `${res.status}` }))
-      throw new Error(err.error || `${res.status}`)
-    }
-    if (res.status === 204) return null
-    return res.json()
-  }
-
-  async function deviceApiCall(method: string, path: string): Promise<any> {
-    const opts: RequestInit = { method, headers: { 'Authorization': `Bearer ${deviceToken}` } }
     const res = await fetch(`${serverBase}${path}`, opts)
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: `${res.status}` }))
@@ -132,37 +119,12 @@
     }
   }
 
-  async function pollForCompletion(cmdId: string, maxAttempts = 60) {
+  async function pollForCompletion(_cmdId: string, maxAttempts = 60) {
     for (let i = 0; i < maxAttempts; i++) {
       await new Promise(r => setTimeout(r, 3000))
       try {
-        // Check command status first (catches failures from old agents)
-        // Use device token (stable) not session token (expires)
-        if (cmdId && deviceToken) {
-          const cmd = await deviceApiCall('GET', `/api/devices/${deviceId}/commands/${cmdId}`)
-          if (cmd && cmd.status === 'failed') {
-            running = false
-            error = `Audit failed: ${cmd.message || 'unknown error'}`
-            runMessage = ''
-            return
-          }
-          if (cmd && cmd.status === 'completed' && cmd.message) {
-            // Command completed - check for new audit
-            const newAudits = await apiCall('GET', `/api/devices/${deviceId}/security/audits?limit=1`)
-            if (newAudits && newAudits.length > 0) {
-              const latest = newAudits[0]
-              if (audits.length === 0 || latest.id !== audits[0].id) {
-                audits = newAudits.concat(audits)
-                parseLatestReport(latest)
-                running = false
-                runMessage = 'Audit completed!'
-                setTimeout(() => { runMessage = '' }, 3000)
-                return
-              }
-            }
-          }
-        }
-        // Also check audit list directly (in case command result was processed)
+        // Poll the audit list directly: a completed Lynis run appends a new
+        // audit record, which is the authoritative completion signal.
         const newAudits = await apiCall('GET', `/api/devices/${deviceId}/security/audits?limit=1`)
         if (newAudits && newAudits.length > 0) {
           const latest = newAudits[0]

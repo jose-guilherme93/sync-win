@@ -13,10 +13,19 @@ This guide walks through setting up LEM from scratch: starting the server, creat
 From the repository root:
 
 ```bash
-docker compose up --build
+make env     # create .env with a generated LEM_SECRET_KEY
+make prod    # build the image and start the stack
 ```
 
-The server starts at `http://localhost:8080`. The first build takes a few minutes (Go + Node multi-stage).
+The server starts at `http://localhost:8080`. The first build takes a few minutes (Go + Node multi-stage). Data is stored in `./data`.
+
+To hack on the UI or API instead, use the development stack with hot reload:
+
+```bash
+make dev     # dashboard http://localhost:5173 · api http://localhost:8080
+```
+
+Run `make help` for the full target list.
 
 ## 2. Create an account
 

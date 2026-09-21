@@ -48,12 +48,12 @@ linux-environment-manager/
 │   ├── cmd/server/main.go          # Entry point
 │   ├── internal/
 │   │   ├── app/app.go              # All HTTP handlers and routes (~2,750 lines)
-│   │   ├── store/                  # SQLite CRUD, aggregation, migrations
+│   │   ├── store/                  # SQLite CRUD, aggregation, schema (initSchema)
 │   │   ├── logging/                # Structured JSON logger, redaction, dedup
 │   │   ├── notify/                 # Notification providers (Telegram, webhook, inbox)
 │   │   ├── crypto/                 # AES-GCM encryption for provider configs
 │   │   └── docker/                 # Docker command queue and broadcaster
-│   ├── migrations/                 # 13 embedded SQL schema migrations
+│   ├── migrations/                 # Historical SQL files (schema is applied by store.initSchema)
 │   └── lem-agent.service           # Systemd unit template
 ├── agent/
 │   ├── cmd/agent/main.go           # Entry point (CLI daemon mode)
@@ -75,7 +75,7 @@ linux-environment-manager/
 │   │   ├── components/
 │   │   │   ├── DeviceModal.svelte  # Device detail (System/Files/Packages/Saves/Notes/Docker)
 │   │   │   ├── DockerTab.svelte    # Docker container management
-│   │   │   ├── DashboardCharts.svelte  # CPU/memory/disk I/O charts
+│   │   │   ├── Sparkline.svelte       # Lightweight canvas sparklines for device cards
 │   │   │   ├── SystemMetrics.svelte    # Detailed hardware telemetry
 │   │   │   ├── SimpleMetrics.svelte    # Device summary cards
 │   │   │   ├── HistoryModal.svelte     # Telemetry history
@@ -86,13 +86,19 @@ linux-environment-manager/
 │   │       └── telemetry-cache.ts  # 60s TTL cache
 │   └── dist/                       # Production build (served by Go server)
 ├── docker/
-│   └── Dockerfile.server           # Multi-stage: Go + Node -> Alpine
+│   ├── Dockerfile.server           # Multi-stage: Go + Node -> Alpine
+│   ├── Dockerfile.server.dev       # Dev server with air hot-reload
+│   └── Dockerfile.web.dev          # Vite dev server (HMR)
 ├── scripts/
 │   └── install.sh                  # Agent installer (616 lines, idempotent)
 ├── docs/
 │   └── INSTALL.md                  # Installation architecture and security
 ├── data/                           # Runtime: SQLite DB + mirrored preference files
-├── compose.yaml
+├── data-dev/                       # Runtime for the dev stack (gitignored)
+├── Makefile                        # make dev / make prod / make test / make help
+├── compose.yaml                    # Simple single-server stack
+├── compose.dev.yaml                # Dev stack: server (hot-reload) + web (HMR)
+├── compose.prod.yaml               # Production stack (built image, ./data)
 ├── AGENTS.md
 ├── ARCHITECTURE.md
 ├── COLLECTION-CONTRACT.md
@@ -111,10 +117,18 @@ linux-environment-manager/
 - Keep the server safe and lightweight.
 - Keep the agent focused on explicit file collection and sync operations.
 - The contract (`COLLECTION-CONTRACT.md` + `agent/internal/contract/contract.json`) is the single source of truth for what the agent collects and sends.
+- Use the Makefile for environment work: `make dev` (containers, server hot-reload + web HMR, data in `data-dev/`), `make prod` (containers, built image, data in `data/`), `make help` for the rest. `compose.yaml` is the simple single-server stack.
 
 ## How to run tests
 
 From the repository root:
+
+```bash
+make test          # server + agent go test, web svelte-check
+make lint          # go vet + svelte-check
+```
+
+Or the underlying commands directly:
 
 ```bash
 cd server && go test ./...

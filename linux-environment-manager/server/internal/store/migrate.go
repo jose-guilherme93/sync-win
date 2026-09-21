@@ -14,11 +14,18 @@ import (
 // legacyState mirrors the pre-SQLite JSON state file so existing
 // deployments upgrade in place without data loss.
 type legacyState struct {
-	Devices  map[string]Device         `json:"devices"`
+	Devices  map[string]legacyDevice   `json:"devices"`
 	Files    map[string]PreferenceFile `json:"files"`
 	Users    map[string]User           `json:"users"`
 	Commands map[string]DeviceCommand  `json:"commands"`
 	Sessions map[string]Session        `json:"sessions"`
+}
+
+// legacyDevice decodes the device_token that Device deliberately hides from
+// JSON now that tokens are never returned to clients.
+type legacyDevice struct {
+	Device
+	DeviceToken string `json:"device_token"`
 }
 
 const legacyStateName = "lem-store.json"
@@ -64,7 +71,11 @@ func migrateLegacyJSON(db *sql.DB, root string) error {
 			return fmt.Errorf("migrate user %s: %w", id, err)
 		}
 	}
-	for _, device := range state.Devices {
+	for _, legacy := range state.Devices {
+		device := legacy.Device
+		if legacy.DeviceToken != "" {
+			device.DeviceToken = legacy.DeviceToken
+		}
 		if device.OwnerID == "" {
 			device.OwnerID = device.UserID
 		}

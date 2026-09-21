@@ -10,6 +10,8 @@ services:
     environment:
       LEM_ENV: development
       LEM_SECRET_KEY: "${LEM_SECRET_KEY:-dev-insecure-key-not-for-production}"
+      # Dashboard session lifetime. Default 720h = 30 days.
+      LEM_SESSION_TTL_HOURS: "${LEM_SESSION_TTL_HOURS:-720}"
       LOG_CONSOLE_LEVEL: INFO
     volumes:
       - ./data:/data

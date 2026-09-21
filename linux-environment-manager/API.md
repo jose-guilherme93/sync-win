@@ -84,6 +84,11 @@ Log in with existing credentials.
 
 Get the current authenticated user. Requires session token.
 
+Session tokens last 30 days by default. Override the lifetime with the
+`LEM_SESSION_TTL_HOURS` environment variable (e.g. `720` = 30 days). When a
+session expires, clients receive `401` and must log in again; the dashboard
+shows the login screen and never falls back to an anonymous device list.
+
 **Response:** `200 OK`
 ```json
 {
@@ -210,7 +215,10 @@ Returns SHA-256 checksums for agent binaries. No authentication required.
 
 ### `GET /api/devices`
 
-List all devices for the authenticated owner.
+List all devices for the authenticated owner as lightweight summaries. The
+response intentionally omits the app inventory, the device token, and heavy
+hardware fields (logs, top processes, Docker containers, per-core usage). API
+JSON responses are gzip-compressed when the client sends `Accept-Encoding: gzip`.
 
 **Response:** `200 OK`
 ```json
@@ -225,17 +233,24 @@ List all devices for the authenticated owner.
     "app_count": 150,
     "saves_count": 25,
     "saves_size_bytes": 1048576,
-    "saves_last_synced_at": "2024-01-01T11:50:00Z",
-    "hardware": { ... }
+    "hardware": { "cpu_usage_percent": 12.5, "memory_used_bytes": 0, "...": "..." }
   }
 ]
 ```
 
 ### `GET /api/devices/{id}`
 
-Get detailed information about a specific device.
+List the synced preference files for a device.
 
-**Response:** `200 OK` (full device object with hardware, apps, etc.)
+**Response:** `200 OK` (array of file objects)
+
+### `GET /api/devices/{id}/detail`
+
+Get a single device with its full hardware payload (logs, top processes, Docker
+state, per-core usage) for the detail modal. The device token is never returned.
+The app inventory is fetched separately via `GET /api/devices/{id}/apps`.
+
+**Response:** `200 OK` (device object with full `hardware`)
 
 ### `DELETE /api/devices/{id}`
 

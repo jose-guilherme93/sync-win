@@ -1,0 +1,16 @@
+# Development image for the LEM server.
+# Source is bind-mounted at /src/server by compose.dev.yaml, so this image only
+# prepares the toolchain and dependencies; air rebuilds and restarts on change.
+FROM golang:1.25-alpine
+
+RUN apk add --no-cache git curl tzdata
+# Pinned to a release that builds with the Go toolchain in this image.
+RUN go install github.com/air-verse/air@v1.61.7
+
+WORKDIR /src/server
+COPY server/go.mod server/go.sum ./
+RUN go mod download
+
+EXPOSE 8080
+
+CMD ["air", "-c", ".air.toml"]
