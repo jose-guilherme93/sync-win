@@ -115,6 +115,26 @@ expires: 2026-10-25
 - Real user-timer execution reporting the current version.
 - Real controlled upgrade and health check, followed by restoration.
 
+## P1.5 — Package installation actions
+
+### Scope
+
+- Replace the agent's `install_app` stub with fixed, source-specific package commands.
+- Support APT, Flatpak, Pacman and AUR helpers while refusing AppImage reinstall without a local source.
+- Keep the server mutation flag and local `allow_install_app` policy fail-closed.
+
+### Observations
+
+- Package names are restricted to a short ASCII charset; no shell interpolation is used.
+- APT and Pacman require root or passwordless `sudo -n`; Flatpak and AUR run in the user service context.
+- Command timeout and the existing 64 KiB output cap are reused.
+
+### Tests
+
+- Unsafe names and unknown sources are rejected.
+- Flatpak uses the expected fixed argument list.
+- AppImage reinstall is refused with an actionable message.
+
 ### Next
 
-- P1 and the operational update gate are complete; choose the next product priority.
+- P1 is complete; choose the next product priority before extending the collection contract.

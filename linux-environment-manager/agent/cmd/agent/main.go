@@ -762,6 +762,7 @@ func processCommands(serverURL, deviceID, deviceToken string) error {
 		Type    string `json:"type"`
 		Path    string `json:"path"`
 		Name    string `json:"name"`
+		Source  string `json:"source"`
 		Payload string `json:"payload"`
 	}
 	if err := json.Unmarshal(payload, &commands); err != nil {
@@ -792,6 +793,7 @@ func executeCommand(cmd struct {
 	Type    string `json:"type"`
 	Path    string `json:"path"`
 	Name    string `json:"name"`
+	Source  string `json:"source"`
 	Payload string `json:"payload"`
 }) commandResult {
 	policy := loadLocalPolicy()
@@ -829,7 +831,10 @@ func executeCommand(cmd struct {
 		if !policy.AllowInstallApp {
 			return commandResult{"failed", "command disabled by local policy"}
 		}
-		return commandResult{"failed", "install_app is not implemented"}
+		if err := installApp(cmd.Source, cmd.Name, lemContract.CommandTimeout(policy.CommandTimeoutSeconds)); err != nil {
+			return commandResult{"failed", err.Error()}
+		}
+		return commandResult{"completed", fmt.Sprintf("installed %s package %s", cmd.Source, cmd.Name)}
 	default:
 		return commandResult{"failed", "unsupported command type: " + cmd.Type}
 	}
@@ -1717,24 +1722,73 @@ func loadLocalPolicy() localPolicy {
 	return filePolicy
 }
 
-// installApp queues an application installation via the system package manager.
+// installApp installs one explicitly named package using a fixed command per source.
 func installApp(source, name string, timeout time.Duration) error {
 	safeName := strings.TrimSpace(name)
 	if safeName == "" {
 		return fmt.Errorf("package name is required")
 	}
-	if strings.ContainsAny(safeName, ";|&$`\\") {
+	if !validPackageName(safeName) {
 		return fmt.Errorf("unsafe package name: %q", safeName)
 	}
-	if strings.Contains(safeName, "../") || strings.Contains(safeName, "..\\") {
-		return fmt.Errorf("unsafe package name: %q", safeName)
-	}
+
 	switch source {
-	case "apt", "pacman", "aur", "flatpak", "appimage":
+	case "apt":
+		return runPrivilegedInstall("apt-get", []string{"install", "-y", safeName}, timeout)
+	case "pacman":
+		return runPrivilegedInstall("pacman", []string{"-S", "--needed", "--noconfirm", safeName}, timeout)
+	case "flatpak":
+		return runInstallCommand("flatpak", []string{"install", "--user", "--assumeyes", safeName}, timeout)
+	case "aur":
+		for _, helper := range []string{"paru", "yay"} {
+			if _, err := exec.LookPath(helper); err == nil {
+				return runInstallCommand(helper, []string{"-S", "--needed", "--noconfirm", safeName}, timeout)
+			}
+		}
+		return fmt.Errorf("neither paru nor yay is installed")
+	case "appimage":
+		return fmt.Errorf("AppImages are local files; reinstall requires the original file")
 	default:
 		return fmt.Errorf("unsupported app source: %s", source)
 	}
-	return nil
+}
+
+func validPackageName(name string) bool {
+	if name == "" || len(name) > 200 || strings.HasPrefix(name, "-") || strings.Contains(name, "..") {
+		return false
+	}
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			continue
+		}
+		if strings.ContainsRune("+._:@-", r) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func runPrivilegedInstall(name string, args []string, timeout time.Duration) error {
+	if os.Geteuid() == 0 {
+		return runInstallCommand(name, args, timeout)
+	}
+	if _, err := exec.LookPath("sudo"); err != nil {
+		return fmt.Errorf("%s requires root or passwordless sudo", name)
+	}
+	return runInstallCommand("sudo", append([]string{"-n", name}, args...), timeout)
+}
+
+func runInstallCommand(name string, args []string, timeout time.Duration) error {
+	output, err := runCommandWithLimits(name, args, timeout)
+	if err == nil {
+		return nil
+	}
+	message := strings.TrimSpace(output)
+	if message == "" {
+		return fmt.Errorf("%s failed: %w", name, err)
+	}
+	return fmt.Errorf("%s failed: %w: %s", name, err, message)
 }
 
 type cappedBuffer struct {

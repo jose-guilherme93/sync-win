@@ -26,6 +26,7 @@ status: active
 - Verified a controlled 0.6.1 -> 0.6.2 upgrade, then restored 0.6.1.
 - Fixed the device modal reset by initializing the active tab once on mount instead of on every reactive prop update.
 - Made empty device file responses JSON arrays instead of `null`, removing the dashboard `invalid files response` error.
+- Implemented fixed-command `install_app` for APT, Flatpak, Pacman and AUR with fail-closed policy and privilege handling.
 - Updated the contract, `ROADMAP.md` and the active P1 functionality context.
 
 ## Validation

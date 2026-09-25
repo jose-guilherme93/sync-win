@@ -83,6 +83,31 @@ func TestInstallAppRefusedAndSandboxed(t *testing.T) {
 	}
 }
 
+func TestInstallAppUsesFixedSourceCommand(t *testing.T) {
+	bin := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "args")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$INSTALL_LOG\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "flatpak"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	t.Setenv("INSTALL_LOG", logPath)
+
+	if err := installApp("flatpak", "org.example.App", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	args, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(args), "install\n--user\n--assumeyes\norg.example.App\n"; got != want {
+		t.Fatalf("flatpak args = %q, want %q", got, want)
+	}
+	if err := installApp("appimage", "Example.AppImage", time.Second); err == nil || !strings.Contains(err.Error(), "local files") {
+		t.Fatalf("AppImage install should be refused, got %v", err)
+	}
+}
+
 func TestRunCommandLimits(t *testing.T) {
 	output, err := runCommandWithLimits("sleep", []string{"5"}, 150*time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "timed out") {

@@ -117,9 +117,11 @@ Corpo: `{"device_token": "..."}` — zera contador de falhas e marca online. O s
 
 | Tipo | Ação local | Validações do agent |
 |---|---|---|
-| `install_app` | apt-get/flatpak/pacman/paru/yay install | nome validado (charset restrito), fonte conhecida, **timeout** configurável (padrão 900 s), saída limitada a 64 KiB, exigível `allow_install_app=false` na policy |
+| `install_app` | apt-get/flatpak/pacman/paru/yay install | nome validado (charset restrito), fonte conhecida, **timeout** configurável (padrão 900 s), saída limitada a 64 KiB, executado apenas com `allow_install_app=true` na policy |
 | `exclude_file` | adiciona linha em excluded-files | caminho relativo, sem `..`; idempotente |
 | `lynis_audit` | executa `lynis audit system --cronjob --no-colors` | Lynis deve estar instalado; timeout 120 s; parseia `lynis-report.dat` em JSON estruturado (hardening_index, warnings, suggestions, categories); resultado armazenado no servidor em `security_audits` |
+
+`install_app` usa apenas comandos fixos por fonte. Flatpak e AUR rodam no user service; APT e Pacman exigem root ou `sudo -n` configurado. AppImage é recusado porque não há fonte.download confiável. A feature flag `LEM_ENABLE_REMOTE_MUTATIONS` também precisa estar habilitada no servidor.
 
 - **Policy local** (`~/.config/lem/policy.json`, criada pelo operador): `{"allow_install_app": false, "allow_exclude_file": false, "allow_restore_saves": false, "allow_lynis_audit": true, "allow_docker_read": true, "allow_docker_lifecycle": false, "allow_docker_exec": false, "allow_docker_prune": false, "allow_docker_compose": false, "command_timeout_seconds": 900}`. Arquivo ausente ou inválido usa esses defaults fail-closed. Comando recusado é reportado ao servidor com motivo — nada executa sem consentimento local.
 - **Docker**: IDs de container/exec são validados, requests têm deadline, respostas são limitadas e compose aceita apenas filenames/roots aprovados sem symlink escape. Results são vinculados ao device que os solicitou.

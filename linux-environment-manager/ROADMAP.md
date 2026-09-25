@@ -43,6 +43,14 @@ A próxima etapa é P1 (funcionalidade), não parte desta remediação.
 - [x] troca atômica com backup e rollback
 - [x] timer systemd de 15 minutos com opt-out `LEM_AUTO_UPDATE=0`
 
+## P1.5 — Ações de pacotes (concluída)
+- [x] implementar `install_app` no agent
+- [x] validar nomes e fontes com comandos fixos
+- [x] timeout, output cap e privilégio explícito para APT/Pacman
+- [x] suportar Flatpak e AUR sem shell arbitrário
+- [x] recusar AppImage sem arquivo local
+- [x] testes de argumentos, validação e recusa
+
 A funcionalidade P1 está concluída. A próxima etapa é uma nova priorização.
 
 ## FASE 0 — Arquitetura e contratos
