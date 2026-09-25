@@ -620,24 +620,23 @@
   $: cpu = hw?.cpu_usage_percent || 0
   $: memPct = memoryPercent(hw)
 
-  $: if (open) {
+  onMount(() => {
     activeTab = 'system'
-    // Use preloaded files if available, otherwise start empty
+    // Use preloaded files if available, otherwise start empty.
     files = initialFiles.length > 0 ? [...initialFiles] : []
     apps = []
     saves = []
     expandedGroups = {}
     selectedFile = null
     appQuery = ''
-    // Only fetch files if not preloaded
     if (initialFiles.length === 0) void loadFiles()
     clock = window.setInterval(() => (now = Date.now()), 15000)
-  }
 
-  $: if (!open) {
-    window.clearInterval(clock)
-    window.clearTimeout(toastTimer)
-  }
+    return () => {
+      window.clearInterval(clock)
+      window.clearTimeout(toastTimer)
+    }
+  })
 </script>
 
 {#if open}

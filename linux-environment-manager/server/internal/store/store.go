@@ -922,7 +922,7 @@ func (s *Store) ListFiles(deviceID string) ([]PreferenceFile, error) {
 	}
 	defer rows.Close()
 
-	var files []PreferenceFile
+	files := make([]PreferenceFile, 0)
 	for rows.Next() {
 		var f PreferenceFile
 		var syncedAt string

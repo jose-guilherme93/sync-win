@@ -17,6 +17,10 @@ func TestSaveBinaryEncodingAndGameRestorePayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	empty, err := store.ListFiles(device.ID)
+	if err != nil || empty == nil {
+		t.Fatalf("empty file list must encode as []: %#v err=%v", empty, err)
+	}
 
 	binary := base64.StdEncoding.EncodeToString([]byte{0, 1, 2, 255})
 	saved, rejected, err := store.SavePreferenceBatch(device.ID, []PreferenceInput{
