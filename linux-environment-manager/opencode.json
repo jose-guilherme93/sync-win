@@ -1,0 +1,88 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "opencode/space-bunny-free",
+  "plugins": [
+    "@dietrichgebert/ponytail"
+  ],
+  "tool_output": {
+    "max_lines": 400,
+    "max_bytes": 16000
+  },
+  "compaction": {
+    "auto": true,
+    "keep": {
+      "tokens": 8000
+    },
+    "buffer": 12000
+  },
+  "agents": {
+    "build": {
+      "steps": 10,
+      "permissions": [
+        {
+          "action": "webfetch",
+          "resource": "*",
+          "effect": "ask"
+        },
+        {
+          "action": "websearch",
+          "resource": "*",
+          "effect": "deny"
+        },
+        {
+          "action": "subagent",
+          "resource": "*",
+          "effect": "deny"
+        }
+      ]
+    },
+    "plan": {
+      "steps": 4,
+      "permissions": [
+        {
+          "action": "edit",
+          "resource": "*",
+          "effect": "deny"
+        },
+        {
+          "action": "shell",
+          "resource": "*",
+          "effect": "deny"
+        },
+        {
+          "action": "subagent",
+          "resource": "*",
+          "effect": "deny"
+        },
+        {
+          "action": "webfetch",
+          "resource": "*",
+          "effect": "deny"
+        },
+        {
+          "action": "websearch",
+          "resource": "*",
+          "effect": "deny"
+        }
+      ]
+    }
+  },
+  "mcp": {
+    "servers": {
+      "openpencil": {
+        "type": "local",
+        "command": [
+          "/home/joseti/.nvm/versions/node/v24.21.0/bin/npx",
+          "--yes",
+          "--package=@open-pencil/mcp@0.15.1",
+          "--",
+          "openpencil-mcp"
+        ],
+        "environment": {
+          "PATH": "/home/joseti/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin",
+          "OPENPENCIL_MCP_ROOT": "/home/joseti/projects/sync-win/linux-environment-manager/prototypes/openpencil"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,607 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LEM — Complete Interface Prototype</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- 01 · Authentication -->
+  <section class="screen" data-name="01 Authentication" style="top:0px">
+    <div class="auth-wrap">
+      <div class="auth-card card">
+        <div class="auth-logo">LEM</div>
+        <h1>Sign in to LEM</h1>
+        <p class="lead muted">Manage your Linux devices, preferences and game saves from one secure dashboard.</p>
+        <div class="auth-fields">
+          <div>
+            <label class="input-label">Email address</label>
+            <div class="input input-wide">joseti@example.com</div>
+          </div>
+          <div>
+            <label class="input-label">Password</label>
+            <div class="input input-wide">••••••••••••</div>
+          </div>
+          <div class="alert alert-red">Invalid email or password.</div>
+          <div class="btn btn-primary btn-lg" style="width:100%">Sign in</div>
+        </div>
+        <div class="auth-switch">New to LEM? <span class="teal">Create your account</span></div>
+      </div>
+    </div>
+    <div class="screen-title">LEM / Authentication / Sign in</div>
+  </section>
+
+  <!-- 02 · Dashboard overview -->
+  <section class="screen" data-name="02 Dashboard overview" style="top:1000px">
+    <div class="app-header">
+      <div class="brand">
+        <div class="brand-mark">LEM</div>
+        <div>
+          <div class="brand-name">LEM</div>
+          <div class="brand-subtitle">Linux Environment Manager</div>
+        </div>
+      </div>
+      <div class="header-actions">
+        <div class="live-pill"><span class="dot dot-green"></span> Live <span class="live-time">updated 8s ago</span></div>
+        <div class="btn btn-icon btn-ghost">↻</div>
+        <div class="notification-button">♢<div class="notification-count">3</div></div>
+        <div class="avatar">JT</div>
+      </div>
+    </div>
+
+    <div class="dashboard-content">
+      <div class="kpi-row">
+        <div class="kpi card active"><div class="kpi-label">Devices</div><div class="kpi-value bright">6</div><div class="kpi-hint">2 offline</div></div>
+        <div class="kpi card"><div class="kpi-label">Online</div><div class="kpi-value green">4</div><div class="kpi-hint">reporting now</div></div>
+        <div class="kpi card"><div class="kpi-label">Degraded</div><div class="kpi-value amber">1</div><div class="kpi-hint">last report 2m ago</div></div>
+        <div class="kpi card"><div class="kpi-label">Errors</div><div class="kpi-value red">1</div><div class="kpi-hint">needs attention</div></div>
+        <div class="kpi card"><div class="kpi-label">Synced files</div><div class="kpi-value teal">1,284</div><div class="kpi-hint">+18 this week</div></div>
+      </div>
+
+      <div class="toolbar">
+        <div class="search-box">
+          <div class="search-icon">⌕</div>
+          <div class="input">Search hostname, user or device ID</div>
+        </div>
+        <div class="row gap-10">
+          <div class="view-toggle"><div class="selected">Simple</div><div>Complex</div></div>
+          <div class="btn btn-teal">＋ Add Linux Device</div>
+        </div>
+      </div>
+
+      <div class="device-list">
+        <div class="device-row card">
+          <div class="device-identity">
+            <div class="device-icon">⌨</div>
+            <div class="grow">
+              <div class="between"><div class="device-name">workstation</div><span class="badge badge-green"><span class="dot dot-green"></span>Online</span></div>
+              <div class="device-meta">joseti · Linux Mint 22.1 · 8f2c-91a4</div>
+            </div>
+          </div>
+          <div class="device-metrics">
+            <div class="metric"><div class="metric-head"><span>CPU</span><span class="metric-value">18%</span></div><div class="progress"><div style="width:18%"></div></div></div>
+            <div class="metric"><div class="metric-head"><span>Memory</span><span class="metric-value">11.8 / 32 GB</span></div><div class="progress blue"><div style="width:37%"></div></div></div>
+            <div class="metric"><div class="metric-head"><span>Temperature</span><span class="metric-value">54°C</span></div><div class="progress amber"><div style="width:45%"></div></div></div>
+            <div class="metric"><div class="metric-head"><span>Uptime</span><span class="metric-value">6d 14h</span></div><div class="progress purple"><div style="width:72%"></div></div></div>
+          </div>
+          <div class="device-insight">
+            <div class="insight-title">Latest insight</div>
+            <div class="insight-value"><span class="green">● Healthy</span> · Disk 61%</div>
+            <svg class="sparkline" viewBox="0 0 180 46"><polyline points="0,31 18,25 36,28 54,17 72,22 90,14 108,19 126,11 144,17 162,9 180,13" fill="none" stroke="#2dd4bf" stroke-width="2"/><polyline points="0,38 30,35 60,36 90,31 120,33 150,29 180,30" fill="none" stroke="#3b82f6" stroke-width="1.5" opacity=".7"/></svg>
+          </div>
+        </div>
+
+        <div class="device-row card">
+          <div class="device-identity">
+            <div class="device-icon" style="color:#c4b5fd">⌁</div>
+            <div class="grow">
+              <div class="between"><div class="device-name">gaming-rig</div><span class="badge badge-amber"><span class="dot dot-amber"></span>Degraded</span></div>
+              <div class="device-meta">joseti · Arch Linux · c821-4d7e</div>
+            </div>
+          </div>
+          <div class="device-metrics">
+            <div class="metric"><div class="metric-head"><span>CPU</span><span class="metric-value">76%</span></div><div class="progress amber"><div style="width:76%"></div></div></div>
+            <div class="metric"><div class="metric-head"><span>Memory</span><span class="metric-value">28.4 / 32 GB</span></div><div class="progress red"><div style="width:89%"></div></div></div>
+            <div class="metric"><div class="metric-head"><span>Temperature</span><span class="metric-value red">81°C</span></div><div class="progress red"><div style="width:81%"></div></div></div>
+            <div class="metric"><div class="metric-head"><span>Uptime</div><span class="metric-value">19h</span></div><div class="progress"><div style="width:18%"></div></div></div>
+          </div>
+          <div class="device-insight">
+            <div class="insight-title">Attention needed</div>
+            <div class="insight-value"><span class="amber">High temperature</span> for 12 minutes</div>
+            <div class="row gap-6" style="margin-top:10px"><span class="badge badge-red">Thermal</span><span class="badge">NVIDIA 4070</span></div>
+          </div>
+        </div>
+
+        <div class="device-row card">
+          <div class="device-identity">
+            <div class="device-icon" style="color:#93c5fd">▦</div>
+            <div class="grow">
+              <div class="between"><div class="device-name">homelab</div><span class="badge badge-green"><span class="dot dot-green"></span>Online</span></div>
+              <div class="device-meta">server · Debian 13 · 01a8-bb30</div>
+            </div>
+          </div>
+          <div class="device-metrics">
+            <div class="metric"><div class="metric-head"><span>CPU</span><span class="metric-value">7%</span></div><div class="progress"><div style="width:7%"></div></div></div>
+            <div class="metric"><div class="metric-head"><span>Memory</span><span class="metric-value">3.2 / 16 GB</span></div><div class="progress blue"><div style="width:20%"></div></div></div>
+            <div class="metric"><div class="metric-head"><span>Disk</span><span class="metric-value">48%</span></div><div class="progress"><div style="width:48%"></div></div></div>
+            <div class="metric"><div class="metric-head"><span>Network</span><span class="metric-value">1.8 MB/s</span></div><div class="progress blue"><div style="width:32%"></div></div></div>
+          </div>
+          <div class="device-insight">
+            <div class="insight-title">Services</div>
+            <div class="insight-value">12 containers running</div>
+            <div class="row gap-6" style="margin-top:10px"><span class="badge badge-green">Docker</span><span class="badge badge-blue">LAN only</span></div>
+          </div>
+        </div>
+
+        <div class="device-row card" style="opacity:.72">
+          <div class="device-identity">
+            <div class="device-icon" style="color:#64748b">▱</div>
+            <div class="grow">
+              <div class="between"><div class="device-name">old-thinkpad</div><span class="badge"><span class="dot"></span>Offline</span></div>
+              <div class="device-meta">joseti · Fedora 41 · 40de-112b</div>
+            </div>
+          </div>
+          <div class="device-metrics">
+            <div class="metric"><div class="metric-head"><span>Last seen</span><span class="metric-value">3h ago</span></div><div class="dim">—</div></div>
+            <div class="metric"><div class="metric-head"><span>Files</span><span class="metric-value">214</span></div><div class="dim">—</div></div>
+            <div class="metric"><div class="metric-head"><span>Packages</span><span class="metric-value">1,842</span></div><div class="dim">—</div></div>
+            <div class="metric"><div class="metric-head"><span>Saves</span><span class="metric-value">38</span></div><div class="dim">—</div></div>
+          </div>
+          <div class="device-insight">
+            <div class="insight-title">Last sync</div>
+            <div class="insight-value">214 files · 38 saves</div>
+            <div class="dim" style="margin-top:8px;font-size:10px">Open details to inspect cached data</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="screen-title">LEM / Dashboard / All devices</div>
+  </section>
+
+  <!-- 03 · Device system -->
+  <section class="screen" data-name="03 Device details — System" style="top:2000px">
+    <div class="modal-backdrop">
+      <div class="modal">
+        <div class="modal-header">
+          <div class="modal-title-row">
+            <div class="row gap-12">
+              <div class="device-icon">⌨</div>
+              <div><div class="row gap-8"><h2>workstation</h2><span class="badge badge-green"><span class="dot dot-green"></span>Online</span></div><div class="modal-subtitle">joseti · Linux Mint 22.1 · Device 8f2c-91a4</div></div>
+            </div>
+            <div class="row gap-8"><div class="badge badge-green">Agent 0.6.1</div><div class="btn btn-icon btn-ghost">✕</div></div>
+          </div>
+        </div>
+        <div class="tabs">
+          <div class="tab active">System</div><div class="tab">Files</div><div class="tab">Packages</div><div class="tab">Saves</div><div class="tab">Docker</div><div class="tab">Security</div><div class="tab">Notes</div>
+        </div>
+        <div class="modal-body">
+          <div class="agent-impact card-soft">
+            <div><div class="section-label">Agent impact</div><div class="muted" style="font-size:10px;margin-top:5px">Very low overhead</div></div>
+            <div class="impact-metrics">
+              <div class="metric"><div class="metric-head"><span>CPU</span><span class="metric-value">0.3%</span></div><div class="progress"><div style="width:3%"></div></div></div>
+              <div class="metric"><div class="metric-head"><span>RAM</span><span class="metric-value">18 MB</span></div><div class="progress blue"><div style="width:8%"></div></div></div>
+              <div class="metric"><div class="metric-head"><span>Disk I/O</span><span class="metric-value">0.1 MB/s</span></div><div class="progress purple"><div style="width:5%"></div></div></div>
+            </div>
+          </div>
+
+          <div class="chart-grid">
+            <div class="chart-card card">
+              <div class="chart-head"><span class="chart-title">CPU usage</span><span class="chart-value teal">18%</span></div>
+              <div class="chart-area"><svg viewBox="0 0 260 110"><polyline points="0,80 20,73 40,77 60,57 80,65 100,47 120,55 140,38 160,49 180,31 200,42 220,28 240,36 260,24" fill="none" stroke="#2dd4bf" stroke-width="3"/></svg></div>
+              <div class="between dim" style="font-size:9px;margin-top:7px"><span>1 min ago</span><span>now</span></div>
+            </div>
+            <div class="chart-card card">
+              <div class="chart-head"><span class="chart-title">Memory</span><span class="chart-value blue">37%</span></div>
+              <div class="chart-area"><svg viewBox="0 0 260 110"><polyline points="0,70 20,68 40,71 60,62 80,60 100,58 120,54 140,56 160,49 180,51 200,46 220,45 240,41 260,43" fill="none" stroke="#3b82f6" stroke-width="3"/></svg></div>
+              <div class="between dim" style="font-size:9px;margin-top:7px"><span>11.2 GB</span><span>11.8 / 32 GB</span></div>
+            </div>
+            <div class="chart-card card">
+              <div class="chart-head"><span class="chart-title">Network</span><span class="chart-value purple">2.4 MB/s</span></div>
+              <div class="chart-area"><svg viewBox="0 0 260 110"><polyline points="0,86 20,78 40,81 60,65 80,72 100,45 120,58 140,38 160,49 180,29 200,42 220,25 240,34 260,20" fill="none" stroke="#a78bfa" stroke-width="3"/><polyline points="0,94 30,92 60,89 90,91 120,85 150,87 180,82 210,84 240,79 260,80" fill="none" stroke="#64748b" stroke-width="1.5"/></svg></div>
+              <div class="between dim" style="font-size:9px;margin-top:7px"><span class="teal">RX 1.9 MB/s</span><span>TX 0.5 MB/s</span></div>
+            </div>
+            <div class="chart-card card">
+              <div class="chart-head"><span class="chart-title">Temperature</span><span class="chart-value amber">54°C</span></div>
+              <div class="chart-area"><svg viewBox="0 0 260 110"><polyline points="0,75 20,72 40,68 60,70 80,62 100,58 120,61 140,54 160,51 180,55 200,47 220,45 240,48 260,42" fill="none" stroke="#fbbf24" stroke-width="3"/></svg></div>
+              <div class="between dim" style="font-size:9px;margin-top:7px"><span>CPU 52°C</span><span>GPU 48°C</span></div>
+            </div>
+          </div>
+
+          <div class="system-lower">
+            <div class="info-panel card-soft">
+              <div class="section-head"><span class="section-label">System information</span><span class="badge">Refresh 5s ▾</span></div>
+              <div class="info-grid">
+                <div class="info-item"><div class="info-key">Operating system</div><div class="info-value">Linux Mint 22.1 Xia</div></div>
+                <div class="info-item"><div class="info-key">Kernel</div><div class="info-value">6.8.0-60-generic</div></div>
+                <div class="info-item"><div class="info-key">CPU</div><div class="info-value">AMD Ryzen 7 7700X · 16 threads</div></div>
+                <div class="info-item"><div class="info-key">Uptime</div><div class="info-value">6 days, 14 hours</div></div>
+                <div class="info-item"><div class="info-key">Memory</div><div class="info-value">32 GB DDR5</div></div>
+                <div class="info-item"><div class="info-key">Swap</div><div class="info-value">8 GB · 3% used</div></div>
+                <div class="info-item"><div class="info-key">Architecture</div><div class="info-value">x86_64</div></div>
+                <div class="info-item"><div class="info-key">Desktop</div><div class="info-value">KDE Plasma 6.1</div></div>
+                <div class="info-item"><div class="info-key">Disk</div><div class="info-value">1.8 TB · 61% used</div></div>
+                <div class="info-item"><div class="info-key">Locale</div><div class="info-value">pt_BR.UTF-8</div></div>
+              </div>
+            </div>
+            <div class="log-panel card-soft">
+              <div class="section-head"><span class="section-label">Device logs</span><div class="log-filters"><span class="badge badge-blue">All</span><span class="badge">Error</span><span class="badge">Warn</span><span class="badge">Info</span></div></div>
+              <div class="log-line"><span class="log-time mono">23:41:02</span><span class="log-level teal">INFO</span><span class="muted">hardware report completed in 42ms</span></div>
+              <div class="log-line"><span class="log-time mono">23:40:42</span><span class="log-level teal">INFO</span><span class="muted">heartbeat sent · 1.8 KB</span></div>
+              <div class="log-line"><span class="log-time mono">23:40:12</span><span class="log-level amber">WARN</span><span class="muted">package index older than 7 days</span></div>
+              <div class="log-line"><span class="log-time mono">23:39:52</span><span class="log-level teal">INFO</span><span class="muted">preferences synchronized · 24 files</span></div>
+              <div class="log-line"><span class="log-time mono">23:39:22</span><span class="log-level teal">INFO</span><span class="muted">saves scan completed · 38 files</span></div>
+              <div class="log-line"><span class="log-time mono">23:38:52</span><span class="log-level teal">INFO</span><span class="muted">Docker inventory refreshed · 3 containers</span></div>
+              <div class="log-line"><span class="log-time mono">23:38:22</span><span class="log-level red">ERROR</span><span class="muted">optional sensor hwmon3 returned invalid data</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer between">
+          <div class="row gap-20"><div><div class="info-key">Last seen</div><div class="info-value">8 seconds ago</div></div><div><div class="info-key">Last sync</div><div class="info-value">30 seconds ago</div></div><div><div class="info-key">Registered</div><div class="info-value">May 18, 2026</div></div></div>
+          <div class="btn btn-danger btn-sm">Remove device and data</div>
+        </div>
+      </div>
+    </div>
+    <div class="screen-title">LEM / Device / workstation / System</div>
+  </section>
+
+  <!-- 04 · Files -->
+  <section class="screen" data-name="04 Device details — Files" style="top:3000px">
+    <div class="modal-backdrop">
+      <div class="modal">
+        <div class="modal-header">
+          <div class="modal-title-row"><div class="row gap-12"><div class="device-icon">⌨</div><div><div class="row gap-8"><h2>workstation</h2><span class="badge badge-green"><span class="dot dot-green"></span>Online</span></div><div class="modal-subtitle">24 synchronized preference files · 1,284 files total</div></div></div><div class="btn btn-icon btn-ghost">✕</div></div>
+        </div>
+        <div class="tabs"><div class="tab">System</div><div class="tab active">Files</div><div class="tab">Packages</div><div class="tab">Saves</div><div class="tab">Docker</div><div class="tab">Security</div><div class="tab">Notes</div></div>
+        <div class="modal-body">
+          <div class="section-head"><div><span class="section-label">Synchronized files</span><div class="muted" style="font-size:11px;margin-top:4px">Explicitly allowed text preferences only</div></div><div class="row gap-8"><div class="select">All categories</div><div class="btn btn-sm">↻ Refresh</div></div></div>
+          <div class="file-layout">
+            <div class="file-list card-soft">
+              <div class="file-row selected"><div class="row gap-10"><div class="file-icon">⚙</div><div><div class="file-name">kwinrc</div><div class="file-path">~/.config/kwinrc</div></div></div><div class="right"><div class="badge badge-blue">KDE</div><div class="dim" style="font-size:9px;margin-top:4px">8.4 KB</div></div></div>
+              <div class="file-row"><div class="row gap-10"><div class="file-icon">⚙</div><div><div class="file-name">kdeglobals</div><div class="file-path">~/.config/kdeglobals</div></div></div><div class="right"><div class="badge badge-blue">KDE</div><div class="dim" style="font-size:9px;margin-top:4px">3.1 KB</div></div></div>
+              <div class="file-row"><div class="row gap-10"><div class="file-icon">◫</div><div><div class="file-name">dolphinrc</div><div class="file-path">~/.config/dolphinrc</div></div></div><div class="right"><div class="badge badge-blue">KDE</div><div class="dim" style="font-size:9px;margin-top:4px">6.7 KB</div></div></div>
+              <div class="file-row"><div class="row gap-10"><div class="file-icon">◫</div><div><div class="file-name">konsolrc</div><div class="file-path">~/.config/konsolrc</div></div></div><div class="right"><div class="badge badge-blue">KDE</div><div class="dim" style="font-size:9px;margin-top:4px">11.2 KB</div></div></div>
+              <div class="file-row"><div class="row gap-10"><div class="file-icon">◈</div><div><div class="file-name">gtk-4.0.ini</div><div class="file-path">~/.config/gtk-4.0.ini</div></div></div><div class="right"><div class="badge badge-purple">GTK</div><div class="dim" style="font-size:9px;margin-top:4px">2.8 KB</div></div></div>
+              <div class="file-row"><div class="row gap-10"><div class="file-icon">◈</div><div><div class="file-name">settings.ini</div><div class="file-path">~/.config/Code/User/settings.json</div></div></div><div class="right"><div class="badge">Editor</div><div class="dim" style="font-size:9px;margin-top:4px">18.9 KB</div></div></div>
+              <div class="file-row"><div class="row gap-10"><div class="file-icon">▤</div><div><div class="file-name">autostart.conf</div><div class="file-path">~/.config/systemd/user/lem-agent.service</div></div></div><div class="right"><div class="badge">Systemd</div><div class="dim" style="font-size:9px;margin-top:4px">1.2 KB</div></div></div>
+            </div>
+            <div class="file-viewer card-soft">
+              <div class="between"><div><h3 class="mono">kwinrc</h3><div class="muted" style="font-size:10px;margin-top:4px">~/.config/kwinrc</div></div><div class="row gap-8"><span class="badge badge-blue">View</span><span class="badge">Copy</span><span class="badge badge-red">Exclude</span></div></div>
+              <div class="divider" style="margin-top:14px"></div>
+              <div class="between" style="margin-top:12px"><span class="dim" style="font-size:10px">8.4 KB · synced 30s ago</span><span class="dim mono" style="font-size:9px">UTF-8 · 214 lines</span></div>
+              <div class="code-block">[Desktop Entry]
+Type=Application
+Name=KWin
+Exec=kwin_x11
+TryExec=kwin_x11
+
+[Compositing]
+Backend=OpenGL
+GLCore=true
+AnimationFactor=1.000000
+
+[Desktops]
+Number=2
+Rows=1
+
+[Effect-Overview]
+BorderActivate=6
+Opacity=0.960000
+
+[Mouse]
+MouseThreshold=3
+MouseSensitivity=2.500000</div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer between"><div class="row gap-20"><div><div class="info-key">Last sync</div><div class="info-value">30 seconds ago</div></div><div><div class="info-key">Storage policy</div><div class="info-value">Small text files · 24 files</div></div></div><div class="btn btn-sm">Open files in editor</div></div>
+      </div>
+    </div>
+    <div class="screen-title">LEM / Device / Files / Viewer</div>
+  </section>
+
+  <!-- 05 · Packages -->
+  <section class="screen" data-name="05 Device details — Packages" style="top:4000px">
+    <div class="modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><div class="modal-title-row"><div class="row gap-12"><div class="device-icon">⌨</div><div><div class="row gap-8"><h2>workstation</h2><span class="badge badge-green"><span class="dot dot-green"></span>Online</span></div><div class="modal-subtitle">1,842 packages discovered across 4 package managers</div></div></div><div class="btn btn-icon btn-ghost">✕</div></div></div>
+        <div class="tabs"><div class="tab">System</div><div class="tab">Files</div><div class="tab active">Packages</div><div class="tab">Saves</div><div class="tab">Docker</div><div class="tab">Security</div><div class="tab">Notes</div></div>
+        <div class="modal-body">
+          <div class="section-head"><div class="row gap-10"><div class="search-box" style="width:320px"><div class="input">Search packages</div></div><div class="select">All managers</div></div><div class="row gap-8"><span class="badge badge-green">APT 1,204</span><span class="badge badge-purple">Flatpak 312</span><span class="badge badge-blue">AppImage 18</span><span class="badge">AUR 308</span></div></div>
+          <div class="group-card card-soft">
+            <div class="group-head"><div class="row gap-8"><span class="badge badge-green">APT</span><strong>Debian packages</strong><span class="dim">1,204 items</span></div><div class="btn btn-sm">Show all</div></div>
+            <table class="table"><thead><tr><th>Package</th><th>Version</th><th>Architecture</th><th class="right">Action</th></tr></thead><tbody>
+              <tr><td><span class="bright">code</span></td><td class="mono">1.104.2-1</td><td>amd64</td><td class="right"><span class="badge badge-blue">Reinstall</span></td></tr>
+              <tr><td><span class="bright">docker-ce</span></td><td class="mono">5:28.3.2-1~ubuntu.24.04~noble</td><td>amd64</td><td class="right"><span class="badge badge-blue">Reinstall</span></td></tr>
+              <tr><td><span class="bright">kde-plasma-desktop</span></td><td class="mono">5:6.1.5-0ubuntu1</td><td>amd64</td><td class="right"><span class="badge badge-blue">Reinstall</span></td></tr>
+              <tr><td><span class="bright">firefox</span></td><td class="mono">1:140.0-1build1</td><td>amd64</td><td class="right"><span class="badge badge-blue">Reinstall</span></td></tr>
+            </tbody></table>
+          </div>
+          <div class="package-grid">
+            <div class="group-card card-soft" style="margin:0"><div class="group-head"><div class="row gap-8"><span class="badge badge-purple">Flatpak</span><strong>Applications</strong></div><span class="dim">312</span></div><div class="package-grid" style="grid-template-columns:1fr;padding:10px"><div class="package card-soft"><div><div class="bright" style="font-size:11px">Mozilla Firefox</div><div class="dim" style="font-size:9px">org.mozilla.firefox · 142.0</div></div><span class="badge badge-blue">Reinstall</span></div><div class="package card-soft"><div><div class="bright" style="font-size:11px">Steam</div><div class="dim" style="font-size:9px">com.valvesoftware.Steam · 1.0.0</div></div><span class="badge badge-blue">Reinstall</span></div></div></div>
+            <div class="group-card card-soft" style="margin:0"><div class="group-head"><div class="row gap-8"><span class="badge badge-blue">AppImage</span><strong>Portable apps</strong></div><span class="dim">18</span></div><div class="package-grid" style="grid-template-columns:1fr;padding:10px"><div class="package card-soft"><div><div class="bright" style="font-size:11px">Obsidian-1.9.10.AppImage</div><div class="dim" style="font-size:9px">~/Applications · 412 MB</div></div><span class="badge">Info</span></div><div class="package card-soft"><div><div class="bright" style="font-size:11px">Cursor-0.50.AppImage</div><div class="dim" style="font-size:9px">~/Applications · 326 MB</div></div><span class="badge">Info</span></div></div></div>
+          </div>
+        </div>
+        <div class="modal-footer between"><div class="muted" style="font-size:10px">Package inventory is read-only. Reinstall requests are sent to the agent queue.</div><div class="row gap-8"><div class="btn btn-sm">↻ Refresh</div><div class="btn btn-primary btn-sm">Request all</div></div></div>
+      </div>
+    </div>
+    <div class="screen-title">LEM / Device / Packages</div>
+  </section>
+
+  <!-- 06 · Saves -->
+  <section class="screen" data-name="06 Device details — Saves" style="top:5000px">
+    <div class="modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><div class="modal-title-row"><div class="row gap-12"><div class="device-icon" style="color:#c4b5fd">⌁</div><div><div class="row gap-8"><h2>gaming-rig</h2><span class="badge badge-amber"><span class="dot dot-amber"></span>Degraded</span></div><div class="modal-subtitle">38 save files · 1.8 GB · last sync 4 minutes ago</div></div></div><div class="btn btn-icon btn-ghost">✕</div></div></div>
+        <div class="tabs"><div class="tab">System</div><div class="tab">Files</div><div class="tab">Packages</div><div class="tab active">Saves</div><div class="tab">Docker</div><div class="tab">Security</div><div class="tab">Notes</div></div>
+        <div class="modal-body">
+          <div class="section-head"><div><span class="section-label">Game saves</span><div class="muted" style="font-size:11px;margin-top:4px">Grouped by game and store account</div></div><div class="row gap-8"><div class="select">All save types</div><div class="btn btn-sm">↻ Refresh</div></div></div>
+          <div class="group-card card-soft">
+            <div class="group-head"><div class="row gap-12"><div class="game-cover">H</div><div><div class="row gap-8"><strong>Hollow Knight</strong><span class="badge badge-purple">Steam</span><span class="badge">18 files</span></div><div class="dim mono" style="font-size:9px;margin-top:3px">~/.local/share/Steam/userdata/68149203/312250</div></div></div><div class="row gap-8"><span class="muted" style="font-size:10px">412 MB</span><div class="btn btn-sm">⌄</div></div></div>
+            <table class="table"><thead><tr><th>Save file</th><th>Type</th><th>Size</th><th>Synced</th><th class="right">Action</th></tr></thead><tbody>
+              <tr class="selected"><td class="mono bright">save.dat</td><td><span class="badge">data</span></td><td>1.2 MB</td><td class="muted">4m ago</td><td class="right"><span class="badge badge-red">Exclude</span></td></tr>
+              <tr><td class="mono bright">user1.dat</td><td><span class="badge">data</span></td><td>864 KB</td><td class="muted">4m ago</td><td class="right"><span class="badge badge-red">Exclude</span></td></tr>
+              <tr><td class="mono bright">map.dat</td><td><span class="badge">data</span></td><td>3.8 MB</td><td class="muted">4m ago</td><td class="right"><span class="badge badge-red">Exclude</span></td></tr>
+            </tbody></table>
+          </div>
+          <div class="group-card card-soft">
+            <div class="group-head"><div class="row gap-12"><div class="game-cover" style="background:linear-gradient(135deg,#0f766e,#164e63)">S</div><div><div class="row gap-8"><strong>Stardew Valley</strong><span class="badge badge-blue">Steam</span><span class="badge">12 files</span></div><div class="dim mono" style="font-size:9px;margin-top:3px">~/.local/share/Steam/userdata/68149203/413150</div></div></div><div class="row gap-8"><span class="muted" style="font-size:10px">186 MB</span><div class="btn btn-sm">⌄</div></div></div>
+            <table class="table"><thead><tr><th>Save file</th><th>Type</th><th>Size</th><th>Synced</th><th class="right">Action</th></tr></thead><tbody><tr><td class="mono bright">SaveGameInfo</td><td><span class="badge">data</span></td><td>148 KB</td><td class="muted">4m ago</td><td class="right"><span class="badge badge-red">Exclude</span></td></tr><tr><td class="mono bright">masterSave</td><td><span class="badge badge-amber">binary</span></td><td>2.4 MB</td><td class="muted">4m ago</td><td class="right"><span class="badge badge-red">Exclude</span></td></tr></tbody></table>
+          </div>
+          <div class="card-blue card" style="padding:13px;display:flex;align-items:center;justify-content:space-between"><div><strong>Restore saves to another device</strong><div class="muted" style="font-size:10px;margin-top:3px">Select a destination after reviewing version compatibility.</div></div><div class="btn btn-primary btn-sm">Choose destination</div></div>
+        </div>
+        <div class="modal-footer between"><div class="row gap-20"><div><div class="info-key">Last sync</div><div class="info-value">4 minutes ago</div></div><div><div class="info-key">Storage</div><div class="info-value">1.8 GB across 38 files</div></div></div><div class="btn btn-sm">Sync settings</div></div>
+      </div>
+    </div>
+    <div class="screen-title">LEM / Device / Saves</div>
+  </section>
+
+  <!-- 07 · Notes -->
+  <section class="screen" data-name="07 Device details — Notes" style="top:6000px">
+    <div class="modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><div class="modal-title-row"><div class="row gap-12"><div class="device-icon">⌨</div><div><div class="row gap-8"><h2>workstation</h2><span class="badge badge-green"><span class="dot dot-green"></span>Online</span></div><div class="modal-subtitle">Private device notes and attachments</div></div></div><div class="btn btn-icon btn-ghost">✕</div></div></div>
+        <div class="tabs"><div class="tab">System</div><div class="tab">Files</div><div class="tab">Packages</div><div class="tab">Saves</div><div class="tab">Docker</div><div class="tab">Security</div><div class="tab active">Notes</div></div>
+        <div class="modal-body">
+          <div class="notes-layout">
+            <div class="note-composer card-soft">
+              <div class="section-head"><span class="section-label">Add a note</span><span class="dim" style="font-size:9px">Visible only in your account</span></div>
+              <div class="textarea">Remember to check the GPU temperature after the next kernel update.</div>
+              <div class="between" style="margin-top:12px"><div class="row gap-8"><div class="btn btn-sm">＋ Attach file</div><span class="dim" style="font-size:9px">Images or text · max 8 MB</span></div><div class="btn btn-primary btn-sm">Add note</div></div>
+              <div class="divider" style="margin:16px 0 12px"></div>
+              <div class="section-label">Attachments</div>
+              <div class="attachments">
+                <div class="attachment"><div class="attachment-preview"></div><div class="bright" style="font-size:9px">gpu-temps.png</div><div class="dim" style="font-size:8px;margin-top:2px">482 KB · Hardware check</div></div>
+                <div class="attachment"><div class="attachment-preview" style="background:linear-gradient(135deg,#1e3a8a,#7e22ce)"></div><div class="bright" style="font-size:9px">kernel-report.txt</div><div class="dim" style="font-size:8px;margin-top:2px">18 KB · Update notes</div></div>
+                <div class="attachment" style="display:flex;align-items:center;justify-content:center;border-style:dashed"><div class="center dim" style="font-size:9px">＋<br>Add attachment</div></div>
+              </div>
+            </div>
+            <div class="notes-list card-soft">
+              <div class="section-head"><span class="section-label">Notes & attachments</span><span class="badge">6 notes</span></div>
+              <div class="note card-soft">
+                <div class="between"><div class="row gap-8"><div class="avatar" style="width:28px;height:28px;font-size:9px">JT</div><div><strong style="font-size:11px">Jose T.</strong><div class="dim" style="font-size:8px">Today at 22:18</div></div></div><span class="badge">⋯</span></div>
+                <p style="font-size:11px;margin-top:10px;color:#cbd5e1">Remember to check the GPU temperature after the next kernel update.</p>
+                <div class="row gap-8" style="margin-top:10px"><span class="badge"><span class="file-icon" style="width:18px;height:18px;font-size:8px">▧</span>gpu-temps.png</span><span class="dim" style="font-size:8px">482 KB</span></div>
+              </div>
+              <div class="note card-soft">
+                <div class="between"><div class="row gap-8"><div class="avatar" style="width:28px;height:28px;font-size:9px">JT</div><div><strong style="font-size:11px">Jose T.</strong><div class="dim" style="font-size:8px">Sep 21 at 14:42</div></div></div><span class="badge">⋯</span></div>
+                <p style="font-size:11px;margin-top:10px;color:#cbd5e1">KDE Plasma profile is ready to move to the new SSD. Keep the old partition until validation finishes.</p>
+              </div>
+              <div class="note card-soft">
+                <div class="between"><div class="row gap-8"><div class="avatar" style="width:28px;height:28px;font-size:9px">JT</div><div><strong style="font-size:11px">Jose T.</strong><div class="dim" style="font-size:8px">Sep 18 at 09:07</div></div></div><span class="badge">⋯</span></div>
+                <p style="font-size:11px;margin-top:10px;color:#cbd5e1">Docker compose files are stored in ~/services. Do not prune volumes before the PostgreSQL backup completes.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer between"><div class="muted" style="font-size:10px">Notes are stored in the central server and never collected by the agent.</div><div class="btn btn-sm">Manage attachments</div></div>
+      </div>
+    </div>
+    <div class="screen-title">LEM / Device / Notes</div>
+  </section>
+
+  <!-- 08 · Docker -->
+  <section class="screen" data-name="08 Device details — Docker" style="top:7000px">
+    <div class="modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><div class="modal-title-row"><div class="row gap-12"><div class="device-icon" style="color:#c4b5fd">▦</div><div><div class="row gap-8"><h2>homelab</h2><span class="badge badge-green"><span class="dot dot-green"></span>Online</span></div><div class="modal-subtitle">Docker Engine 28.3.2 · 12 containers · 18 images</div></div></div><div class="btn btn-icon btn-ghost">✕</div></div></div>
+        <div class="tabs"><div class="tab">System</div><div class="tab">Files</div><div class="tab">Packages</div><div class="tab">Saves</div><div class="tab active">Docker</div><div class="tab">Security</div><div class="tab">Notes</div></div>
+        <div class="modal-body">
+          <div class="docker-layout">
+            <div class="container-list card-soft">
+              <div class="section-head"><div class="row gap-6"><span class="badge badge-green">8 running</span><span class="badge">3 stopped</span><span class="badge badge-amber">1 paused</span></div><div class="row gap-6"><span class="select">Auto</span><div class="btn btn-sm">↻</div></div></div>
+              <div class="input" style="margin-bottom:10px">Search containers</div>
+              <div class="row gap-6" style="margin-bottom:8px"><span class="badge badge-purple">All</span><span class="badge">Running</span><span class="badge">Stopped</span></div>
+              <div class="container-row selected"><div class="row gap-10"><span class="dot dot-green"></span><div><div class="container-name">postgres-main</div><div class="container-image">postgres:17-alpine · Up 12 days</div></div></div><div class="container-actions"><span class="badge badge-amber">Stop</span><span class="badge">Logs</span></div></div>
+              <div class="container-row"><div class="row gap-10"><span class="dot dot-green"></span><div><div class="container-name">redis-cache</div><div class="container-image">redis:7.4-alpine · Up 12 days</div></div></div><div class="container-actions"><span class="badge badge-amber">Stop</span><span class="badge">Logs</span></div></div>
+              <div class="container-row"><div class="row gap-10"><span class="dot dot-green"></span><div><div class="container-name">lemm-server</div><div class="container-image">linux-environment-manager:latest · Up 2h</div></div></div><div class="container-actions"><span class="badge badge-amber">Stop</span><span class="badge">Logs</span></div></div>
+              <div class="container-row"><div class="row gap-10"><span class="dot dot-green"></span><div><div class="container-name">nginx-proxy</div><div class="container-image">nginx:alpine · Up 31 days</div></div></div><div class="container-actions"><span class="badge badge-amber">Stop</span><span class="badge">Logs</span></div></div>
+              <div class="container-row"><div class="row gap-10"><span class="dot"></span><div><div class="container-name">paper-backup</div><div class="container-image">alpine:3.21 · Exited 2h ago</div></div></div><div class="container-actions"><span class="badge badge-green">Start</span><span class="badge">Logs</span></div></div>
+              <div class="container-row"><div class="row gap-10"><span class="dot dot-amber"></span><div><div class="container-name">ollama</div><div class="container-image">ollama/ollama:latest · Paused</div></div></div><div class="container-actions"><span class="badge badge-green">Start</span><span class="badge">Logs</span></div></div>
+            </div>
+            <div class="docker-detail card-soft">
+              <div class="docker-summary"><div class="summary-tile"><div class="info-key">State</div><div class="row gap-6" style="margin-top:7px"><span class="dot dot-green"></span><strong class="green">Running</strong></div></div><div class="summary-tile"><div class="info-key">Engine</div><div class="info-value" style="margin-top:7px">28.3.2</div></div><div class="summary-tile"><div class="info-key">Image</div><div class="info-value mono" style="margin-top:7px">postgres:17-alpine</div></div></div>
+              <div class="detail-tabs"><div class="detail-tab active">Details</div><div class="detail-tab">Stats</div><div class="detail-tab">Logs</div><div class="detail-tab">Shell</div><div class="detail-tab">Compose</div><div class="detail-tab">Cleanup</div></div>
+              <div class="detail-content">
+                <div class="info-grid">
+                  <div class="info-item"><div class="info-key">Container ID</div><div class="info-value mono">8bc14d2a9f70</div></div><div class="info-item"><div class="info-key">Created</div><div class="info-value">Sep 12, 2026 at 18:42</div></div>
+                  <div class="info-item"><div class="info-key">Restart policy</div><div class="info-value">unless-stopped</div></div><div class="info-item"><div class="info-key">Network</div><div class="info-value">lem-net · 172.20.0.14</div></div>
+                </div>
+                <div style="margin-top:16px"><div class="section-label">Published ports</div><div class="card-soft" style="margin-top:8px;padding:11px"><div class="row gap-12"><span class="badge badge-blue">5432→5432</span><span class="muted mono" style="font-size:10px">0.0.0.0:5432 · TCP</span><span class="grow"></span><span class="dim" style="font-size:9px">healthy</span></div></div></div>
+                <div style="margin-top:16px"><div class="section-label">Mounts</div><div class="card-soft" style="margin-top:8px;padding:11px"><div class="mono" style="font-size:10px;color:#a5b4fc">/srv/lem/postgres → /var/lib/postgresql/data</div><div class="mono" style="font-size:9px;color:#64748b;margin-top:5px">/srv/lem/config/postgres → /etc/postgresql:ro</div></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer between"><div class="row gap-8"><div class="btn btn-sm">＋ Compose</div><div class="btn btn-sm">Cleanup resources</div></div><div class="row gap-8"><div class="btn btn-sm">Restart</div><div class="btn btn-amber btn-sm">Stop</div><div class="btn btn-danger btn-sm">Remove</div></div></div>
+      </div>
+    </div>
+    <div class="screen-title">LEM / Device / Docker / Container details</div>
+  </section>
+
+  <!-- 09 · Security -->
+  <section class="screen" data-name="09 Device details — Security" style="top:8000px">
+    <div class="modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><div class="modal-title-row"><div class="row gap-12"><div class="device-icon" style="color:#fde68a">⬡</div><div><div class="row gap-8"><h2>workstation</h2><span class="badge badge-green"><span class="dot dot-green"></span>Online</span></div><div class="modal-subtitle">Lynis security audit · Linux 6.8.0-60-generic</div></div></div><div class="btn btn-icon btn-ghost">✕</div></div></div>
+        <div class="tabs"><div class="tab">System</div><div class="tab">Files</div><div class="tab">Packages</div><div class="tab">Saves</div><div class="tab">Docker</div><div class="tab active">Security</div><div class="tab">Notes</div></div>
+        <div class="modal-body">
+          <div class="security-grid">
+            <div class="score-card card-soft">
+              <div class="between"><span class="section-label">Hardening index</span><span class="badge badge-amber">Good</span></div>
+              <div class="score-ring"><div><div class="score-number">78</div><div class="muted" style="font-size:10px">out of 100</div></div></div>
+              <h3>Reasonably hardened</h3><p class="muted" style="font-size:10px;margin:8px auto 0;max-width:230px">The system follows most recommended security controls. Review the warnings below.</p>
+              <div class="divider" style="margin:20px 0"></div>
+              <div class="between"><span class="muted" style="font-size:10px">Last audit</span><strong style="font-size:10px">Today, 22:06</strong></div>
+              <div class="between" style="margin-top:9px"><span class="muted" style="font-size:10px">Lynis version</span><strong style="font-size:10px">3.1.2</strong></div>
+              <div class="btn btn-primary" style="margin-top:20px">Run audit again</div>
+            </div>
+            <div class="security-content">
+              <div class="security-stats">
+                <div class="security-stat card-soft"><div class="info-key">Warnings</div><div style="font-size:28px;font-weight:800;color:#fbbf24;margin-top:7px">7</div><div class="muted" style="font-size:9px">2 high priority</div></div>
+                <div class="security-stat card-soft"><div class="info-key">Suggestions</div><div style="font-size:28px;font-weight:800;color:#60a5fa;margin-top:7px">12</div><div class="muted" style="font-size:9px">optional improvements</div></div>
+                <div class="security-stat card-soft"><div class="info-key">Tests</div><div style="font-size:28px;font-weight:800;color:#34d399;margin-top:7px">284</div><div class="muted" style="font-size:9px">271 passed</div></div>
+              </div>
+              <div class="card-soft" style="margin-top:12px;padding:12px">
+                <div class="section-head"><span class="section-label">Warnings & suggestions</span><div class="row gap-6"><span class="badge badge-red">High 2</span><span class="badge badge-amber">Medium 7</span><span class="badge badge-blue">Low 10</span></div></div>
+                <div class="finding"><div class="finding-icon">!</div><div><strong style="font-size:11px">Permissive SSH settings</strong><div class="muted" style="font-size:9px;margin-top:3px">PasswordAuthentication appears enabled for the active SSH daemon.</div></div><span class="badge badge-red">High</span></div>
+                <div class="finding"><div class="finding-icon" style="color:#f87171;background:rgba(248,113,113,.1)">!</div><div><strong style="font-size:11px">Kernel hardening not persistent</strong><div class="muted" style="font-size:9px;margin-top:3px">Several sysctl values are not configured in /etc/sysctl.d.</div></div><span class="badge badge-red">High</span></div>
+                <div class="finding"><div class="finding-icon">!</div><div><strong style="font-size:11px">Core dumps are enabled</strong><div class="muted" style="font-size:9px;margin-top:3px">Set fs.suid_dumpable=0 and restrict core pattern.</div></div><span class="badge badge-amber">Medium</span></div>
+                <div class="finding"><div class="finding-icon">i</div><div><strong style="font-size:11px">Install AIDE file integrity monitoring</strong><div class="muted" style="font-size:9px;margin-top:3px">Optional package not detected on this device.</div></div><span class="badge badge-blue">Low</span></div>
+              </div>
+              <div class="audit-history card-soft">
+                <div class="section-head"><span class="section-label">Audit history</span><span class="btn btn-sm">Delete</span></div>
+                <table class="table"><thead><tr><th>Date</th><th>Score</th><th>Warnings</th><th>Tests</th><th>State</th></tr></thead><tbody><tr><td>Sep 25, 2026</td><td class="amber">78</td><td>7</td><td>284</td><td><span class="badge badge-green">Completed</span></td></tr><tr><td>Sep 11, 2026</td><td class="amber">76</td><td>9</td><td>281</td><td><span class="badge">Completed</span></td></tr></tbody></table>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer between"><div class="muted" style="font-size:10px">Audits execute locally. Only the result summary is synchronized.</div><div class="btn btn-sm">Export report</div></div>
+      </div>
+    </div>
+    <div class="screen-title">LEM / Device / Security / Lynis</div>
+  </section>
+
+  <!-- 10 · Notifications -->
+  <section class="screen" data-name="10 Notifications and inbox" style="top:9000px">
+    <div class="modal-backdrop">
+      <div class="modal" style="height:760px;margin-top:42px">
+        <div class="modal-header"><div class="modal-title-row"><div><h2>Notifications</h2><div class="modal-subtitle">Choose how LEM keeps you informed</div></div><div class="btn btn-icon btn-ghost">✕</div></div></div>
+        <div class="modal-body" style="height:610px">
+          <div class="notification-settings">
+            <div class="provider-card card-soft">
+              <div class="between"><div class="row gap-12"><div class="provider-logo">●</div><div><h3>In-site alerts</h3><div class="muted" style="font-size:10px;margin-top:3px">Show alerts inside the dashboard</div></div></div><div class="switch on"><div class="switch-dot"></div></div></div>
+              <div class="divider" style="margin:18px 0"></div>
+              <label class="input-label">Sound</label><div class="select" style="width:100%">Chime</div>
+              <div class="between" style="margin-top:18px"><div><strong style="font-size:11px">Test notification</strong><div class="muted" style="font-size:9px;margin-top:3px">Preview the current sound and toast.</div></div><div class="btn btn-sm">Send test</div></div>
+              <div class="btn btn-primary" style="margin-top:22px;width:100%">Save preferences</div>
+            </div>
+            <div class="provider-card card-soft">
+              <div class="between"><div class="row gap-12"><div class="provider-logo" style="color:#38bdf8">➤</div><div><h3>Telegram</h3><div class="muted" style="font-size:10px;margin-top:3px">Receive important events on mobile</div></div></div><div class="switch on"><div class="switch-dot"></div></div></div>
+              <div class="divider" style="margin:18px 0"></div>
+              <label class="input-label">Bot token</label><div class="input input-wide">••••••••••:••••••••••••••••••</div>
+              <div class="between" style="margin-top:14px"><div style="flex:1"><label class="input-label">Chat ID</label><div class="input input-wide">•••••••••</div></div><div class="btn" style="align-self:flex-end">Detect</div></div>
+              <div class="between" style="margin-top:20px"><div><strong style="font-size:11px">Send test message</strong><div class="muted" style="font-size:9px;margin-top:3px">Verify bot access and chat ID.</div></div><div class="btn btn-sm">Send test</div></div>
+            </div>
+            <div class="provider-card card-soft">
+              <div class="between"><div class="row gap-12"><div class="provider-logo" style="color:#a78bfa">⌁</div><div><h3>Webhook</h3><div class="muted" style="font-size:10px;margin-top:3px">POST events to your own endpoint</div></div></div><div class="switch"><div class="switch-dot"></div></div></div>
+              <div class="divider" style="margin:18px 0"></div>
+              <label class="input-label">Endpoint URL</label><div class="input input-wide">https://example.invalid/lem/events</div>
+              <label class="input-label" style="margin-top:14px">Signing secret</label><div class="input input-wide">Optional HMAC secret</div>
+              <div class="row gap-6" style="margin-top:14px"><span class="badge badge-green">Device offline</span><span class="badge badge-amber">Sync error</span><span class="badge badge-blue">Security</span></div>
+            </div>
+            <div class="inbox-card card-soft">
+              <div class="section-head"><div><span class="section-label">Recent inbox</span><div class="muted" style="font-size:10px;margin-top:4px">3 unread events</div></div><div class="row gap-6"><span class="btn btn-sm">Mark all read</span><span class="btn btn-sm">Clear all</span></div></div>
+              <div class="inbox-item"><div class="inbox-icon card-red"><span class="red">!</span></div><div><strong style="font-size:11px">gaming-rig temperature is high</strong><div class="muted" style="font-size:9px;margin-top:4px">Temperature remained above 78°C for 12 minutes.</div><div class="dim" style="font-size:8px;margin-top:5px">12 minutes ago</div></div><span class="dot dot-red"></span></div>
+              <div class="inbox-item"><div class="inbox-icon card-amber"><span class="amber">↻</span></div><div><strong style="font-size:11px">Preference sync completed</strong><div class="muted" style="font-size:9px;margin-top:4px">24 files synchronized from workstation.</div><div class="dim" style="font-size:8px;margin-top:5px">28 minutes ago</div></div><span class="dot dot-amber"></span></div>
+              <div class="inbox-item"><div class="inbox-icon card-blue"><span class="blue">i</span></div><div><strong style="font-size:11px">Security audit finished</strong><div class="muted" style="font-size:9px;margin-top:4px">Hardening index 78 with 7 warnings.</div><div class="dim" style="font-size:8px;margin-top:5px">1 hour ago</div></div><span class="dot dot-green"></span></div>
+              <div class="inbox-item"><div class="inbox-icon card-soft"><span>✓</span></div><div><strong style="font-size:11px">New device enrolled</strong><div class="muted" style="font-size:9px;margin-top:4px">homelab completed enrollment.</div><div class="dim" style="font-size:8px;margin-top:5px">Yesterday</div></div><span></span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="screen-title">LEM / Settings / Notifications</div>
+  </section>
+
+  <!-- 11 · Add device -->
+  <section class="screen" data-name="11 Add Linux device" style="top:10000px">
+    <div class="modal-backdrop">
+      <div class="card centered-modal">
+        <div class="between"><div><h2>Add a Linux device</h2><p class="muted" style="font-size:11px;margin-top:5px">Enroll this computer in the LEM dashboard.</p></div><div class="btn btn-icon btn-ghost">✕</div></div>
+        <div class="alert alert-amber" style="margin-top:18px">You opened this page from localhost. Run the command on the device you want to enroll, not on the server.</div>
+        <div style="margin-top:16px">
+          <div class="step"><div class="step-number">1</div><div><strong style="font-size:12px">Open the server address</strong><div class="muted" style="font-size:10px;margin-top:3px">Use the address below from the target Linux computer.</div><div class="input" style="margin-top:8px">https://lem.example.com</div></div></div>
+          <div class="step"><div class="step-number">2</div><div><strong style="font-size:12px">Generate an enrollment token</strong><div class="muted" style="font-size:10px;margin-top:3px">The token is temporary and can only be used once.</div><div class="row gap-8" style="margin-top:8px"><div class="input mono grow">lem-enroll-••••••••••••••••</div><div class="btn btn-primary">New token</div></div></div></div>
+          <div class="step"><div class="step-number">3</div><div><strong style="font-size:12px">Run the install command</strong><div class="muted" style="font-size:10px;margin-top:3px">Copy and execute this command in the target terminal.</div><div class="command" style="margin-top:8px">curl -fsSL https://lem.example.com/install.sh | sh -s -- --server https://lem.example.com --token lem-enroll-••••••••</div><div class="row gap-8" style="margin-top:8px"><div class="btn btn-sm">Copy command</div><span class="muted" style="font-size:9px">Token expires in 30 minutes</span></div></div></div>
+        </div>
+        <div class="between" style="margin-top:18px;padding-top:16px;border-top:1px solid rgba(148,163,184,.12)"><span class="dim" style="font-size:10px">The agent sends only the explicit collection contract.</span><div class="btn btn-primary">Done</div></div>
+      </div>
+    </div>
+    <div class="screen-title">LEM / Enrollment / Add device</div>
+  </section>
+
+  <!-- 12 · History -->
+  <section class="screen" data-name="12 Telemetry history" style="top:11000px">
+    <div class="modal-backdrop">
+      <div class="modal" style="height:760px;margin-top:42px">
+        <div class="modal-header"><div class="modal-title-row"><div><h2>Telemetry history</h2><div class="modal-subtitle">workstation · Last 24 hours</div></div><div class="row gap-10"><div class="period-tabs"><div class="period">1H</div><div class="period">6H</div><div class="period active">1D</div><div class="period">1W</div><div class="period">1M</div></div><div class="btn btn-icon btn-ghost">✕</div></div></div></div>
+        <div class="modal-body" style="height:610px">
+          <div class="history-layout">
+            <div class="history-chart card-soft"><div class="chart-head"><div><div class="chart-title">CPU usage</div><div class="muted" style="font-size:9px;margin-top:3px">Average 22% · peak 78%</div></div><div class="chart-value teal">22%</div></div><div class="chart-area" style="height:210px"><svg viewBox="0 0 560 210"><polyline points="0,155 35,148 70,162 105,120 140,136 175,92 210,110 245,76 280,98 315,65 350,82 385,48 420,71 455,42 490,58 525,35 560,48" fill="none" stroke="#2dd4bf" stroke-width="3"/></svg></div></div>
+            <div class="history-chart card-soft"><div class="chart-head"><div><div class="chart-title">Memory usage</div><div class="muted" style="font-size:9px;margin-top:3px">Average 41% · 13.1 GB</div></div><div class="chart-value blue">41%</div></div><div class="chart-area" style="height:210px"><svg viewBox="0 0 560 210"><polyline points="0,126 35,120 70,124 105,110 140,114 175,100 210,106 245,91 280,96 315,82 350,88 385,75 420,81 455,68 490,73 525,61 560,65" fill="none" stroke="#3b82f6" stroke-width="3"/></svg></div></div>
+            <div class="history-chart card-soft"><div class="chart-head"><div><div class="chart-title">Network RX / TX</div><div class="muted" style="font-size:9px;margin-top:3px">42.8 GB received · 8.4 GB sent</div></div><div class="chart-value purple">2.4 MB/s</div></div><div class="chart-area" style="height:210px"><svg viewBox="0 0 560 210"><polyline points="0,180 35,160 70,168 105,115 140,142 175,80 210,121 245,62 280,94 315,45 350,79 385,31 420,72 455,26 490,53 525,18 560,39" fill="none" stroke="#a78bfa" stroke-width="3"/><polyline points="0,193 70,190 140,187 210,182 280,178 350,173 420,168 490,163 560,158" fill="none" stroke="#64748b" stroke-width="1.5"/></svg></div></div>
+            <div class="history-chart card-soft"><div class="chart-head"><div><div class="chart-title">Temperature</div><div class="muted" style="font-size:9px;margin-top:3px">Average 51°C · peak 72°C</div></div><div class="chart-value amber">51°C</div></div><div class="chart-area" style="height:210px"><svg viewBox="0 0 560 210"><polyline points="0,145 35,138 70,142 105,122 140,128 175,98 210,112 245,82 280,94 315,68 350,82 385,54 420,70 455,45 490,61 525,37 560,50" fill="none" stroke="#fbbf24" stroke-width="3"/></svg></div></div>
+          </div>
+        </div>
+        <div class="modal-footer between"><div class="muted" style="font-size:10px">Telemetry history is retained according to your data retention policy.</div><div class="row gap-8"><div class="btn btn-sm">Export CSV</div><div class="btn btn-sm">Refresh</div></div></div>
+      </div>
+    </div>
+    <div class="screen-title">LEM / Device / History</div>
+  </section>
+
+  <!-- 13 · Confirmation -->
+  <section class="screen" data-name="13 Destructive action confirmation" style="top:12000px">
+    <div class="modal-backdrop" style="background:rgba(2,6,23,.86)">
+      <div class="card confirm-modal">
+        <div class="row gap-12"><div class="confirm-icon">!</div><div><h2>Remove postgres-main?</h2><p class="muted" style="font-size:11px;margin-top:6px">This command cannot be undone. The container and its anonymous volumes will be permanently deleted.</p></div></div>
+        <div class="card-red" style="padding:12px;margin-top:18px"><div class="row gap-8"><span class="red">⚠</span><strong style="font-size:11px">Database data may be lost</strong></div><div class="muted mono" style="font-size:9px;margin-top:6px">container: postgres-main · volumes: 2 · image: postgres:17-alpine</div></div>
+        <label class="input-label" style="margin-top:16px">Type <span class="mono bright">postgres-main</span> to confirm</label><div class="input input-wide">postgres-main</div>
+        <div class="row gap-10" style="margin-top:20px;justify-content:flex-end"><div class="btn">Cancel</div><div class="btn btn-danger">Remove container</div></div>
+      </div>
+    </div>
+    <div class="screen-title">LEM / Docker / Destructive confirmation</div>
+  </section>
+
+  <!-- 14 · Mobile dashboard -->
+  <section class="screen mobile" data-name="14 Mobile dashboard" style="top:13000px">
+    <div class="app-header">
+      <div class="brand"><div class="brand-mark">LEM</div><div><div class="brand-name">LEM</div><div class="brand-subtitle">Linux Environment Manager</div></div></div>
+      <div class="header-actions"><div class="live-pill"><span class="dot dot-green"></span> Live</div><div class="notification-button">♢<div class="notification-count">3</div></div><div class="avatar">JT</div></div>
+    </div>
+    <div class="kpi-row">
+      <div class="kpi card active"><div class="kpi-label">Devices</div><div class="kpi-value bright">6</div></div>
+      <div class="kpi card"><div class="kpi-label">Online</div><div class="kpi-value green">4</div></div>
+      <div class="kpi card"><div class="kpi-label">Degraded</div><div class="kpi-value amber">1</div></div>
+      <div class="kpi card"><div class="kpi-label">Errors</div><div class="kpi-value red">1</div></div>
+      <div class="kpi card"><div class="kpi-label">Synced files</div><div class="kpi-value teal">1,284</div></div>
+    </div>
+    <div class="toolbar"><div class="search-box"><div class="input">Search devices</div></div><div class="btn btn-teal">＋ Add Linux Device</div></div>
+    <div class="device-list">
+      <div class="device-row card">
+        <div class="device-identity"><div class="device-icon">⌨</div><div class="grow"><div class="between"><div class="device-name">workstation</div><span class="badge badge-green">Online</span></div><div class="device-meta">Linux Mint 22.1</div></div></div>
+        <div class="device-metrics"><div class="metric"><div class="metric-head"><span>CPU</span><span class="metric-value">18%</span></div><div class="progress"><div style="width:18%"></div></div></div><div class="metric"><div class="metric-head"><span>Memory</span><span class="metric-value">37%</span></div><div class="progress blue"><div style="width:37%"></div></div></div></div>
+        <div class="device-insight"><div class="insight-title">Latest insight</div><div class="insight-value green">● Healthy · Disk 61%</div></div>
+      </div>
+      <div class="device-row card">
+        <div class="device-identity"><div class="device-icon" style="color:#c4b5fd">⌁</div><div class="grow"><div class="between"><div class="device-name">gaming-rig</div><span class="badge badge-amber">Degraded</span></div><div class="device-meta">Arch Linux</div></div></div>
+        <div class="device-metrics"><div class="metric"><div class="metric-head"><span>CPU</span><span class="metric-value">76%</span></div><div class="progress amber"><div style="width:76%"></div></div></div><div class="metric"><div class="metric-head"><span>Temperature</span><span class="metric-value red">81°C</span></div><div class="progress red"><div style="width:81%"></div></div></div></div>
+        <div class="device-insight"><div class="insight-title">Attention needed</div><div class="insight-value amber">High temperature</div></div>
+      </div>
+    </div>
+    <div class="screen-title">LEM / Mobile / Dashboard</div>
+  </section>
+
+</body>
+</html>
