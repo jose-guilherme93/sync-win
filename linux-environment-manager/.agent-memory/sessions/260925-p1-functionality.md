@@ -24,6 +24,8 @@ status: active
 - Migrated the live desktop agent to a `joseti` user service with correct HOME/state paths.
 - Added checksum-verified automatic updates with atomic replacement and rollback.
 - Verified a controlled 0.6.1 -> 0.6.2 upgrade, then restored 0.6.1.
+- Fixed the device modal reset by initializing the active tab once on mount instead of on every reactive prop update.
+- Made empty device file responses JSON arrays instead of `null`, removing the dashboard `invalid files response` error.
 - Updated the contract, `ROADMAP.md` and the active P1 functionality context.
 
 ## Validation
