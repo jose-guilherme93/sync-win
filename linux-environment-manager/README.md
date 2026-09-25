@@ -106,13 +106,13 @@ This brings up the whole application in containers with hot reload:
 
 | Service | URL | Behaviour |
 | --- | --- | --- |
-| Server | `http://localhost:8080` | Go server rebuilt by [air](https://github.com/air-verse/air) on every change |
+| Server | `http://localhost:8088` | Go server rebuilt by [air](https://github.com/air-verse/air) on every change |
 | Dashboard | `http://localhost:5173` | Vite dev server with HMR |
 
 Development data lives in `./data-dev`, separate from production `./data`. To run dev alongside a running production stack, publish dev on other ports:
 
 ```bash
-LEM_HTTP_PORT=8081 WEB_PORT=5199 make dev
+DEV_HTTP_PORT=8081 WEB_PORT=5199 make dev
 ```
 
 The Vite dev server automatically points at the dev API port via `VITE_API_BASE`.

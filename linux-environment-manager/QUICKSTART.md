@@ -22,7 +22,7 @@ The server starts at `http://localhost:8080`. The first build takes a few minute
 To hack on the UI or API instead, use the development stack with hot reload:
 
 ```bash
-make dev     # dashboard http://localhost:5173 · api http://localhost:8080
+make dev     # dashboard http://localhost:5173 · api http://localhost:8088
 ```
 
 Run `make help` for the full target list.

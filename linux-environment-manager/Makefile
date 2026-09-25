@@ -17,6 +17,10 @@ DEV_FILE   := compose.dev.yaml
 PROD_FILE  := compose.prod.yaml
 LOCAL_FILE := compose.yaml
 
+# Development uses 8088; production/Coolify keeps LEM_HTTP_PORT=8080.
+DEV_HTTP_PORT ?= 8088
+export DEV_HTTP_PORT
+
 DEV   := $(COMPOSE) -f $(DEV_FILE)
 PROD  := $(COMPOSE) -f $(PROD_FILE)
 LOCAL := $(COMPOSE) -f $(LOCAL_FILE)
@@ -81,7 +85,7 @@ dev: ## Start the full development stack (foreground, rebuilt)
 dev-d: ## Start the full development stack detached
 	@mkdir -p data-dev
 	$(DEV) up --build -d
-	@printf "$(G)Dev stack up:$(N) dashboard http://localhost:%s · api http://localhost:%s\n" "$${WEB_PORT:-5173}" "$${LEM_HTTP_PORT:-8080}"
+	@printf "$(G)Dev stack up:$(N) dashboard http://localhost:%s · api http://localhost:%s\n" "$${WEB_PORT:-5173}" "$${DEV_HTTP_PORT:-8088}"
 
 .PHONY: dev-down
 dev-down: ## Stop and remove the dev stack
