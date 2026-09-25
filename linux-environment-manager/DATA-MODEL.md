@@ -10,13 +10,14 @@ Fields:
 
 - id: stable user identifier
 - email: contact address (unique, used for login)
-- password_hash: salted SHA-256 digest (format `s256$salt$hash`)
+- password_hash: salted Argon2id digest (format `argon2id$v=19$...`; legacy `s256$` values are upgraded after login)
 - created_at: creation timestamp
 
 Rules:
 
-- passwords are stored as salted SHA-256 digests, never in plaintext
-- sessions are managed via Bearer tokens with 30-day TTL
+- passwords are stored as salted Argon2id digests, never in plaintext
+- dashboard sessions use an HttpOnly cookie; only a hash of the session token is persisted
+- cookie-authenticated mutations require a CSRF token
 - each device is bound to an owner account via `owner_id`
 
 ## Session
@@ -25,13 +26,14 @@ Represents an active login session for a user.
 
 Fields:
 
-- token: random session token (used as Bearer token)
+- token: SHA-256 hash of the random session token (raw token is returned only at creation)
 - owner_id: owning user (foreign key to users)
 - created_at: creation timestamp
 
 Rules:
 
-- tokens are stored server-side with a 30-day TTL
+- tokens are stored as hashes server-side with a 30-day TTL
+- logout revokes one token; password changes revoke all tokens for the owner
 - expired sessions are cleaned up periodically
 - the `/api/auth/me` endpoint validates the current session
 
@@ -45,7 +47,7 @@ Fields:
 - user_id: legacy user field (may be empty)
 - owner_id: owning user (foreign key to users)
 - hostname: machine name
-- device_token: secret token used by the agent (never exposed in the UI)
+- device_token: SHA-256 hash of the agent credential (raw token is returned only during enrollment)
 - last_seen_at: last heartbeat timestamp
 - last_sync_at: last successful sync
 - sync_failures: consecutive failed sync attempts; reset on heartbeat or success
@@ -54,18 +56,19 @@ Fields:
 - hardware_json: JSON blob with latest hardware telemetry (HardwareStats)
 - apps_json: JSON array with latest installed application inventory
 - status: derived from last_seen_at (online <30s, stale >30s, offline >5min, error, duplicate)
-- hardware_fingerprint: stable hardware identifier for device reconnection
+- hardware_fingerprint: internal hardware metadata only; never an authentication credential or reconnect secret
 - created_at: creation timestamp
 - updated_at: modification timestamp
 
 Rules:
 
 - device identity should remain stable across reboots
-- tokens must never be shown in the UI or written to server logs
+- device tokens are never shown in the UI or written to server logs
+- fingerprint-based reconnect is disabled; a lost token requires a new enrollment token
 - the dashboard should prioritize online state and last sync time
 - agents send heartbeats via `POST /api/devices/{id}/heartbeat`
-- a unique index on `(owner_id, hostname)` prevents duplicate devices per account
-- hardware_fingerprint enables reconnection when device credentials are lost
+- a new enrollment always creates a new device credential
+- fingerprint metadata must not be returned by dashboard APIs
 
 ## PreferenceFile
 
@@ -341,8 +344,8 @@ Fields:
 ## Request limits
 
 - HTTP request bodies are capped at 2 MiB by the server; larger payloads are rejected with 413
-- session tokens are random, stored server-side with a 30 day TTL, and sent as Bearer tokens
-- user passwords are stored as salted SHA-256 digests (format `s256$salt$hash`)
+- session tokens are random, stored as hashes server-side with a 30 day TTL, and sent as an HttpOnly cookie (Bearer remains supported for API clients)
+- user passwords are stored as salted Argon2id digests
 
 ## Storage
 

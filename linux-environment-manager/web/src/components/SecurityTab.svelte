@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
-  import { serverBase } from '../lib/api'
+  import { apiFetch, serverBase } from '../lib/api'
 
   type LynisFinding = {
     id: string
@@ -68,7 +68,7 @@
       opts.headers = { ...opts.headers, 'Content-Type': 'application/json' }
       opts.body = JSON.stringify(body)
     }
-    const res = await fetch(`${serverBase}${path}`, opts)
+    const res = await apiFetch(`${serverBase}${path}`, opts)
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: `${res.status}` }))
       throw new Error(err.error || `${res.status}`)

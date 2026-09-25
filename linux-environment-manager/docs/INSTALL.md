@@ -170,7 +170,7 @@ To update the agent:
 
 ### `POST /api/agent/enroll-token`
 
-**Authenticated** (requires Bearer token).
+**Authenticated** (requires the dashboard session cookie or a compatible Bearer token; cookie mutations also require CSRF).
 
 Creates a temporary enrollment token.
 

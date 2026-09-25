@@ -12,6 +12,12 @@ services:
       LEM_SECRET_KEY: "${LEM_SECRET_KEY:-dev-insecure-key-not-for-production}"
       # Dashboard session lifetime. Default 720h = 30 days.
       LEM_SESSION_TTL_HOURS: "${LEM_SESSION_TTL_HOURS:-720}"
+      LEM_ENABLE_FINGERPRINT_RECONNECT: "${LEM_ENABLE_FINGERPRINT_RECONNECT:-false}"
+      LEM_ENABLE_LEGACY_INSTALL: "${LEM_ENABLE_LEGACY_INSTALL:-false}"
+      LEM_ENABLE_REMOTE_MUTATIONS: "${LEM_ENABLE_REMOTE_MUTATIONS:-false}"
+      LEM_ENABLE_DOCKER_MUTATIONS: "${LEM_ENABLE_DOCKER_MUTATIONS:-false}"
+      LEM_CORS_ALLOWED_ORIGIN: "${LEM_CORS_ALLOWED_ORIGIN:-}"
+      LEM_HTTPS: "false"
       LOG_CONSOLE_LEVEL: INFO
     volumes:
       - ./data:/data

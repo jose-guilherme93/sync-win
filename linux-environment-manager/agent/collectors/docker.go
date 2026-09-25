@@ -16,7 +16,12 @@ import (
 	"time"
 )
 
-const dockerSocketPath = "/var/run/docker.sock"
+const (
+	dockerSocketPath       = "/var/run/docker.sock"
+	dockerRequestTimeout   = 30 * time.Second
+	maxDockerResponseBytes = 1 << 20
+	maxDockerOutputBytes   = 64 << 10
+)
 
 // DockerContainer represents a Docker container from the Engine API.
 type DockerContainer struct {
@@ -169,11 +174,18 @@ func DockerIsAvailable() bool {
 
 // dockerRequest performs an HTTP request over the Docker UNIX socket.
 func dockerRequest(method, path string, body interface{}) ([]byte, int, error) {
+	return dockerRequestWithTimeout(method, path, body, dockerRequestTimeout)
+}
+
+func dockerRequestWithTimeout(method, path string, body interface{}, timeout time.Duration) ([]byte, int, error) {
 	conn, err := net.DialTimeout("unix", dockerSocketPath, 10*time.Second)
 	if err != nil {
 		return nil, 0, fmt.Errorf("docker socket dial: %w", err)
 	}
 	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return nil, 0, fmt.Errorf("docker socket deadline: %w", err)
+	}
 
 	var bodyReader io.Reader
 	if body != nil {
@@ -201,7 +213,7 @@ func dockerRequest(method, path string, body interface{}) ([]byte, int, error) {
 	}
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10MB cap
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxDockerResponseBytes))
 	if err != nil {
 		return nil, resp.StatusCode, fmt.Errorf("read body: %w", err)
 	}
@@ -321,7 +333,33 @@ func DockerContainerLogs(containerID string, tail int) (string, error) {
 	// Simplified: strip the header bytes and return raw text.
 	// For most cases the text output is clean enough after stripping headers.
 	output := stripDockerStreamHeaders(data)
-	return output, nil
+	return capDockerOutput(output), nil
+}
+
+type cappedBuffer struct {
+	buf   bytes.Buffer
+	limit int
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	original := len(p)
+	remaining := b.limit - b.buf.Len()
+	if remaining > 0 {
+		if remaining > len(p) {
+			remaining = len(p)
+		}
+		_, _ = b.buf.Write(p[:remaining])
+	}
+	return original, nil
+}
+
+func (b *cappedBuffer) String() string { return b.buf.String() }
+
+func capDockerOutput(value string) string {
+	if len(value) > maxDockerOutputBytes {
+		return value[:maxDockerOutputBytes]
+	}
+	return value
 }
 
 // stripDockerStreamHeaders removes the 8-byte Docker stream headers from log output.
@@ -511,8 +549,13 @@ func DockerExecCreate(containerID string, cmd []string) (string, error) {
 	if !validContainerID(containerID) {
 		return "", fmt.Errorf("invalid container ID")
 	}
-	if len(cmd) == 0 {
-		return "", fmt.Errorf("exec command required")
+	if len(cmd) == 0 || len(cmd) > 32 {
+		return "", fmt.Errorf("exec command must contain 1 to 32 arguments")
+	}
+	for _, arg := range cmd {
+		if len(arg) == 0 || len(arg) > 4096 || strings.ContainsRune(arg, '\x00') {
+			return "", fmt.Errorf("invalid exec argument")
+		}
 	}
 	body := map[string]interface{}{
 		"Cmd":          cmd,
@@ -538,32 +581,94 @@ func DockerExecCreate(containerID string, cmd []string) (string, error) {
 
 // DockerExecStart runs a previously created exec instance and returns its output.
 func DockerExecStart(execID string) (string, error) {
-	if execID == "" {
-		return "", fmt.Errorf("exec ID required")
+	if !validContainerID(execID) {
+		return "", fmt.Errorf("invalid exec ID")
 	}
 	body := map[string]interface{}{
 		"Detach": false,
 		"Tty":    false,
 	}
-	data, status, err := dockerRequest("POST", "/exec/"+execID+"/start", body)
+	data, status, err := dockerRequestWithTimeout("POST", "/exec/"+execID+"/start", body, dockerRequestTimeout)
 	if err != nil {
 		return "", err
 	}
 	if status >= 400 {
 		return "", fmt.Errorf("docker exec start returned %d: %s", status, string(data))
 	}
-	return stripDockerStreamHeaders(data), nil
+	return capDockerOutput(stripDockerStreamHeaders(data)), nil
 }
 
-// DockerComposeFiles scans common locations for docker-compose files.
-func DockerComposeFiles() ([]DockerComposeFile, error) {
-	searchPaths := []string{
-		"/home",
-		"/root",
-		"/opt",
-		"/srv",
-		"/etc",
+var composeRoots = []string{"/home", "/opt", "/srv", "/var/lib/lem"}
+
+func validComposePath(path string) bool {
+	if !filepath.IsAbs(path) || strings.Contains(path, "..") {
+		return false
 	}
+	clean := filepath.Clean(path)
+	for _, root := range composeRoots {
+		rel, err := filepath.Rel(root, clean)
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+func pathUnderAnyRoot(path string) bool {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		parent, parentErr := filepath.EvalSymlinks(filepath.Dir(path))
+		if parentErr != nil {
+			return false
+		}
+		resolved = filepath.Join(parent, filepath.Base(path))
+	}
+	for _, root := range composeRoots {
+		resolvedRoot, rootErr := filepath.EvalSymlinks(root)
+		if rootErr != nil {
+			continue
+		}
+		rel, relErr := filepath.Rel(resolvedRoot, resolved)
+		if relErr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+func validateComposePath(path string, forWrite bool) error {
+	if !validComposePath(path) {
+		return fmt.Errorf("compose path is outside approved roots")
+	}
+	clean := filepath.Clean(path)
+	resolved := clean
+	if forWrite {
+		parent := filepath.Dir(clean)
+		info, err := os.Stat(parent)
+		if err != nil || !info.IsDir() {
+			return fmt.Errorf("compose parent directory is unavailable")
+		}
+		resolved, err = filepath.EvalSymlinks(parent)
+		if err != nil {
+			return fmt.Errorf("resolve compose parent: %w", err)
+		}
+		resolved = filepath.Join(resolved, filepath.Base(clean))
+	} else {
+		var err error
+		resolved, err = filepath.EvalSymlinks(clean)
+		if err != nil {
+			return fmt.Errorf("resolve compose path: %w", err)
+		}
+	}
+	if !pathUnderAnyRoot(resolved) {
+		return fmt.Errorf("compose path is outside approved roots")
+	}
+	return nil
+}
+
+// DockerComposeFiles scans only operator-approved compose roots.
+func DockerComposeFiles() ([]DockerComposeFile, error) {
+	searchPaths := []string{"/home", "/opt", "/srv", "/var/lib/lem"}
 	composeNames := []string{
 		"docker-compose.yml",
 		"docker-compose.yaml",
@@ -581,6 +686,9 @@ func DockerComposeFiles() ([]DockerComposeFile, error) {
 				continue
 			}
 			for _, match := range matches {
+				if err := validateComposePath(match, false); err != nil {
+					continue
+				}
 				if seen[match] {
 					continue
 				}
@@ -621,6 +729,9 @@ func DockerComposeWrite(path, content string) error {
 	if path == "" {
 		return fmt.Errorf("compose file path required")
 	}
+	if err := validateComposePath(path, true); err != nil {
+		return err
+	}
 	// Validate path looks like a compose file.
 	base := filepath.Base(path)
 	validNames := map[string]bool{
@@ -630,12 +741,15 @@ func DockerComposeWrite(path, content string) error {
 	if !validNames[base] {
 		return fmt.Errorf("invalid compose filename: %s", base)
 	}
+	if len(content) > 1<<20 {
+		return fmt.Errorf("compose file is too large")
+	}
 	// Ensure parent directory exists.
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		return fmt.Errorf("write compose file: %w", err)
 	}
 	return nil
@@ -645,6 +759,9 @@ func DockerComposeWrite(path, content string) error {
 func DockerComposeUp(composePath string) (string, error) {
 	if composePath == "" {
 		return "", fmt.Errorf("compose file path required")
+	}
+	if err := validateComposePath(composePath, false); err != nil {
+		return "", err
 	}
 	if _, err := os.Stat(composePath); err != nil {
 		return "", fmt.Errorf("compose file not found: %w", err)
@@ -663,6 +780,9 @@ func DockerComposeDown(composePath string) (string, error) {
 	if composePath == "" {
 		return "", fmt.Errorf("compose file path required")
 	}
+	if err := validateComposePath(composePath, false); err != nil {
+		return "", err
+	}
 	if _, err := os.Stat(composePath); err != nil {
 		return "", fmt.Errorf("compose file not found: %w", err)
 	}
@@ -679,6 +799,9 @@ func DockerComposePs(composePath string) (string, error) {
 	if composePath == "" {
 		return "", fmt.Errorf("compose file path required")
 	}
+	if err := validateComposePath(composePath, false); err != nil {
+		return "", err
+	}
 	if _, err := os.Stat(composePath); err != nil {
 		return "", fmt.Errorf("compose file not found: %w", err)
 	}
@@ -694,6 +817,9 @@ func DockerComposePs(composePath string) (string, error) {
 func DockerComposeLogs(composePath string) (string, error) {
 	if composePath == "" {
 		return "", fmt.Errorf("compose file path required")
+	}
+	if err := validateComposePath(composePath, false); err != nil {
+		return "", err
 	}
 	if _, err := os.Stat(composePath); err != nil {
 		return "", fmt.Errorf("compose file not found: %w", err)
@@ -712,11 +838,13 @@ func runDockerComposeCommand(dir, name string, args ...string) (string, error) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
-	var out bytes.Buffer
+	var out cappedBuffer
+	out.limit = maxDockerOutputBytes
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	err := cmd.Run()
 	output := strings.TrimSpace(out.String())
+	output = capDockerOutput(output)
 	if ctx.Err() == context.DeadlineExceeded {
 		return output, fmt.Errorf("docker compose command timed out")
 	}

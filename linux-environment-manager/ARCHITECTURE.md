@@ -20,7 +20,7 @@ The server runs in Docker and exposes a REST API over HTTP. It stores persistent
 - serving the web dashboard (production build from `LEM_WEB_DIR`, default `/app/web`)
 - exposing health and basic diagnostics
 - proxying Docker management commands to agents via a command queue
-- managing user accounts with session-based auth (Bearer tokens)
+- managing user accounts with session-based auth (HttpOnly cookie for the dashboard, bearer compatibility for API clients)
 - dispatching notifications via pluggable providers (Telegram, webhook, web inbox)
 - storing device notes and file attachments
 - structured JSON logging with secret redaction and deduplication
@@ -44,7 +44,7 @@ The agent runs on each Linux device. It is the only component allowed to touch t
 - executing Docker management commands (start, stop, restart, kill, remove, exec, compose read/write/up/down/ps/logs, system/image/container/network prune)
 - reporting Docker container status and engine info in telemetry
 - collecting installed application inventory (apt, flatpak, pacman, AUR, AppImages)
-- reconnecting to the server using hardware fingerprint after credential loss
+- reconnecting to the server only through a fresh enrollment flow after credential loss
 - enforcing local policy: any command type can be disabled via `~/.config/lem/policy.json`
 - surviving server outages via exponential backoff with jitter
 - persisting state across restarts (`~/.local/state/lem/agent-state.json`)
@@ -53,7 +53,7 @@ The agent runs on each Linux device. It is the only component allowed to touch t
 
 The web dashboard is a Svelte 5 + TypeScript 6 + Vite 8 application. It shows the devices that are online, their last sync time, their metadata, live hardware telemetry charts, installed packages, and the small files associated with them. It also provides Docker container management through the Docker tab in the device modal, and Lynis security audit results through the Security tab.
 
-The dashboard is **account-first**: the entry screen is sign in / create account, every device is owned by an account, and agents are registered under the account that generated the install command. The anonymous browser-identity path remains only as a server-side fallback for API-only usage; the UI no longer relies on it.
+The dashboard is **account-first**: the entry screen is sign in / create account, every device is owned by an account, and agents are registered under the account that generated the install command. Authorization always comes from a valid server session; anonymous identity headers and owner query parameters are ignored.
 
 Key UI components:
 - `App.svelte`: root layout with auth, device grid, dashboard charts, polling
@@ -76,7 +76,7 @@ Key UI components:
 - storage of preference files as small text payloads and base64-encoded saves
 - last sync timestamps and online status computation (online <30s, stale >30s, offline >5min)
 - web serving and health endpoints
-- user authentication (register, login, session tokens)
+- user authentication (register, login, HttpOnly session cookies, CSRF-protected mutations)
 - Docker command queue management and broadcast to agents
 - notification dispatch (Telegram, webhook, web inbox) with 15-minute throttle window
 - device notes and file attachments
@@ -94,7 +94,7 @@ Key UI components:
 - Docker container monitoring and command execution
 - installed application inventory collection
 - local policy enforcement
-- hardware fingerprint-based device reconnection
+- hardware fingerprint metadata collection without using it as an authenticator
 
 ### Web responsibilities
 
@@ -171,7 +171,10 @@ The current project intentionally does not include:
 - Docker exec commands are validated and capped at 30s timeout with 64KB output limit.
 - Docker compose file writes are restricted to valid compose filenames only.
 - All Docker actions require authenticated device ownership and are logged in the audit trail.
-- User passwords are stored as salted SHA-256 digests (format `s256$salt$hash`).
+- User passwords are stored as salted Argon2id hashes; session and device credentials are hashed at rest.
+- Dashboard mutations use an HttpOnly session cookie plus CSRF validation; owner resources are isolated by session.
+- Hardware fingerprints are never accepted as authentication or reconnect credentials.
+- Webhook destinations are checked against private-network ranges and redirects are disabled.
 - Notification provider secrets are encrypted with AES-GCM before storage.
 - HTTP request bodies are capped at 2 MiB.
 - Enrollment tokens are single-use with 15-minute expiry.

@@ -59,6 +59,18 @@ type Contract struct {
 		TimeoutSecondsDefault int      `json:"timeout_seconds_default"`
 		OutputCapBytes        int64    `json:"output_cap_bytes"`
 		PolicyPath            string   `json:"policy_path"`
+		PolicyDefaults        struct {
+			AllowInstallApp       bool `json:"allow_install_app"`
+			AllowExcludeFile      bool `json:"allow_exclude_file"`
+			AllowRestoreSaves     bool `json:"allow_restore_saves"`
+			AllowLynisAudit       bool `json:"allow_lynis_audit"`
+			AllowDockerRead       bool `json:"allow_docker_read"`
+			AllowDockerLifecycle  bool `json:"allow_docker_lifecycle"`
+			AllowDockerExec       bool `json:"allow_docker_exec"`
+			AllowDockerPrune      bool `json:"allow_docker_prune"`
+			AllowDockerCompose    bool `json:"allow_docker_compose"`
+			CommandTimeoutSeconds int  `json:"command_timeout_seconds"`
+		} `json:"policy_defaults"`
 	} `json:"commands"`
 	Resilience struct {
 		HTTPTimeoutSeconds    int     `json:"http_timeout_seconds"`
@@ -72,9 +84,9 @@ type Contract struct {
 		MaxSaveBytesServer int64 `json:"max_save_bytes_server"`
 	} `json:"server_limits_mirrored"`
 	SecurityAudit struct {
-		Enabled            bool `json:"enabled"`
-		LynisTimeoutSeconds int `json:"lynis_timeout_seconds"`
-		ReportMaxBytes     int `json:"report_max_bytes"`
+		Enabled             bool `json:"enabled"`
+		LynisTimeoutSeconds int  `json:"lynis_timeout_seconds"`
+		ReportMaxBytes      int  `json:"report_max_bytes"`
 	} `json:"security_audit"`
 }
 

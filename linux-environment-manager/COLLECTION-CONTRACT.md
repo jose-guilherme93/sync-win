@@ -97,7 +97,8 @@ Corpo: `{"device_token": "..."}` — zera contador de falhas e marca online. O s
 | `exclude_file` | adiciona linha em excluded-files | caminho relativo, sem `..`; idempotente |
 | `lynis_audit` | executa `lynis audit system --cronjob --no-colors` | Lynis deve estar instalado; timeout 120 s; parseia `lynis-report.dat` em JSON estruturado (hardening_index, warnings, suggestions, categories); resultado armazenado no servidor em `security_audits` |
 
-- **Policy local** (`~/.config/lem/policy.json`, criada pelo operador): `{"allow_install_app": true, "allow_exclude_file": true, "allow_lynis_audit": true, "command_timeout_seconds": 900}`. Comando recusado é reportado ao servidor com motivo — nada executa sem consentimento local.
+- **Policy local** (`~/.config/lem/policy.json`, criada pelo operador): `{"allow_install_app": false, "allow_exclude_file": false, "allow_restore_saves": false, "allow_lynis_audit": true, "allow_docker_read": true, "allow_docker_lifecycle": false, "allow_docker_exec": false, "allow_docker_prune": false, "allow_docker_compose": false, "command_timeout_seconds": 900}`. Arquivo ausente ou inválido usa esses defaults fail-closed. Comando recusado é reportado ao servidor com motivo — nada executa sem consentimento local.
+- **Docker**: IDs de container/exec são validados, requests têm deadline, respostas são limitadas e compose aceita apenas filenames/roots aprovados sem symlink escape. Results são vinculados ao device que os solicitou.
 - Transporte: token via header `Authorization: Bearer`; polling apenas; o servidor nunca empurra nada.
 
 ## Resiliência

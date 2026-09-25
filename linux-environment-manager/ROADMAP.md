@@ -1,5 +1,15 @@
 # Roadmap
 
+## P0 — Remediação de segurança (concluída)
+- [x] flags fail-closed e validações de entrada
+- [x] autorização estrita por sessão e isolamento entre owners
+- [x] Argon2id, hashes de tokens, cookie HttpOnly, CSRF e revogação
+- [x] rate limiting e proteção SSRF/webhook
+- [x] política local fail-closed, limites Docker, timeouts e resultados vinculados ao device
+- [x] testes de regressão de segurança e documentation alinhada
+
+A próxima etapa é P1 (funcionalidade), não parte desta remediação.
+
 ## FASE 0 — Arquitetura e contratos
 - [x] definir o modelo de preferências por dispositivo
 - [x] ajustar a API inicial para sync de arquivos pequenos
@@ -101,7 +111,7 @@
 - [x] comandos com timeout e cap de saída; pacotes validados antes de executar
 - [x] dashboard account-first: tela inicial é login/criar conta; todo device é registrado sob a conta (`owner_id` = usuário autenticado), sem depender de identidade anônima do navegador; `GET /api/auth/me` restaura a sessão no carregamento
 - [x] instalador com passos numerados e verificação real de conexão (heartbeat) antes de declarar sucesso; falha imprime checklist acionável
-- [x] senhas armazenadas como SHA-256 com sal (formato `s256$salt$hash`)
+- [x] senhas armazenadas como Argon2id; tokens de sessão/device armazenados apenas como hash; dashboard usa cookie HttpOnly + CSRF; owner isolation strict
 - [x] tokens de enrollment: uso único, expiração em 15 minutos, vinculados ao owner
 - [x] verificação de integridade do binário via SHA-256 checksum no install
 - [x] Lynis security audit: agent runs `lynis audit system --cronjob`, parses report to structured JSON, stores in SQLite with full history. Dashboard shows hardening index gauge, warnings/suggestions, category breakdown
@@ -114,7 +124,7 @@
 - [x] sync tolerante: arquivo individual ruim é pulado com log; aborta só se nenhum payload válido
 - [x] limite de upload usa min(limite local, limite espelhado do server) — nada é enviado sabidamente rejeitável
 - [x] E2E real: agent daemon sobrevive à queda do servidor (backoff visível) e se recupera sozinho ("connection recovered") sem re-enviar arquivos inalterados
-- [x] reconexão via hardware fingerprint: agent recupera credenciais perdidas usando identidade estável do dispositivo
+- [x] recovery de credencial exige novo enrollment token; fingerprint reconexão foi desabilitada por não ser autenticador
 
 ## FASE 12 — Save Game Sync
 - [x] Contract v1.1.0: categoria `saves` com roots, extensões, filtros e limites

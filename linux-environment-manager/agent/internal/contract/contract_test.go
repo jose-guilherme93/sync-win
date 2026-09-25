@@ -27,8 +27,8 @@ func TestLoadEmbeddedContract(t *testing.T) {
 	if c.Commands.Transport != "pull_only" {
 		t.Fatalf("command transport must be pull_only, got %q", c.Commands.Transport)
 	}
-	if c.Commands.OutputCapBytes <= 0 || c.Commands.PolicyPath == "" {
-		t.Fatal("command limits incomplete")
+	if c.Commands.OutputCapBytes <= 0 || c.Commands.PolicyPath == "" || !c.Commands.PolicyDefaults.AllowDockerRead || c.Commands.PolicyDefaults.AllowDockerExec {
+		t.Fatal("command limits or safe policy defaults incomplete")
 	}
 	if c.ServerLimitsMirrored.MaxFileBytesServer <= 0 || c.ServerLimitsMirrored.MaxRequestBytes <= 0 {
 		t.Fatal("mirrored server limits incomplete")
@@ -74,6 +74,18 @@ func TestDurationHelpers(t *testing.T) {
 			TimeoutSecondsDefault int      `json:"timeout_seconds_default"`
 			OutputCapBytes        int64    `json:"output_cap_bytes"`
 			PolicyPath            string   `json:"policy_path"`
+			PolicyDefaults        struct {
+				AllowInstallApp       bool `json:"allow_install_app"`
+				AllowExcludeFile      bool `json:"allow_exclude_file"`
+				AllowRestoreSaves     bool `json:"allow_restore_saves"`
+				AllowLynisAudit       bool `json:"allow_lynis_audit"`
+				AllowDockerRead       bool `json:"allow_docker_read"`
+				AllowDockerLifecycle  bool `json:"allow_docker_lifecycle"`
+				AllowDockerExec       bool `json:"allow_docker_exec"`
+				AllowDockerPrune      bool `json:"allow_docker_prune"`
+				AllowDockerCompose    bool `json:"allow_docker_compose"`
+				CommandTimeoutSeconds int  `json:"command_timeout_seconds"`
+			} `json:"policy_defaults"`
 		}{TimeoutSecondsDefault: 900},
 	}
 	if c.HTTPTimeout() != 15*time.Second {

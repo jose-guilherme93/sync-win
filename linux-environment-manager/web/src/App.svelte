@@ -6,7 +6,7 @@
   import NotificationsModal from './components/NotificationsModal.svelte'
   import NotificationToast from './components/NotificationToast.svelte'
   import { addTelemetryPoint } from './lib/telemetry-store'
-  import { serverBase } from './lib/api'
+  import { apiFetch, serverBase } from './lib/api'
 
   type Device = {
     id: string
@@ -140,7 +140,7 @@
   let sessionExpired = false
   let accountEmail = ''
 
-  $: signedIn = Boolean(authToken && ownerIdentity && accountEmail)
+  $: signedIn = Boolean(ownerIdentity && accountEmail)
 
   let selectedFile: PreferenceFile | null = null
   let selectedDeviceId = ''
@@ -260,83 +260,96 @@
   }
 
   // The dashboard is account-first: every device belongs to the signed-in
-  // account. On load we trust cached credentials immediately and show
-  // cached data while validating the session in the background.
+  // account. The bearer token is kept only in memory; the HttpOnly session
+  // cookie is the durable browser credential.
   async function restoreSession() {
     const storedToken = localStorage.getItem('lem-auth-token') || ''
     const storedOwner = localStorage.getItem('lem-owner-id') || ''
     const storedEmail = localStorage.getItem('lem-account-email') || ''
     const myVersion = ++authVersion
+    if (storedToken) localStorage.removeItem('lem-auth-token')
 
     if (storedToken && storedOwner) {
-      // Optimistically trust cached credentials — show dashboard instantly
+      // Briefly support sessions created by older builds while removing the
+      // token from persistent storage immediately.
       authToken = storedToken
       ownerIdentity = storedOwner
       accountEmail = storedEmail
-      authReady = true
-
-      // Load cached devices immediately (sync, no network)
       loadCachedDevices()
+    }
+    authReady = true
 
-      // Connect notification SSE with cached credentials
-      connectNotifSSE()
-
-      // Validate session + refresh devices in parallel (non-blocking)
-      fetch(`${serverBase}/api/auth/me`, {
-        headers: { Authorization: `Bearer ${storedToken}` }
-      }).then(async (response) => {
-        // Skip if a newer auth flow (login) has started
-        if (myVersion !== authVersion) return
-        if (response.ok) {
-          const payload = await response.json()
-          ownerIdentity = payload.owner_id
-          accountEmail = payload.email
-          localStorage.setItem('lem-owner-id', ownerIdentity)
-          localStorage.setItem('lem-account-email', accountEmail)
-        } else if (response.status === 401) {
-          clearAccountStorage()
-          authToken = ''
-          ownerIdentity = ''
-          accountEmail = ''
-          devices = []
-          lastDevicesJson = ''
-          sessionExpired = true
-        }
-      }).catch(() => {
-        // Network error — keep using cached credentials
+    try {
+      const response = await apiFetch(`${serverBase}/api/auth/me`, {
+        headers: storedToken ? { Authorization: `Bearer ${storedToken}` } : {}
       })
-
-      // Refresh devices from server (non-blocking)
-      loadDevices(false)
-    } else {
-      // No cached credentials — show login form
-      authReady = true
+      if (myVersion !== authVersion) return
+      if (response.ok) {
+        const payload = await response.json()
+        ownerIdentity = payload.owner_id
+        accountEmail = payload.email
+        authToken = ''
+        localStorage.setItem('lem-owner-id', ownerIdentity)
+        localStorage.setItem('lem-account-email', accountEmail)
+        loadCachedDevices()
+        void connectNotifSSE()
+        void loadDevices(false)
+      } else if (response.status === 401) {
+        clearAccountStorage()
+        authToken = ''
+        ownerIdentity = ''
+        accountEmail = ''
+        devices = []
+        lastDevicesJson = ''
+        sessionExpired = true
+      }
+    } catch {
+      // A network outage must not discard a still-valid local session. The
+      // next poll will retry the cookie-backed session.
+      if (storedOwner && storedEmail) {
+        void loadDevices(false)
+        void connectNotifSSE()
+      }
     }
   }
 
   let notifSSE: EventSource | null = null
+  let notifConnecting = false
 
-  function connectNotifSSE() {
-    if (notifSSE) return
-    // EventSource cannot set Authorization headers, so the owner is passed as
-    // a query parameter — the server accepts owner_id as a fallback.
-    const owner = encodeURIComponent(ownerIdentity || 'anonymous')
-    notifSSE = new EventSource(`${serverBase}/api/notifications/stream?owner_id=${owner}`)
-    notifSSE.onmessage = (ev) => {
-      try {
-        const event = JSON.parse(ev.data)
-        if (event && event.id && !notifEvents.some(e => e.id === event.id)) {
-          notifEvents = [...notifEvents, event]
-        }
-      } catch {}
-    }
-    notifSSE.onerror = () => {
-      notifSSE?.close()
-      notifSSE = null
-      // Reconnect after 5 seconds unless the component is being torn down.
+  async function connectNotifSSE() {
+    if (notifSSE || notifConnecting) return
+    notifConnecting = true
+    try {
+      const response = await apiFetch(`${serverBase}/api/notifications/stream-token`, {
+        method: 'POST',
+        headers: ownerHeaders,
+        credentials: 'include'
+      })
+      if (!response.ok) throw new Error(`stream ticket failed: ${response.status}`)
+      const payload = await response.json()
+      if (!payload.ticket) throw new Error('stream ticket missing')
+      notifSSE = new EventSource(`${serverBase}/api/notifications/stream?ticket=${encodeURIComponent(payload.ticket)}`, { withCredentials: true })
+      notifSSE.onmessage = (ev) => {
+        try {
+          const event = JSON.parse(ev.data)
+          if (event && event.id && !notifEvents.some(e => e.id === event.id)) {
+            notifEvents = [...notifEvents, event]
+          }
+        } catch {}
+      }
+      notifSSE.onerror = () => {
+        notifSSE?.close()
+        notifSSE = null
+        setTimeout(() => {
+          if (!notifSSE) void connectNotifSSE()
+        }, 5000)
+      }
+    } catch {
       setTimeout(() => {
-        if (!notifSSE) connectNotifSSE()
+        if (!notifSSE) void connectNotifSSE()
       }, 5000)
+    } finally {
+      notifConnecting = false
     }
   }
 
@@ -373,7 +386,7 @@
     devicesLoading = true
     try {
       if (showLoading && devices.length === 0) loading = true
-      const response = await fetch(`${serverBase}/api/devices`, { headers: ownerHeaders })
+      const response = await apiFetch(`${serverBase}/api/devices`, { headers: ownerHeaders })
       if (!response.ok) throw new Error(`request failed: ${response.status}`)
       const payload = await response.json()
       if (!Array.isArray(payload)) throw new Error('invalid devices response')
@@ -446,7 +459,7 @@
 
   async function loadFiles(deviceId: string) {
     try {
-      const response = await fetch(`${serverBase}/api/devices/${deviceId}`, { headers: ownerHeaders })
+      const response = await apiFetch(`${serverBase}/api/devices/${deviceId}`, { headers: ownerHeaders })
       if (!response.ok) throw new Error(`file request failed: ${response.status}`)
       const payload = await response.json()
       if (!Array.isArray(payload)) throw new Error('invalid files response')
@@ -470,7 +483,7 @@
     appsLoading = { ...appsLoading, [deviceId]: true }
     appsError = { ...appsError, [deviceId]: '' }
     try {
-      const response = await fetch(`${serverBase}/api/devices/${deviceId}/apps`, { headers: ownerHeaders })
+      const response = await apiFetch(`${serverBase}/api/devices/${deviceId}/apps`, { headers: ownerHeaders })
       if (!response.ok) throw new Error(`app request failed: ${response.status}`)
       const payload = await response.json()
       if (!Array.isArray(payload)) throw new Error('invalid app inventory response')
@@ -496,7 +509,7 @@
       // Use cached device files if available, otherwise fetch
       let files = filesByDevice[deviceId]
       if (!files) {
-        const response = await fetch(`${serverBase}/api/devices/${deviceId}`, { headers: ownerHeaders })
+        const response = await apiFetch(`${serverBase}/api/devices/${deviceId}`, { headers: ownerHeaders })
         if (!response.ok) throw new Error(`saves request failed: ${response.status}`)
         files = await response.json()
         if (!Array.isArray(files)) throw new Error('invalid device files response')
@@ -520,7 +533,7 @@
   async function loadSyncConfig() {
     settingsLoading = true
     try {
-      const response = await fetch(`${serverBase}/api/sync-config`, { headers: ownerHeaders })
+      const response = await apiFetch(`${serverBase}/api/sync-config`, { headers: ownerHeaders })
       if (!response.ok) throw new Error(`config request failed: ${response.status}`)
       const payload = await response.json()
       extraDirs = Array.isArray(payload.extra_dirs) ? payload.extra_dirs : []
@@ -534,7 +547,7 @@
   async function saveSyncConfig() {
     settingsLoading = true
     try {
-      const response = await fetch(`${serverBase}/api/sync-config`, {
+      const response = await apiFetch(`${serverBase}/api/sync-config`, {
         method: 'PUT',
         headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({ extra_dirs: extraDirs })
@@ -587,7 +600,7 @@
   async function pollNotifications() {
     if (!signedIn) return
     try {
-      const res = await fetch(`${serverBase}/api/notifications/inbox?since=${lastNotifId}`, { headers: ownerHeaders })
+      const res = await apiFetch(`${serverBase}/api/notifications/inbox?since=${lastNotifId}`, { headers: ownerHeaders })
       if (!res.ok) return
       const events = await res.json()
       if (Array.isArray(events) && events.length > 0) {
@@ -601,7 +614,7 @@
 
   function dismissNotif(id: number) {
     notifEvents = notifEvents.filter((e) => e.id !== id)
-    void fetch(`${serverBase}/api/notifications/inbox/read`, {
+    void apiFetch(`${serverBase}/api/notifications/inbox/read`, {
       method: 'POST',
       headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({ ids: [id] }),
@@ -612,7 +625,7 @@
     const ids = notifEvents.map((e) => e.id)
     notifEvents = []
     if (ids.length > 0) {
-      void fetch(`${serverBase}/api/notifications/inbox/read`, {
+      void apiFetch(`${serverBase}/api/notifications/inbox/read`, {
         method: 'POST',
         headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids }),
@@ -640,7 +653,7 @@
   async function loadDeviceDetail(deviceId: string) {
     if (!deviceId) return
     try {
-      const response = await fetch(`${serverBase}/api/devices/${deviceId}/detail`, { headers: ownerHeaders })
+      const response = await apiFetch(`${serverBase}/api/devices/${deviceId}/detail`, { headers: ownerHeaders })
       if (!response.ok) return
       const payload = await response.json()
       if (!payload || typeof payload !== 'object' || Array.isArray(payload) || !payload.id) return
@@ -692,7 +705,7 @@
     enrollmentLoading = true
     enrollmentError = ''
     try {
-      const res = await fetch(`${serverBase}/api/agent/enroll-token`, {
+      const res = await apiFetch(`${serverBase}/api/agent/enroll-token`, {
         method: 'POST',
         headers: ownerHeaders,
       })
@@ -728,7 +741,7 @@
     restoringState = { ...restoringState, [key]: true }
     restoreModalOpen = false
     try {
-      const response = await fetch(`${serverBase}/api/devices/${restoreSourceDevice.id}/restore-saves`, {
+      const response = await apiFetch(`${serverBase}/api/devices/${restoreSourceDevice.id}/restore-saves`, {
         method: 'POST',
         headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -784,7 +797,7 @@
       return
     }
     try {
-      const response = await fetch(`${serverBase}/api/devices/${deviceId}/apps?action=install`, {
+      const response = await apiFetch(`${serverBase}/api/devices/${deviceId}/apps?action=install`, {
         method: 'POST', headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({ source: app.source, name: app.name })
       })
@@ -798,7 +811,7 @@
   async function excludeFile(deviceId: string, file: PreferenceFile) {
     if (!window.confirm(`Exclude ${file.filename} from synchronization?`)) return
     try {
-      const response = await fetch(`${serverBase}/api/devices/${deviceId}/files/${file.id}`, {
+      const response = await apiFetch(`${serverBase}/api/devices/${deviceId}/files/${file.id}`, {
         method: 'DELETE', headers: ownerHeaders
       })
       if (!response.ok) throw new Error(`request failed: ${response.status}`)
@@ -812,7 +825,7 @@
   async function deleteDevice(device: Device) {
     if (!window.confirm(`Remove ${device.hostname} and all synchronized data?`)) return
     try {
-      const response = await fetch(`${serverBase}/api/devices/${device.id}`, { method: 'DELETE', headers: ownerHeaders })
+      const response = await apiFetch(`${serverBase}/api/devices/${device.id}`, { method: 'DELETE', headers: ownerHeaders })
       if (!response.ok) throw new Error(`request failed: ${response.status}`)
       devices = devices.filter((item) => item.id !== device.id)
       delete filesByDevice[device.id]
@@ -826,7 +839,7 @@
   async function submitAuth() {
     try {
       authError = ''
-      const response = await fetch(`${serverBase}/api/auth/${authMode}`, {
+      const response = await apiFetch(`${serverBase}/api/auth/${authMode}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
@@ -835,11 +848,11 @@
       if (!response.ok) throw new Error(payload.error || `Request failed (${response.status})`)
       // Bump auth version so any in-flight restoreSession auth/me won't overwrite us
       authVersion++
-      authToken = payload.token
+      authToken = ''
       ownerIdentity = payload.owner_id
       accountEmail = payload.email
       sessionExpired = false
-      localStorage.setItem('lem-auth-token', authToken)
+      localStorage.removeItem('lem-auth-token')
       localStorage.setItem('lem-owner-id', ownerIdentity)
       localStorage.setItem('lem-account-email', accountEmail)
       devices = []
@@ -855,6 +868,7 @@
   }
 
   function signOut() {
+    void apiFetch(`${serverBase}/api/auth/logout`, { method: 'POST', headers: ownerHeaders }).catch(() => {})
     clearAccountStorage()
     disconnectNotifSSE()
     authToken = ''
@@ -889,7 +903,7 @@
     profileSaving = true
     profileError = ''
     try {
-      const response = await fetch(`${serverBase}/api/auth/update-email`, {
+      const response = await apiFetch(`${serverBase}/api/auth/update-email`, {
         method: 'POST',
         headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: profileEmail })
@@ -912,7 +926,7 @@
     profileSaving = true
     profileError = ''
     try {
-      const response = await fetch(`${serverBase}/api/auth/update-password`, {
+      const response = await apiFetch(`${serverBase}/api/auth/update-password`, {
         method: 'POST',
         headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({ current_password: profileCurrentPassword, new_password: profileNewPassword })
@@ -958,7 +972,7 @@
 
   async function loadRetention() {
     try {
-      const response = await fetch(`${serverBase}/api/retention`, { headers: ownerHeaders })
+      const response = await apiFetch(`${serverBase}/api/retention`, { headers: ownerHeaders })
       if (!response.ok) throw new Error(`${response.status}`)
       const data = await response.json()
       retentionRawHours = data.raw_hours ?? 2
@@ -975,7 +989,7 @@
     retentionSaving = true
     retentionError = ''
     try {
-      const response = await fetch(`${serverBase}/api/retention`, {
+      const response = await apiFetch(`${serverBase}/api/retention`, {
         method: 'PUT',
         headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1006,7 +1020,7 @@
       const endpoint = logsTab === 'audit' ? '/api/audit' : logsTab === 'errors' ? '/api/errors' : '/api/logs'
       const params = new URLSearchParams({ limit: '50', offset: String(logsOffset) })
       if (logsFilter) params.set('search', logsFilter)
-      const response = await fetch(`${serverBase}${endpoint}?${params}`, { headers: ownerHeaders })
+      const response = await apiFetch(`${serverBase}${endpoint}?${params}`, { headers: ownerHeaders })
       if (!response.ok) throw new Error(`request failed: ${response.status}`)
       const payload = await response.json()
       const entries = payload.entries || payload
@@ -1541,7 +1555,7 @@
     <div class="empty">
       <strong>No devices yet</strong>
       <p>Run the install command above on a Linux machine. The device appears here within seconds — while it is still installing, before the agent even connects. The installer prints SUCCESS or troubleshooting steps when it finishes.</p>
-      <p>Devices are tied to <em>this browser profile</em>{#if authToken} and your account{/if}. If you ran the command from another machine but opened this dashboard in a different browser (or incognito), the new device lives under that profile's identity instead.</p>
+      <p>Devices are tied to your account. If you ran the command from another machine but opened this dashboard in a different browser (or incognito), sign in to the same account to see it.</p>
     </div>
   {:else if filteredDevices.length === 0}
     <div class="empty">

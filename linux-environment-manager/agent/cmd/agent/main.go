@@ -30,7 +30,7 @@ import (
 var lemContract = contract.MustLoad()
 
 var (
-	maxFileSizeBytes = lemContract.Collection.MaxFileBytes
+	maxFileSizeBytes   = lemContract.Collection.MaxFileBytes
 	maxUploadFileBytes = min(maxFileSizeBytes, lemContract.ServerLimitsMirrored.MaxFileBytesServer)
 	maxOutputBytes     = lemContract.Commands.OutputCapBytes
 	maxBackoff         = lemContract.BackoffMax()
@@ -113,9 +113,9 @@ func newCommandID() string {
 }
 
 type dockerRequest struct {
-	ID     string `json:"id"`
-	Type   string `json:"type"`
-	Target string `json:"target"`
+	ID      string `json:"id"`
+	Type    string `json:"type"`
+	Target  string `json:"target"`
 	Payload string `json:"payload,omitempty"`
 }
 
@@ -132,17 +132,17 @@ func processDockerRequests(serverURL, deviceID, deviceToken string) error {
 	if status >= 400 {
 		return fmt.Errorf("command poll returned %d", status)
 	}
-	
+
 	var requests []dockerRequest
 	json.Unmarshal(payload, &requests)
-	
+
 	if len(requests) == 0 {
 		return nil
 	}
-	
+
 	for _, req := range requests {
 		result := executeDockerRequest(req)
-		
+
 		postJSON(
 			serverURL+"/api/devices/"+deviceID+"/docker/result",
 			deviceToken,
@@ -157,11 +157,32 @@ func processDockerRequests(serverURL, deviceID, deviceToken string) error {
 	return nil
 }
 
+func dockerRequestAllowed(policy localPolicy, reqType string) bool {
+	switch reqType {
+	case "list", "stats", "logs":
+		return policy.AllowDockerRead
+	case "start", "stop", "restart", "kill", "remove":
+		return policy.AllowDockerLifecycle
+	case "exec":
+		return policy.AllowDockerExec
+	case "prune_system", "prune_image", "prune_container", "prune_network":
+		return policy.AllowDockerPrune
+	case "compose_read", "compose_write", "compose_up", "compose_down", "compose_ps", "compose_logs":
+		return policy.AllowDockerCompose
+	default:
+		return false
+	}
+}
+
 func executeDockerRequest(req dockerRequest) dockerResult {
+	policy := loadLocalPolicy()
+	if !dockerRequestAllowed(policy, req.Type) {
+		return dockerResult{"failed", "command disabled by local policy"}
+	}
 	if !collectors.DockerIsAvailable() {
 		return dockerResult{"failed", "docker not available"}
 	}
-	
+
 	switch req.Type {
 	case "list":
 		containers, err := collectors.DockerListContainers(true)
@@ -173,7 +194,7 @@ func executeDockerRequest(req dockerRequest) dockerResult {
 			return dockerResult{"failed", err.Error()}
 		}
 		return dockerResult{"completed", string(data)}
-		
+
 	case "stats":
 		stats, err := collectors.DockerContainerStats(req.Target)
 		if err != nil {
@@ -184,7 +205,7 @@ func executeDockerRequest(req dockerRequest) dockerResult {
 			return dockerResult{"failed", err.Error()}
 		}
 		return dockerResult{"completed", string(data)}
-		
+
 	case "logs":
 		tail := 200
 		if req.Payload != "" {
@@ -197,7 +218,7 @@ func executeDockerRequest(req dockerRequest) dockerResult {
 			return dockerResult{"failed", err.Error()}
 		}
 		return dockerResult{"completed", logs}
-		
+
 	case "start", "stop", "restart", "kill":
 		err := collectors.DockerContainerAction(req.Target, req.Type)
 		if err != nil {
@@ -211,7 +232,7 @@ func executeDockerRequest(req dockerRequest) dockerResult {
 			return dockerResult{"failed", err.Error()}
 		}
 		return dockerResult{"completed", ""}
-		
+
 	case "exec":
 		var cmd []string
 		if err := json.Unmarshal([]byte(req.Payload), &cmd); err != nil {
@@ -226,7 +247,7 @@ func executeDockerRequest(req dockerRequest) dockerResult {
 			return dockerResult{"failed", err.Error()}
 		}
 		return dockerResult{"completed", output}
-		
+
 	case "compose_read":
 		files, err := collectors.DockerComposeFiles()
 		if err != nil {
@@ -237,42 +258,42 @@ func executeDockerRequest(req dockerRequest) dockerResult {
 			return dockerResult{"failed", err.Error()}
 		}
 		return dockerResult{"completed", string(data)}
-		
+
 	case "compose_write":
 		err := collectors.DockerComposeWrite(req.Target, req.Payload)
 		if err != nil {
 			return dockerResult{"failed", err.Error()}
 		}
 		return dockerResult{"completed", ""}
-		
+
 	case "compose_up":
 		output, err := collectors.DockerComposeUp(req.Target)
 		if err != nil {
 			return dockerResult{"failed", err.Error()}
 		}
 		return dockerResult{"completed", output}
-		
+
 	case "compose_down":
 		output, err := collectors.DockerComposeDown(req.Target)
 		if err != nil {
 			return dockerResult{"failed", err.Error()}
 		}
 		return dockerResult{"completed", output}
-		
+
 	case "compose_ps":
 		output, err := collectors.DockerComposePs(req.Target)
 		if err != nil {
 			return dockerResult{"failed", err.Error()}
 		}
 		return dockerResult{"completed", output}
-		
+
 	case "compose_logs":
 		output, err := collectors.DockerComposeLogs(req.Target)
 		if err != nil {
 			return dockerResult{"failed", err.Error()}
 		}
 		return dockerResult{"completed", output}
-		
+
 	case "prune_system", "prune_image", "prune_container", "prune_network":
 		switch req.Type {
 		case "prune_system":
@@ -301,53 +322,53 @@ func executeDockerRequest(req dockerRequest) dockerResult {
 			return dockerResult{"completed", output}
 		}
 	}
-	
+
 	return dockerResult{"failed", "unknown request type"}
 }
 
 type telemetryStats struct {
-	CPUUsagePercent    float64              `json:"cpu_usage_percent"`
-	MemoryUsedBytes    uint64               `json:"memory_used_bytes"`
-	MemoryTotalBytes   uint64               `json:"memory_total_bytes"`
-	CPUTemperature     float64              `json:"cpu_temperature"`
-	GPUTemperature     float64              `json:"gpu_temperature_celsius,omitempty"`
-	PowerWatts         float64              `json:"power_watts"`
-	BatteryPercent     float64              `json:"battery_percent,omitempty"`
-	BatteryStatus      string               `json:"battery_status,omitempty"`
-	AgentCPUUsage      float64              `json:"agent_cpu_usage"`
-	AgentMemoryBytes   uint64               `json:"agent_memory_bytes,omitempty"`
-	AgentVersion       string               `json:"agent_version"`
-	OperatingSystem    string               `json:"operating_system"`
-	Architecture       string               `json:"architecture"`
-	CPUModel           string               `json:"cpu_model,omitempty"`
-	KernelVersion      string               `json:"kernel_version"`
-	DesktopEnvironment string               `json:"desktop_environment"`
-	Locale             string               `json:"locale"`
-	Timezone           string               `json:"timezone,omitempty"`
-	BootTime           string               `json:"boot_time"`
-	UptimeSeconds      int64                `json:"uptime_seconds"`
-	LoadAverage        string               `json:"load_average,omitempty"`
-	NetworkIFaces      []networkIface       `json:"network_ifaces,omitempty"`
-	DiskReadBytes      uint64               `json:"disk_read_bytes,omitempty"`
-	DiskWriteBytes     uint64               `json:"disk_write_bytes,omitempty"`
-	DiskReadRate       float64              `json:"disk_read_rate,omitempty"`
-	DiskWriteRate      float64              `json:"disk_write_rate,omitempty"`
-	DiskPartitions     []diskPartition      `json:"disk_partitions,omitempty"`
-	SwapUsedBytes      uint64               `json:"swap_used_bytes,omitempty"`
-	SwapTotalBytes     uint64               `json:"swap_total_bytes,omitempty"`
-	MemoryBuffersBytes uint64               `json:"memory_buffers_bytes,omitempty"`
-	MemoryCachedBytes  uint64               `json:"memory_cached_bytes,omitempty"`
-	CPUCoreUsage       []float64            `json:"cpu_core_usage,omitempty"`
-	TopCPUProcesses    []processInfo        `json:"top_cpu_processes,omitempty"`
-	TopMemProcesses    []processInfo        `json:"top_mem_processes,omitempty"`
-	DockerAvailable    bool                 `json:"docker_available"`
-	DockerContainers   []dockerContainer    `json:"docker_containers,omitempty"`
-	DockerInfo         *dockerInfo          `json:"docker_info,omitempty"`
-	LynisAvailable     bool                 `json:"lynis_available"`
-	LynisInstallCmd    string               `json:"lynis_install_cmd,omitempty"`
-	Logs               []deviceLog          `json:"logs,omitempty"`
-	HardwareFingerprint string              `json:"hardware_fingerprint,omitempty"`
-	CollectedAt        string               `json:"collected_at,omitempty"`
+	CPUUsagePercent     float64           `json:"cpu_usage_percent"`
+	MemoryUsedBytes     uint64            `json:"memory_used_bytes"`
+	MemoryTotalBytes    uint64            `json:"memory_total_bytes"`
+	CPUTemperature      float64           `json:"cpu_temperature"`
+	GPUTemperature      float64           `json:"gpu_temperature_celsius,omitempty"`
+	PowerWatts          float64           `json:"power_watts"`
+	BatteryPercent      float64           `json:"battery_percent,omitempty"`
+	BatteryStatus       string            `json:"battery_status,omitempty"`
+	AgentCPUUsage       float64           `json:"agent_cpu_usage"`
+	AgentMemoryBytes    uint64            `json:"agent_memory_bytes,omitempty"`
+	AgentVersion        string            `json:"agent_version"`
+	OperatingSystem     string            `json:"operating_system"`
+	Architecture        string            `json:"architecture"`
+	CPUModel            string            `json:"cpu_model,omitempty"`
+	KernelVersion       string            `json:"kernel_version"`
+	DesktopEnvironment  string            `json:"desktop_environment"`
+	Locale              string            `json:"locale"`
+	Timezone            string            `json:"timezone,omitempty"`
+	BootTime            string            `json:"boot_time"`
+	UptimeSeconds       int64             `json:"uptime_seconds"`
+	LoadAverage         string            `json:"load_average,omitempty"`
+	NetworkIFaces       []networkIface    `json:"network_ifaces,omitempty"`
+	DiskReadBytes       uint64            `json:"disk_read_bytes,omitempty"`
+	DiskWriteBytes      uint64            `json:"disk_write_bytes,omitempty"`
+	DiskReadRate        float64           `json:"disk_read_rate,omitempty"`
+	DiskWriteRate       float64           `json:"disk_write_rate,omitempty"`
+	DiskPartitions      []diskPartition   `json:"disk_partitions,omitempty"`
+	SwapUsedBytes       uint64            `json:"swap_used_bytes,omitempty"`
+	SwapTotalBytes      uint64            `json:"swap_total_bytes,omitempty"`
+	MemoryBuffersBytes  uint64            `json:"memory_buffers_bytes,omitempty"`
+	MemoryCachedBytes   uint64            `json:"memory_cached_bytes,omitempty"`
+	CPUCoreUsage        []float64         `json:"cpu_core_usage,omitempty"`
+	TopCPUProcesses     []processInfo     `json:"top_cpu_processes,omitempty"`
+	TopMemProcesses     []processInfo     `json:"top_mem_processes,omitempty"`
+	DockerAvailable     bool              `json:"docker_available"`
+	DockerContainers    []dockerContainer `json:"docker_containers,omitempty"`
+	DockerInfo          *dockerInfo       `json:"docker_info,omitempty"`
+	LynisAvailable      bool              `json:"lynis_available"`
+	LynisInstallCmd     string            `json:"lynis_install_cmd,omitempty"`
+	Logs                []deviceLog       `json:"logs,omitempty"`
+	HardwareFingerprint string            `json:"hardware_fingerprint,omitempty"`
+	CollectedAt         string            `json:"collected_at,omitempty"`
 }
 
 type diskPartition struct {
@@ -360,10 +381,10 @@ type diskPartition struct {
 }
 
 type processInfo struct {
-	PID        int     `json:"pid"`
-	Name       string  `json:"name"`
-	CPUPercent float64 `json:"cpu_percent"`
-	MemRSSBytes uint64 `json:"mem_rss_bytes"`
+	PID         int     `json:"pid"`
+	Name        string  `json:"name"`
+	CPUPercent  float64 `json:"cpu_percent"`
+	MemRSSBytes uint64  `json:"mem_rss_bytes"`
 }
 
 type deviceLog struct {
@@ -412,14 +433,14 @@ type dockerContainer struct {
 }
 
 type dockerInfo struct {
-	Version  string `json:"version"`
-	Total    int    `json:"total"`
-	Running  int    `json:"running"`
-	Stopped  int    `json:"stopped"`
-	Paused   int    `json:"paused"`
-	Images   int    `json:"images"`
-	Driver   string `json:"driver"`
-	NCPU     int    `json:"ncpu"`
+	Version string `json:"version"`
+	Total   int    `json:"total"`
+	Running int    `json:"running"`
+	Stopped int    `json:"stopped"`
+	Paused  int    `json:"paused"`
+	Images  int    `json:"images"`
+	Driver  string `json:"driver"`
+	NCPU    int    `json:"ncpu"`
 }
 
 type reconnectRequest struct {
@@ -492,15 +513,15 @@ func cmdDaemon(args []string) {
 		log.Fatal("device-id and device-token are required (or use reconnect via fingerprint)")
 	}
 
-	// Save fingerprint in state for future reconnects.
+	// Save fingerprint as metadata only; it is not a recovery credential.
 	if state.HardwareFingerprint == "" && hwID.Fingerprint != "" {
 		state.HardwareFingerprint = hwID.Fingerprint
 		saveAgentState(state)
 	}
-	
+
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
-	
+
 	var previousCPU, previousIdle, previousDiskRead, previousDiskWrite uint64
 	var previousNetRX, previousNetTX map[string]uint64
 	var previousAt time.Time
@@ -552,7 +573,7 @@ func cmdDaemon(args []string) {
 			saveAgentState(state)
 			lastStateJSON = string(serialized)
 		}
-		
+
 		wait := *interval
 		if hadError {
 			consecutiveFailures++
@@ -663,7 +684,7 @@ func processCommands(serverURL, deviceID, deviceToken string) error {
 	if status >= 400 {
 		return fmt.Errorf("command poll returned %d", status)
 	}
-	
+
 	var commands []struct {
 		ID      string `json:"id"`
 		Type    string `json:"type"`
@@ -674,7 +695,7 @@ func processCommands(serverURL, deviceID, deviceToken string) error {
 	if err := json.Unmarshal(payload, &commands); err != nil {
 		return fmt.Errorf("unmarshal commands: %w", err)
 	}
-	
+
 	for _, cmd := range commands {
 		result := executeCommand(cmd)
 		resultURL := serverURL + "/api/devices/" + deviceID + "/commands/" + cmd.ID
@@ -699,16 +720,38 @@ func executeCommand(cmd struct {
 	Name    string `json:"name"`
 	Payload string `json:"payload"`
 }) commandResult {
+	policy := loadLocalPolicy()
 	switch cmd.Type {
 	case "exclude_file":
+		if !policy.AllowExcludeFile {
+			return commandResult{"failed", "command disabled by local policy"}
+		}
 		if err := excludeFile(cmd.Path); err != nil {
 			return commandResult{"failed", err.Error()}
 		}
 		return commandResult{"completed", ""}
 	case "restore_saves":
-		return commandResult{"completed", "restore_saves not yet implemented"}
+		if !policy.AllowRestoreSaves {
+			return commandResult{"failed", "command disabled by local policy"}
+		}
+		return commandResult{"failed", "restore_saves is not implemented"}
 	case "lynis_audit":
-		return executeLynisAudit()
+		if !policy.AllowLynisAudit {
+			return commandResult{"failed", "command disabled by local policy"}
+		}
+		timeout := lemContract.LynisTimeout()
+		if policy.CommandTimeoutSeconds > 0 {
+			policyTimeout := time.Duration(policy.CommandTimeoutSeconds) * time.Second
+			if policyTimeout < timeout {
+				timeout = policyTimeout
+			}
+		}
+		return executeLynisAuditWithTimeout(timeout)
+	case "install_app":
+		if !policy.AllowInstallApp {
+			return commandResult{"failed", "command disabled by local policy"}
+		}
+		return commandResult{"failed", "install_app is not implemented"}
 	default:
 		return commandResult{"failed", "unsupported command type: " + cmd.Type}
 	}
@@ -716,18 +759,18 @@ func executeCommand(cmd struct {
 
 // lynisReport represents the structured output of a Lynis security audit.
 type lynisReport struct {
-	HardeningIndex   int            `json:"hardening_index"`
-	TotalWarnings    int            `json:"total_warnings"`
-	TotalSuggestions int            `json:"total_suggestions"`
-	TotalTests       int            `json:"total_tests"`
-	TestsPassed      int            `json:"tests_passed"`
-	LynisVersion     string         `json:"lynis_version"`
-	OS               string         `json:"os"`
-	Kernel           string         `json:"kernel"`
-	Warnings         []lynisFinding `json:"warnings"`
-	Suggestions      []lynisFinding `json:"suggestions"`
+	HardeningIndex   int             `json:"hardening_index"`
+	TotalWarnings    int             `json:"total_warnings"`
+	TotalSuggestions int             `json:"total_suggestions"`
+	TotalTests       int             `json:"total_tests"`
+	TestsPassed      int             `json:"tests_passed"`
+	LynisVersion     string          `json:"lynis_version"`
+	OS               string          `json:"os"`
+	Kernel           string          `json:"kernel"`
+	Warnings         []lynisFinding  `json:"warnings"`
+	Suggestions      []lynisFinding  `json:"suggestions"`
 	Categories       []lynisCategory `json:"categories"`
-	AuditDate        string         `json:"audit_date"`
+	AuditDate        string          `json:"audit_date"`
 }
 
 type lynisFinding struct {
@@ -745,9 +788,12 @@ type lynisCategory struct {
 	Suggestions int    `json:"suggestions"`
 }
 
-// executeLynisAudit runs Lynis and returns a structured report.
+// executeLynisAudit runs Lynis with the contract timeout.
 func executeLynisAudit() commandResult {
-	timeout := lemContract.LynisTimeout()
+	return executeLynisAuditWithTimeout(lemContract.LynisTimeout())
+}
+
+func executeLynisAuditWithTimeout(timeout time.Duration) commandResult {
 
 	// Check if Lynis is installed
 	lynisPath, err := exec.LookPath("lynis")
@@ -768,9 +814,8 @@ func executeLynisAudit() commandResult {
 
 	cmd := exec.CommandContext(ctx, lynisPath, "audit", "system", "--cronjob", "--no-colors",
 		"--report-file", reportFile, "--logfile", logFile)
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stdout
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
 
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
@@ -783,6 +828,9 @@ func executeLynisAudit() commandResult {
 	reportData, err := os.ReadFile(reportFile)
 	if err != nil {
 		return commandResult{"failed", fmt.Sprintf("failed to read Lynis report: %v", err)}
+	}
+	if len(reportData) > lemContract.SecurityAudit.ReportMaxBytes {
+		return commandResult{"failed", "Lynis report exceeds the configured size limit"}
 	}
 
 	report := parseLynisReport(string(reportData))
@@ -1240,17 +1288,17 @@ func collectHardwareStats(prevCPU, prevIdle, prevDiskRead, prevDiskWrite uint64,
 	// Top processes
 	for _, p := range topCPU {
 		stats.TopCPUProcesses = append(stats.TopCPUProcesses, processInfo{
-			PID:        p.PID,
-			Name:       p.Name,
-			CPUPercent: p.CPUPercent,
+			PID:         p.PID,
+			Name:        p.Name,
+			CPUPercent:  p.CPUPercent,
 			MemRSSBytes: p.MemRSS,
 		})
 	}
 	for _, p := range topMem {
 		stats.TopMemProcesses = append(stats.TopMemProcesses, processInfo{
-			PID:        p.PID,
-			Name:       p.Name,
-			CPUPercent: p.CPUPercent,
+			PID:         p.PID,
+			Name:        p.Name,
+			CPUPercent:  p.CPUPercent,
 			MemRSSBytes: p.MemRSS,
 		})
 	}
@@ -1542,14 +1590,41 @@ func readAgentMemory() uint64 {
 
 // localPolicy controls which command types the agent is allowed to execute.
 type localPolicy struct {
-	AllowInstallApp bool `json:"allow_install_app"`
-	AllowExcludeFile bool `json:"allow_exclude_file"`
+	AllowInstallApp       bool `json:"allow_install_app"`
+	AllowExcludeFile      bool `json:"allow_exclude_file"`
+	AllowRestoreSaves     bool `json:"allow_restore_saves"`
+	AllowLynisAudit       bool `json:"allow_lynis_audit"`
+	AllowDockerRead       bool `json:"allow_docker_read"`
+	AllowDockerLifecycle  bool `json:"allow_docker_lifecycle"`
+	AllowDockerExec       bool `json:"allow_docker_exec"`
+	AllowDockerPrune      bool `json:"allow_docker_prune"`
+	AllowDockerCompose    bool `json:"allow_docker_compose"`
+	CommandTimeoutSeconds int  `json:"command_timeout_seconds"`
 }
 
-// loadLocalPolicy reads the local policy file, falling back to defaults.
+// loadLocalPolicy reads the local policy file, falling back to safe defaults.
 func loadLocalPolicy() localPolicy {
-	policy := localPolicy{AllowInstallApp: true, AllowExcludeFile: true}
+	defaults := lemContract.Commands.PolicyDefaults
+	policy := localPolicy{
+		AllowInstallApp:       defaults.AllowInstallApp,
+		AllowExcludeFile:      defaults.AllowExcludeFile,
+		AllowRestoreSaves:     defaults.AllowRestoreSaves,
+		AllowLynisAudit:       defaults.AllowLynisAudit,
+		AllowDockerRead:       defaults.AllowDockerRead,
+		AllowDockerLifecycle:  defaults.AllowDockerLifecycle,
+		AllowDockerExec:       defaults.AllowDockerExec,
+		AllowDockerPrune:      defaults.AllowDockerPrune,
+		AllowDockerCompose:    defaults.AllowDockerCompose,
+		CommandTimeoutSeconds: defaults.CommandTimeoutSeconds,
+	}
+	if policy.CommandTimeoutSeconds <= 0 {
+		policy.CommandTimeoutSeconds = lemContract.Commands.TimeoutSecondsDefault
+	}
 	path := contract.ExpandPath(lemContract.Commands.PolicyPath)
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm()&0o077 != 0 {
+		return policy
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return policy
@@ -1557,6 +1632,9 @@ func loadLocalPolicy() localPolicy {
 	var filePolicy localPolicy
 	if err := json.Unmarshal(data, &filePolicy); err != nil {
 		return policy
+	}
+	if filePolicy.CommandTimeoutSeconds <= 0 || filePolicy.CommandTimeoutSeconds > 86400 {
+		filePolicy.CommandTimeoutSeconds = policy.CommandTimeoutSeconds
 	}
 	return filePolicy
 }
@@ -1581,19 +1659,36 @@ func installApp(source, name string, timeout time.Duration) error {
 	return nil
 }
 
+type cappedBuffer struct {
+	buf   bytes.Buffer
+	limit int
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	original := len(p)
+	remaining := b.limit - b.buf.Len()
+	if remaining > 0 {
+		if remaining > len(p) {
+			remaining = len(p)
+		}
+		_, _ = b.buf.Write(p[:remaining])
+	}
+	return original, nil
+}
+
+func (b *cappedBuffer) String() string { return b.buf.String() }
+
 // runCommandWithLimits executes a command with a timeout and output cap.
 func runCommandWithLimits(name string, args []string, timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
-	var buf bytes.Buffer
+	var buf cappedBuffer
+	buf.limit = int(maxOutputBytes)
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	err := cmd.Run()
 	output := buf.String()
-	if int64(len(output)) > maxOutputBytes {
-		output = output[:maxOutputBytes]
-	}
 	if ctx.Err() == context.DeadlineExceeded {
 		return output, fmt.Errorf("command timed out after %s", timeout)
 	}
@@ -1667,12 +1762,12 @@ func relativeToHome(home, path string) string {
 // findSecret scans content for known secret patterns.
 func findSecret(content string) string {
 	patterns := map[string]string{
-		"AKIA":               "aws_access_key_id",
-		"ghp_":               "github_token",
-		"xoxb-":              "slack_token",
-		"sk_live_":           "stripe_live_key",
-		"AIza":               "google_api_key",
-		"PRIVATE KEY":        "pem_private_key",
+		"AKIA":        "aws_access_key_id",
+		"ghp_":        "github_token",
+		"xoxb-":       "slack_token",
+		"sk_live_":    "stripe_live_key",
+		"AIza":        "google_api_key",
+		"PRIVATE KEY": "pem_private_key",
 	}
 	for pattern, reason := range patterns {
 		if strings.Contains(content, pattern) {
@@ -1701,7 +1796,7 @@ func buildPreference(home, path, categoryOverride string) (struct {
 		RelativePath string `json:"relative_path"`
 		Content      string `json:"content"`
 	}
-	
+
 	info, err := os.Stat(path)
 	if err != nil {
 		return preferencePayload{}, fmt.Errorf("stat file: %w", err)
@@ -1747,7 +1842,7 @@ func collectPreferences(paths []string, st *agentState) []struct {
 		RelativePath string `json:"relative_path"`
 		Content      string `json:"content"`
 	}
-	
+
 	home, _ := os.UserHomeDir()
 	var payloads []struct {
 		Category     string `json:"category"`

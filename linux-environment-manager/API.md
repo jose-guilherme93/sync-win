@@ -4,15 +4,27 @@ All endpoints return JSON. Requests with bodies must set `Content-Type: applicat
 
 ## Authentication
 
-Most endpoints require a Bearer token in the `Authorization` header:
+Dashboard sessions use the `lem_session` HttpOnly cookie. Non-browser clients
+may use the compatibility bearer token returned by login/register:
 
 ```
-Authorization: Bearer <token>
+Authorization: Bearer <session-token>
+```
+
+Cookie-authenticated state-changing requests must also send the double-submit
+CSRF header:
+
+```
+X-LEM-CSRF: <value of the lem_csrf cookie>
 ```
 
 Token types:
-- **Session token**: from login/register, used by the web dashboard
-- **Device token**: from enrollment, used by the agent
+- **Session token**: from login/register, used by the dashboard/API; only a hash is stored server-side
+- **Device token**: returned only during enrollment, used by the agent; only a hash is stored server-side
+
+The legacy `X-LEM-Anonymous-ID` header and `owner_id` query parameter are not
+authentication mechanisms. Every dashboard resource is scoped to the session
+owner.
 
 ## Base URL
 
@@ -52,11 +64,12 @@ Register a new user account.
 }
 ```
 
-**Response:** `201 Created`
+**Response:** `200 OK` (the server also sets `lem_session` and `lem_csrf` cookies)
 ```json
 {
   "token": "session-token",
-  "owner_id": "user-id"
+  "owner_id": "user-id",
+  "email": "user@example.com"
 }
 ```
 
@@ -72,11 +85,12 @@ Log in with existing credentials.
 }
 ```
 
-**Response:** `200 OK`
+**Response:** `200 OK` (the server also sets `lem_session` and `lem_csrf` cookies)
 ```json
 {
   "token": "session-token",
-  "owner_id": "user-id"
+  "owner_id": "user-id",
+  "email": "user@example.com"
 }
 ```
 
@@ -123,7 +137,15 @@ Change the current user's password.
 }
 ```
 
-**Response:** `200 OK`
+**Response:** `204 No Content`
+
+All existing sessions are revoked after a password change.
+
+### `POST /api/auth/logout`
+
+Revoke the current session and clear the browser cookies.
+
+**Response:** `204 No Content`
 
 ---
 
@@ -174,24 +196,9 @@ Enroll a new device using an enrollment token. Called by the installer.
 
 ### `POST /api/agent/reconnect`
 
-Reconnect a device using hardware fingerprint. Called by the agent when credentials are lost.
-
-**Request:**
-```json
-{
-  "fingerprint": "hardware-hash",
-  "hostname": "my-linux-machine"
-}
-```
-
-**Response:** `200 OK`
-```json
-{
-  "device_id": "dev-1",
-  "device_token": "device-secret-token",
-  "reconnected": true
-}
-```
+Always returns `410 Gone`. Hardware fingerprints are observable metadata and
+are never accepted as proof of identity. If an agent loses its device token,
+generate a new enrollment token and enroll again.
 
 ### `GET /api/agent/download`
 
@@ -960,11 +967,21 @@ Mark notification events as read. Requires session token.
 
 **Response:** `200 OK`
 
+### `POST /api/notifications/stream-token`
+
+Issue a single-use ticket for the SSE connection. Requires a valid session and,
+for cookie authentication, `X-LEM-CSRF`.
+
+**Response:** `200 OK`
+```json
+{"ticket":"short-lived-ticket"}
+```
+
 ### `GET /api/notifications/stream`
 
-SSE stream for real-time notification push. Requires session token.
-
-**Response:** `text/event-stream`
+SSE stream for real-time notification push. Requires the session cookie and a
+single-use `ticket` query parameter. The ticket is bound to the session owner
+and expires after 30 seconds; it cannot be replayed.
 
 ---
 
@@ -991,7 +1008,9 @@ HTTP status codes:
 - `201`: created
 - `202`: accepted (still processing)
 - `400`: bad request
-- `401`: unauthorized (missing or invalid token)
+- `401`: unauthorized (missing or invalid session/device token)
+- `403`: forbidden (CSRF or owner mismatch)
 - `404`: not found
 - `413`: request too large (body > 2 MiB)
+- `429`: rate limit exceeded
 - `500`: internal server error

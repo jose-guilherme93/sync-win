@@ -11,13 +11,13 @@ import (
 
 // Config holds logger configuration.
 type Config struct {
-	Level          Level         // Minimum level to persist
-	ConsoleLevel   Level         // Minimum level to print to stderr
-	RetentionDays  int           // Days to keep logs per level
-	BatchSize      int           // Max entries per batch write
-	FlushInterval  time.Duration // How often to flush the queue
-	QueueSize      int           // Max entries in memory queue
-	DedupWindow    time.Duration // Deduplication window
+	Level         Level         // Minimum level to persist
+	ConsoleLevel  Level         // Minimum level to print to stderr
+	RetentionDays int           // Days to keep logs per level
+	BatchSize     int           // Max entries per batch write
+	FlushInterval time.Duration // How often to flush the queue
+	QueueSize     int           // Max entries in memory queue
+	DedupWindow   time.Duration // Deduplication window
 }
 
 // DefaultConfig returns sensible defaults.
@@ -103,12 +103,9 @@ func (l *Logger) Log(level Level, category Category, event Event, msg string, me
 	}
 
 	// Redact sensitive data
+	redacted := false
 	if metadata != nil {
-		var redacted bool
 		metadata, redacted = redactMetadata(metadata)
-		if redacted {
-			// Mark entry as redacted
-		}
 	}
 
 	entry := &LogEntry{
@@ -120,6 +117,7 @@ func (l *Logger) Log(level Level, category Category, event Event, msg string, me
 		RequestID:     l.requestID,
 		CorrelationID: l.correlation,
 		Metadata:      metadata,
+		Redacted:      redacted,
 	}
 
 	// Console output for important events

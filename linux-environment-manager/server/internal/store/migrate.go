@@ -107,7 +107,7 @@ func migrateLegacyJSON(db *sql.DB, root string) error {
 		}
 		if _, err := tx.Exec(
 			"INSERT OR REPLACE INTO sessions (token, owner_id, created_at) VALUES (?, ?, ?)",
-			token, session.OwnerID, timeText(session.CreatedAt),
+			hashToken(token), session.OwnerID, timeText(session.CreatedAt),
 		); err != nil {
 			return fmt.Errorf("migrate session: %w", err)
 		}
@@ -129,7 +129,7 @@ func upsertDeviceInTx(tx *sql.Tx, device Device) error {
 	}
 	_, err = tx.Exec(
 		"INSERT OR REPLACE INTO devices ("+deviceColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		device.ID, device.UserID, device.OwnerID, device.Hostname, device.DeviceToken,
+		device.ID, device.UserID, device.OwnerID, device.Hostname, persistedDeviceToken(device.DeviceToken),
 		timeText(device.LastSeenAt), timeText(device.LastSyncAt), device.SyncFailures, device.LastError, timeText(device.LastErrorAt),
 		string(hardwareJSON), string(appsJSON), device.Status, timeText(device.CreatedAt), timeText(device.UpdatedAt), device.HardwareFingerprint,
 	)

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher, onMount, onDestroy } from 'svelte'
-  import { serverBase } from '../lib/api'
+  import { apiFetch, serverBase } from '../lib/api'
 
   type DockerContainer = {
     id: string
@@ -147,7 +147,7 @@
       opts.headers = { ...opts.headers, 'Content-Type': 'application/json' }
       opts.body = JSON.stringify(body)
     }
-    const res = await fetch(`${serverBase}${path}`, opts)
+    const res = await apiFetch(`${serverBase}${path}`, opts)
     if (!res.ok) throw new Error(`${res.status}`)
     if (res.status === 204) return null
     return res.json()

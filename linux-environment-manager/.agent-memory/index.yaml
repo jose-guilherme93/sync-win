@@ -1,0 +1,17 @@
+version: 2.1
+entries:
+  - id: project/overview
+    path: project/overview.md
+    type: project
+  - id: context/p0-remediation
+    path: context/p0-remediation.md
+    type: context
+  - id: decisions/security-hardening
+    path: decisions/security-hardening.md
+    type: decision
+  - id: decisions/project-memory
+    path: decisions/project-memory.md
+    type: decision
+  - id: sessions/260925-p0-start
+    path: sessions/260925-p0-start.md
+    type: session

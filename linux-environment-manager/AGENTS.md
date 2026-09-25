@@ -16,7 +16,7 @@ The project is built around three main components:
    - stores small preference files and sync metadata
    - serves the web dashboard from the same origin (no CORS)
    - proxies Docker management commands to agents via command queue
-   - manages user accounts with session-based auth (Bearer tokens)
+   - manages user accounts with session-based auth (HttpOnly cookie/CSRF for dashboard, bearer compatibility for API clients)
    - dispatches notifications via pluggable providers (Telegram, webhook, inbox)
    - never executes arbitrary commands on clients
 
@@ -60,7 +60,7 @@ linux-environment-manager/
 │   ├── collectors/                 # 13 hardware/Docker collectors
 │   │   ├── battery.go, cpu_cores.go, disk_partitions.go
 │   │   ├── docker.go               # Docker socket reader (21 operations)
-│   │   ├── hardware_id.go          # Hardware fingerprint for device reconnection
+│   │   ├── hardware_id.go          # Hardware fingerprint metadata (never an authenticator)
 │   │   ├── memory_expanded.go, network.go, thermal.go
 │   │   ├── top_processes.go, logs.go, agent_impact.go
 │   │   └── collectors.go           # Base interface and types
@@ -228,3 +228,7 @@ Use the most direct command for the module being changed.
 ## AI workflow rule
 
 When working in this repository, do not bypass required documentation and contract updates. If a change affects the architecture or product direction, it must be reflected in the project docs and roadmap.
+
+## Project memory
+
+Durable project decisions and session handoffs live in `.agent-memory/`. Read the relevant memory entries before resuming multi-step work; update the active context and session log when the work changes.

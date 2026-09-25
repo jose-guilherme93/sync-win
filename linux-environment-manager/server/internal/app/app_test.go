@@ -2,11 +2,13 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"lem/server/internal/logging"
 	"lem/server/internal/store"
@@ -27,13 +29,24 @@ func newTestServer(t *testing.T) *Server {
 	structLogger := logging.New(logCfg, logStore)
 	t.Cleanup(func() { structLogger.Stop() })
 
-	return &Server{store: st, logStore: logStore, log: structLogger}
+	return &Server{store: st, logStore: logStore, log: structLogger, streamTickets: newStreamTicketStore(), rateLimiter: newRateLimiter()}
 }
 
 func TestAgentInstallScriptRegistersAndVerifies(t *testing.T) {
 	s := newTestServer(t)
+	s.flags.EnableLegacyInstall = true
 
-	req := httptest.NewRequest(http.MethodGet, "/api/agent/install.sh?owner_id=owner-x&hostname=target-pc&user=alice", nil)
+	user, err := s.store.CreateUser("owner@example.com", "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := s.store.CreateSession(user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/agent/install.sh?owner_id=not-authoritative&hostname=target-pc&user=alice", nil)
+	req.Header.Set("Authorization", "Bearer "+session.Token)
 	rec := httptest.NewRecorder()
 	s.handleAgentInstallScript(rec, req)
 
@@ -44,13 +57,26 @@ func TestAgentInstallScriptRegistersAndVerifies(t *testing.T) {
 		t.Fatalf("content type = %q", ct)
 	}
 	script := rec.Body.String()
+	const marker = `DEVICE_TOKEN="`
+	start := strings.Index(script, marker)
+	if start < 0 {
+		t.Fatal("install script has no device token")
+	}
+	start += len(marker)
+	end := strings.Index(script[start:], `"`)
+	if end <= 0 {
+		t.Fatal("install script has an invalid device token")
+	}
+	if token := script[start : start+end]; isDeviceTokenDigest(token) {
+		t.Fatalf("install script leaked the stored device-token hash: %q", token)
+	}
 
-	devices, err := s.store.ListDevicesForOwner("owner-x")
+	devices, err := s.store.ListDevicesForOwner(user.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(devices) != 1 {
-		t.Fatalf("expected 1 registered device for owner-x, got %d", len(devices))
+		t.Fatalf("expected 1 registered device for session owner, got %d", len(devices))
 	}
 	device := devices[0]
 	if device.Hostname != "target-pc" || device.UserID != "alice" {
@@ -61,7 +87,6 @@ func TestAgentInstallScriptRegistersAndVerifies(t *testing.T) {
 		"#!/usr/bin/env bash",
 		`SERVER_URL="http://example.com"`,
 		`DEVICE_ID="` + device.ID + `"`,
-		`DEVICE_TOKEN="` + device.DeviceToken + `"`,
 		"/api/agent/download",
 		"lem-agent.service",
 		"Restart=always",
@@ -137,24 +162,149 @@ func TestAuthMe(t *testing.T) {
 	}
 }
 
-func TestOwnerIDPriority(t *testing.T) {
+func TestOwnerIDRequiresSession(t *testing.T) {
 	s := newTestServer(t)
+	user, err := s.store.CreateUser("owner-boundary@example.com", "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := s.store.CreateSession(user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/devices?owner_id=query-owner", nil)
 	req.Header.Set("X-LEM-Anonymous-ID", "header-owner")
-	if got := s.ownerID(req); got != "header-owner" {
-		t.Fatalf("header must beat query param, got %q", got)
+	if got := s.ownerID(req); got != "" {
+		t.Fatalf("untrusted owner hints must not authorize, got %q", got)
 	}
 
-	req.Header.Del("X-LEM-Anonymous-ID")
-	if got := s.ownerID(req); got != "query-owner" {
-		t.Fatalf("query param expected, got %q", got)
+	req.Header.Set("Authorization", "Bearer "+session.Token)
+	if got := s.ownerID(req); got != user.ID {
+		t.Fatalf("session owner = %q, want %q", got, user.ID)
+	}
+}
+
+func TestOwnerIsolationAcrossDevicesAndLogs(t *testing.T) {
+	s := newTestServer(t)
+	ownerA, err := s.store.CreateUser("a@example.com", "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerB, err := s.store.CreateUser("b@example.com", "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionA, err := s.store.CreateSession(ownerA.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionB, err := s.store.CreateSession(ownerB.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deviceA, err := s.store.RegisterDevice("pc-a", ownerA.ID, ownerA.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deviceB, err := s.store.RegisterDevice("pc-b", ownerB.ID, ownerB.ID, "")
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	req.URL.RawQuery = ""
-	if got := s.ownerID(req); got != "anonymous" {
-		t.Fatalf("fallback expected anonymous, got %q", got)
+	listReq := httptest.NewRequest(http.MethodGet, "/api/devices", nil)
+	listReq.Header.Set("Authorization", "Bearer "+sessionA.Token)
+	listRec := httptest.NewRecorder()
+	s.handleDevices(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list devices: %d %s", listRec.Code, listRec.Body.String())
 	}
+	var listed []struct{ ID, OwnerID string }
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].ID != deviceA.ID {
+		t.Fatalf("owner A saw another owner's devices: %+v", listed)
+	}
+
+	crossReq := httptest.NewRequest(http.MethodGet, "/api/devices/"+deviceA.ID+"/detail", nil)
+	crossReq.Header.Set("Authorization", "Bearer "+sessionB.Token)
+	crossRec := httptest.NewRecorder()
+	s.handleDeviceDetailFull(crossRec, crossReq, deviceA.ID)
+	if crossRec.Code != http.StatusNotFound {
+		t.Fatalf("cross-owner detail status = %d, want 404", crossRec.Code)
+	}
+
+	if err := s.logStore.WriteSingle(&logging.LogEntry{Timestamp: time.Now(), Level: logging.LevelInfo, Category: logging.CatDevice, Event: logging.EventDeviceUpdated, Message: "owner-a-only", DeviceID: deviceA.ID}); err != nil {
+		t.Fatal(err)
+	}
+	logReq := httptest.NewRequest(http.MethodGet, "/api/logs", nil)
+	logReq.Header.Set("Authorization", "Bearer "+sessionB.Token)
+	logRec := httptest.NewRecorder()
+	s.handleLogs(logRec, logReq)
+	if logRec.Code != http.StatusOK {
+		t.Fatalf("logs: %d %s", logRec.Code, logRec.Body.String())
+	}
+	if strings.Contains(logRec.Body.String(), "owner-a-only") {
+		t.Fatal("owner B received owner A's log entry")
+	}
+	_ = deviceB
+}
+
+func TestCookieSessionAndCSRF(t *testing.T) {
+	s := newTestServer(t)
+	register := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(`{"email":"cookie@example.com","password":"correct horse battery staple"}`))
+	register.Header.Set("Content-Type", "application/json")
+	registerRec := httptest.NewRecorder()
+	s.handleAuthRegister(registerRec, register)
+	if registerRec.Code != http.StatusOK {
+		t.Fatalf("register: %d %s", registerRec.Code, registerRec.Body.String())
+	}
+	var authPayload struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(registerRec.Body.Bytes(), &authPayload); err != nil {
+		t.Fatal(err)
+	}
+	var sessionCookie, csrfCookie *http.Cookie
+	for _, cookie := range registerRec.Result().Cookies() {
+		switch cookie.Name {
+		case sessionCookieName:
+			sessionCookie = cookie
+		case csrfCookieName:
+			csrfCookie = cookie
+		}
+	}
+	if sessionCookie == nil || csrfCookie == nil {
+		t.Fatalf("expected session and CSRF cookies, got %#v", registerRec.Result().Cookies())
+	}
+
+	meReq := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	meReq.AddCookie(sessionCookie)
+	meRec := httptest.NewRecorder()
+	s.handleAuthMe(meRec, meReq)
+	if meRec.Code != http.StatusOK {
+		t.Fatalf("cookie session status = %d", meRec.Code)
+	}
+
+	protected := csrfMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	noCSRF := httptest.NewRequest(http.MethodPost, "/api/sync-config", nil)
+	noCSRF.AddCookie(sessionCookie)
+	noCSRFRec := httptest.NewRecorder()
+	protected.ServeHTTP(noCSRFRec, noCSRF)
+	if noCSRFRec.Code != http.StatusForbidden {
+		t.Fatalf("missing CSRF status = %d, want 403", noCSRFRec.Code)
+	}
+	withCSRF := httptest.NewRequest(http.MethodPost, "/api/sync-config", nil)
+	withCSRF.AddCookie(sessionCookie)
+	withCSRF.AddCookie(csrfCookie)
+	withCSRF.Header.Set(csrfHeaderName, csrfCookie.Value)
+	withCSRFRec := httptest.NewRecorder()
+	protected.ServeHTTP(withCSRFRec, withCSRF)
+	if withCSRFRec.Code != http.StatusNoContent {
+		t.Fatalf("valid CSRF status = %d, want 204", withCSRFRec.Code)
+	}
+	_ = authPayload
 }
 
 func TestAuthUpdateEmail(t *testing.T) {
@@ -306,5 +456,92 @@ func TestAuthUpdatePasswordWrongCurrent(t *testing.T) {
 	s.handleAuthUpdatePassword(pwdRec, pwdReq)
 	if pwdRec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for wrong password, got %d", pwdRec.Code)
+	}
+}
+
+func TestRemoteMutationClassification(t *testing.T) {
+	for _, cmdType := range []string{"install_app", "restore_saves", "exclude_file"} {
+		if !isRemoteMutationCommand(cmdType) {
+			t.Errorf("%s should be classified as a remote mutation", cmdType)
+		}
+	}
+	if isRemoteMutationCommand("lynis_audit") {
+		t.Error("lynis_audit should not be classified as a remote mutation")
+	}
+}
+
+func TestFeatureFlagsFailClosed(t *testing.T) {
+	t.Setenv("LEM_ENABLE_FINGERPRINT_RECONNECT", "")
+	t.Setenv("LEM_ENABLE_LEGACY_INSTALL", "")
+	t.Setenv("LEM_ENABLE_REMOTE_MUTATIONS", "")
+	t.Setenv("LEM_ENABLE_DOCKER_MUTATIONS", "")
+
+	flags := loadFeatureFlags()
+	if flags.EnableFingerprintReconnect || flags.EnableLegacyInstall || flags.EnableRemoteMutations || flags.EnableDockerMutations {
+		t.Fatalf("security feature flags must default to false: %#v", flags)
+	}
+}
+
+func TestLegacyInstallDisabledByDefault(t *testing.T) {
+	s := newTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/agent/install.sh", nil)
+	rec := httptest.NewRecorder()
+
+	s.handleAgentInstallScript(rec, req)
+
+	if rec.Code != http.StatusGone {
+		t.Fatalf("expected 410 for disabled legacy installer, got %d", rec.Code)
+	}
+}
+
+func TestFingerprintReconnectDisabledByDefault(t *testing.T) {
+	s := newTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/reconnect", strings.NewReader(`{"fingerprint":"abc"}`))
+	rec := httptest.NewRecorder()
+
+	s.handleReconnect(rec, req)
+
+	if rec.Code != http.StatusGone {
+		t.Fatalf("expected 410 for disabled fingerprint reconnect, got %d", rec.Code)
+	}
+}
+
+func TestSecurityHeadersAndCORS(t *testing.T) {
+	t.Setenv("LEM_CORS_ALLOWED_ORIGIN", "")
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+
+	securityHeadersMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setCORSHeaders(w)
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("X-Content-Type-Options = %q", got)
+	}
+	if got := rec.Header().Get("X-Frame-Options"); got != "DENY" {
+		t.Fatalf("X-Frame-Options = %q", got)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("unexpected default CORS origin %q", got)
+	}
+
+	t.Setenv("LEM_CORS_ALLOWED_ORIGIN", "http://localhost:5173")
+	rec = httptest.NewRecorder()
+	securityHeadersMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setCORSHeaders(w)
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(rec, req)
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
+		t.Fatalf("configured CORS origin = %q", got)
+	}
+}
+
+func TestInternalErrorsAreNotExposed(t *testing.T) {
+	s := newTestServer(t)
+	rec := httptest.NewRecorder()
+	s.writeError(rec, http.StatusInternalServerError, errors.New("sqlite: secret internal detail"))
+	if body := rec.Body.String(); strings.Contains(body, "secret internal detail") {
+		t.Fatalf("internal error leaked: %s", body)
 	}
 }

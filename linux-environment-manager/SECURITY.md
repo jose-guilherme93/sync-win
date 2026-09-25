@@ -15,17 +15,22 @@ This document describes the security model, rules, and best practices for Linux 
 ### User accounts
 
 - Users register with email and password.
-- Passwords are stored as salted SHA-256 digests: `s256$salt$hash`.
-- Sessions are managed via random Bearer tokens stored server-side with 30-day TTL.
-- The `GET /api/auth/me` endpoint validates the current session.
-- All API endpoints (except `/health`, `/api/auth/*`, `/install/*`) require a valid Bearer token.
+- Passwords are stored as salted Argon2id hashes (`argon2id$v=19$...`); legacy `s256$` hashes are upgraded after a successful login.
+- Passwords must contain 8–256 bytes.
+- The dashboard uses a random `lem_session` HttpOnly cookie. The raw session token is not persisted in the browser; a compatibility bearer token may be returned to non-browser clients.
+- Only a SHA-256 hash of each session token is stored server-side. Sessions expire after 30 days by default (`LEM_SESSION_TTL_HOURS`).
+- Cookie-authenticated state-changing requests require the `lem_csrf` cookie and matching `X-LEM-CSRF` header.
+- `POST /api/auth/logout` revokes the current session; changing a password revokes every session for the account.
+- `GET /api/auth/me` validates the current session.
+- `X-LEM-Anonymous-ID`, `owner_id` query parameters, and client-supplied owner IDs are never accepted as authorization.
 
 ### Device tokens
 
-- Each device gets a unique random token at enrollment time.
-- The device token is used for all agent-to-server communication.
-- Device tokens are never shown in the UI or written to server logs.
-- The `Authorization: Bearer <device_token>` header authenticates agent requests.
+- Each enrollment creates a new device and a unique random token.
+- Only a SHA-256 hash of the device token is stored; the raw token is returned once to the enrolling client.
+- The device token is used for agent-to-server communication and is never shown in dashboard responses or logs.
+- Hardware fingerprints are metadata only. Fingerprint reconnect is permanently disabled; recovery requires a new single-use enrollment token.
+- The `Authorization: Bearer <device_token>` header (or the agent request body) authenticates agent requests.
 
 ### Enrollment tokens
 
@@ -38,9 +43,10 @@ This document describes the security model, rules, and best practices for Linux 
 
 ### Passwords
 
-- Stored as salted SHA-256 digests: `s256$salt$hash`.
-- Never transmitted in plaintext over the network (use HTTPS in production).
-- Never logged or stored in plaintext.
+- Stored as salted Argon2id hashes, never as plaintext or fast SHA-256-only hashes.
+- Legacy `s256$` values are accepted only for migration and are rehash with Argon2id after successful authentication.
+- Passwords are never logged or included in API responses.
+- Password changes revoke all existing sessions.
 
 ### Notification provider credentials
 
@@ -81,6 +87,20 @@ This document describes the security model, rules, and best practices for Linux 
 - SQLite remains the source of truth.
 - Database migrations are embedded in the server binary and applied idempotently.
 
+## Security feature flags
+
+The following capabilities are fail-closed and must be explicitly enabled only
+after their controls are deployed and tested:
+
+- `LEM_ENABLE_FINGERPRINT_RECONNECT=false` — retained only as a compatibility switch; the endpoint remains permanently disabled because fingerprints are not authenticators.
+- `LEM_ENABLE_LEGACY_INSTALL=false` — deprecated `/api/agent/install.sh` flow.
+- `LEM_ENABLE_REMOTE_MUTATIONS=false` — commands that can change agent-local state.
+- `LEM_ENABLE_DOCKER_MUTATIONS=false` — Docker lifecycle, exec, compose writes/up/down and prune operations.
+
+`LEM_CORS_ALLOWED_ORIGIN` is empty by default. Set one exact browser origin
+only for a split development frontend; production same-origin deployments do
+not need CORS.
+
 ## Network security
 
 ### HTTPS
@@ -95,15 +115,25 @@ This document describes the security model, rules, and best practices for Linux 
 
 ### Rate limiting
 
+- Authentication and enrollment endpoints use an in-process per-client-IP limiter with HTTP 429 responses.
 - Request bodies are capped at 2 MiB.
 - Enrollment tokens are single-use with 15-minute expiry.
+- Notification test and Telegram detection endpoints have separate rate limits.
 - Notification events are throttled: 15-minute window per `(event_type, device_id)`.
+
+### Outbound requests
+
+- Webhook URLs must use HTTP(S) and are re-resolved before every send.
+- Loopback, private, link-local, multicast, and unspecified addresses are blocked by default.
+- Webhook redirects are disabled to prevent redirect-based SSRF.
+- Configure an external allowlist/proxy if a deployment intentionally needs a private webhook endpoint.
 
 ## Agent security
 
 ### Local policy
 
 - The agent enforces local policy via `~/.config/lem/policy.json`.
+- Missing or malformed policy files use safe defaults: read-only Docker and Lynis audit are allowed; install, exclude, restore, lifecycle, exec, prune, and compose mutations are disabled.
 - Any command type can be disabled locally.
 - Disabled commands are reported back to the server with a reason.
 - The server never forces execution of disabled commands.
@@ -125,9 +155,12 @@ This document describes the security model, rules, and best practices for Linux 
 
 ### Docker management
 
-- Container IDs are validated against injection (`validContainerID()`).
-- Compose file writes are restricted to valid compose filenames.
-- All Docker operations check `DockerIsAvailable()` before execution.
+- Container and exec IDs are validated against injection (`validContainerID()`).
+- Docker socket requests have deadlines, bounded response reads, and 30-second exec/composition timeouts.
+- Exec input is length-limited and output is capped at 64 KiB.
+- Compose file writes are restricted to approved roots, valid compose filenames, existing parent directories, and non-symlink targets.
+- Docker results are bound to the requesting device and cannot be read by another device.
+- All Docker operations check `DockerIsAvailable()` and the local policy before execution.
 - All Docker actions are logged in the audit trail.
 
 ## Server security
@@ -135,15 +168,18 @@ This document describes the security model, rules, and best practices for Linux 
 ### Input validation
 
 - All uploaded files are validated for size, encoding, content, and path.
-- Filenames are checked against a restricted charset.
-- Categories are validated against a fixed set.
-- Relative paths must not contain `..` (path traversal).
+- Filenames are checked against a restricted charset and cannot contain separators or control characters.
+- Categories are validated against a fixed format.
+- Relative paths must not contain `..` or absolute prefixes (path traversal).
+- Preference batches are limited to 256 items and 10 MiB total content.
+- Request bodies must contain exactly one JSON value and are capped at 2 MiB.
 
 ### Secret redaction
 
 - The structured JSON logger automatically redacts secrets before storage.
-- Known patterns (API keys, tokens, passwords) are replaced with `[REDACTED]`.
+- Known patterns (API keys, tokens, passwords, cookies, device credentials) are replaced with `[REDACTED]`.
 - Redacted entries are marked in the database.
+- Log, audit, error, retention, and SSE queries are scoped to the authenticated owner.
 
 ### Audit trail
 
@@ -180,7 +216,7 @@ StartLimitIntervalSec=0
 
 The server never stores:
 
-- passwords or password hashes (only salted SHA-256 digests)
+- passwords or reversible password data (only one-way Argon2id hashes are stored)
 - private keys or certificates
 - browser credentials or cookies
 - KWallet data

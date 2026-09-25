@@ -1,6 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher, onMount } from 'svelte'
-  import { serverBase } from '../lib/api'
+  import { apiFetch, serverBase } from '../lib/api'
 
   export let open = false
   export let authHeaders: Record<string, string> = {}
@@ -62,8 +62,8 @@
   async function loadConfig() {
     try {
       const [cfgRes, provRes] = await Promise.all([
-        fetch(`${serverBase}/api/notifications/config`, { headers: authHeaders }),
-        fetch(`${serverBase}/api/notifications/providers`, { headers: authHeaders }),
+        apiFetch(`${serverBase}/api/notifications/config`, { headers: authHeaders }),
+        apiFetch(`${serverBase}/api/notifications/providers`, { headers: authHeaders }),
       ])
       if (cfgRes.ok) configs = await cfgRes.json()
       if (provRes.ok) providers = await provRes.json()
@@ -93,7 +93,7 @@
   async function saveInbox() {
     saving = true
     try {
-      const res = await fetch(`${serverBase}/api/notifications/config`, {
+      const res = await apiFetch(`${serverBase}/api/notifications/config`, {
         method: 'PUT',
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -119,7 +119,7 @@
     }
     detecting = true
     try {
-      const res = await fetch(`${serverBase}/api/notifications/telegram/detect-chat`, {
+      const res = await apiFetch(`${serverBase}/api/notifications/telegram/detect-chat`, {
         method: 'POST',
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({ bot_token: telegramToken }),
@@ -151,7 +151,7 @@
       if (telegramToken && !telegramToken.includes('*')) {
         body.config.bot_token = telegramToken
       }
-      const res = await fetch(`${serverBase}/api/notifications/config`, {
+      const res = await apiFetch(`${serverBase}/api/notifications/config`, {
         method: 'PUT',
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -180,7 +180,7 @@
       if (webhookSecret && !webhookSecret.includes('*')) {
         body.config.secret = webhookSecret
       }
-      const res = await fetch(`${serverBase}/api/notifications/config`, {
+      const res = await apiFetch(`${serverBase}/api/notifications/config`, {
         method: 'PUT',
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -200,7 +200,7 @@
   async function testProvider(provider: string) {
     testing = provider
     try {
-      const res = await fetch(`${serverBase}/api/notifications/test`, {
+      const res = await apiFetch(`${serverBase}/api/notifications/test`, {
         method: 'POST',
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider }),

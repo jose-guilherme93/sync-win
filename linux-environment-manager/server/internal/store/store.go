@@ -1,14 +1,15 @@
 package store
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -17,30 +18,34 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"golang.org/x/crypto/argon2"
 	_ "modernc.org/sqlite"
 )
 
 const (
-	maxFileBytes         = 1 << 20
-	maxFilenameLength    = 255
-	maxCategoryLength    = 64
-	maxRelPathLength     = 512
-	maxFileTotalBytes    = 10 << 20
+	maxFileBytes      = 1 << 20
+	maxFilenameLength = 255
+	maxCategoryLength = 64
+	maxRelPathLength  = 512
+	maxFileTotalBytes = 10 << 20
+	maxBatchItems     = 256
+	maxExtraDirs      = 20
+	maxExtraDirLength = 300
 	// Sessions last 30 days by default; override with LEM_SESSION_TTL_HOURS.
-	defaultSessionTTL    = 30 * 24 * time.Hour
-	deviceColumns        = "id, user_id, owner_id, hostname, device_token, last_seen_at, last_sync_at, sync_failures, last_error, last_error_at, hardware_json, apps_json, status, created_at, updated_at, hardware_fingerprint"
+	defaultSessionTTL = 30 * 24 * time.Hour
+	deviceColumns     = "id, user_id, owner_id, hostname, device_token, last_seen_at, last_sync_at, sync_failures, last_error, last_error_at, hardware_json, apps_json, status, created_at, updated_at, hardware_fingerprint"
 )
 
 // sessionTTL is the session lifetime; it can be overridden at startup.
 var sessionTTL = defaultSessionTTL
 
 var (
-	errInvalidFilename   = errors.New("invalid filename")
-	errInvalidCategory   = errors.New("invalid category")
-	errInvalidPath       = errors.New("invalid path")
-	errPathTraversal     = errors.New("path traversal")
-	errFilenameTooLong   = errors.New("filename too long")
-	errCategoryTooLong   = errors.New("category too long")
+	errInvalidFilename    = errors.New("invalid filename")
+	errInvalidCategory    = errors.New("invalid category")
+	errInvalidPath        = errors.New("invalid path")
+	errPathTraversal      = errors.New("path traversal")
+	errFilenameTooLong    = errors.New("filename too long")
+	errCategoryTooLong    = errors.New("category too long")
 	errRelPathTooLong     = errors.New("relative path too long")
 	errFileTooLarge       = errors.New("file too large")
 	errBinaryContent      = errors.New("binary content")
@@ -56,22 +61,22 @@ type Store struct {
 }
 
 type Device struct {
-	ID                 string    `json:"id"`
-	UserID             string    `json:"user_id"`
-	OwnerID            string    `json:"owner_id"`
-	Hostname           string    `json:"hostname"`
-	DeviceToken        string    `json:"-"`
-	LastSeenAt         time.Time `json:"last_seen_at"`
-	LastSyncAt         time.Time `json:"last_sync_at"`
-	SyncFailures       int       `json:"sync_failures"`
-	LastError          string    `json:"last_error"`
-	LastErrorAt        time.Time `json:"last_error_at"`
-	Hardware           HardwareStats `json:"hardware"`
-	Apps               []AppInfo `json:"apps"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
-	Status             string    `json:"status"`
-	HardwareFingerprint string   `json:"hardware_fingerprint,omitempty"`
+	ID                  string        `json:"id"`
+	UserID              string        `json:"user_id"`
+	OwnerID             string        `json:"owner_id"`
+	Hostname            string        `json:"hostname"`
+	DeviceToken         string        `json:"-"`
+	LastSeenAt          time.Time     `json:"last_seen_at"`
+	LastSyncAt          time.Time     `json:"last_sync_at"`
+	SyncFailures        int           `json:"sync_failures"`
+	LastError           string        `json:"last_error"`
+	LastErrorAt         time.Time     `json:"last_error_at"`
+	Hardware            HardwareStats `json:"hardware"`
+	Apps                []AppInfo     `json:"apps"`
+	CreatedAt           time.Time     `json:"created_at"`
+	UpdatedAt           time.Time     `json:"updated_at"`
+	Status              string        `json:"status"`
+	HardwareFingerprint string        `json:"-"`
 }
 
 // DeviceSummary is the lightweight device projection served by the dashboard
@@ -96,7 +101,7 @@ type DeviceSummary struct {
 	SavesSizeBytes      int64           `json:"saves_size_bytes"`
 	CreatedAt           time.Time       `json:"created_at"`
 	UpdatedAt           time.Time       `json:"updated_at"`
-	HardwareFingerprint string          `json:"hardware_fingerprint,omitempty"`
+	HardwareFingerprint string          `json:"-"`
 }
 
 // HardwareSummary is the subset of HardwareStats the dashboard list renders.
@@ -127,48 +132,48 @@ type HardwareSummary struct {
 }
 
 type HardwareStats struct {
-	CPUUsagePercent    float64           `json:"cpu_usage_percent"`
-	MemoryUsedBytes    uint64            `json:"memory_used_bytes"`
-	MemoryTotalBytes   uint64            `json:"memory_total_bytes"`
-	CPUTemperature     float64           `json:"cpu_temperature"`
-	GPUTemperature     float64           `json:"gpu_temperature_celsius"`
-	PowerWatts         float64           `json:"power_watts"`
-	BatteryPercent     float64           `json:"battery_percent"`
-	BatteryStatus      string            `json:"battery_status"`
-	AgentCPUUsage      float64           `json:"agent_cpu_usage"`
-	AgentMemoryBytes   uint64            `json:"agent_memory_bytes"`
-	AgentVersion       string            `json:"agent_version,omitempty"`
-	OperatingSystem    string            `json:"operating_system"`
-	Architecture       string            `json:"architecture"`
-	CPUModel           string            `json:"cpu_model"`
-	KernelVersion      string            `json:"kernel_version"`
-	DesktopEnvironment string            `json:"desktop_environment"`
-	Locale             string            `json:"locale"`
-	Timezone           string            `json:"timezone"`
-	BootTime           string            `json:"boot_time"`
-	UptimeSeconds      int64             `json:"uptime_seconds"`
-	LoadAverage        string            `json:"load_average"`
-	NetworkIFaces      []NetworkIface    `json:"network_ifaces,omitempty"`
-	DiskReadBytes      uint64            `json:"disk_read_bytes"`
-	DiskWriteBytes     uint64            `json:"disk_write_bytes"`
-	DiskReadRate       float64           `json:"disk_read_rate"`
-	DiskWriteRate      float64           `json:"disk_write_rate"`
-	DiskPartitions     []DiskPartition   `json:"disk_partitions,omitempty"`
-	SwapUsedBytes      uint64            `json:"swap_used_bytes"`
-	SwapTotalBytes     uint64            `json:"swap_total_bytes"`
-	MemoryBuffersBytes uint64            `json:"memory_buffers_bytes"`
-	MemoryCachedBytes  uint64            `json:"memory_cached_bytes"`
-	CPUCoreUsage       []float64         `json:"cpu_core_usage,omitempty"`
-	TopCPUProcesses    []ProcessInfo     `json:"top_cpu_processes,omitempty"`
-	TopMemProcesses    []ProcessInfo     `json:"top_mem_processes,omitempty"`
-	DockerAvailable    bool              `json:"docker_available"`
-	DockerContainers   []DockerContainer `json:"docker_containers,omitempty"`
-	DockerInfo         *DockerInfo       `json:"docker_info,omitempty"`
-	LynisAvailable     bool              `json:"lynis_available"`
-	LynisInstallCmd    string            `json:"lynis_install_cmd,omitempty"`
-	Logs               []DeviceLog       `json:"logs,omitempty"`
-	HardwareFingerprint string           `json:"hardware_fingerprint,omitempty"`
-	CollectedAt        string            `json:"collected_at"`
+	CPUUsagePercent     float64           `json:"cpu_usage_percent"`
+	MemoryUsedBytes     uint64            `json:"memory_used_bytes"`
+	MemoryTotalBytes    uint64            `json:"memory_total_bytes"`
+	CPUTemperature      float64           `json:"cpu_temperature"`
+	GPUTemperature      float64           `json:"gpu_temperature_celsius"`
+	PowerWatts          float64           `json:"power_watts"`
+	BatteryPercent      float64           `json:"battery_percent"`
+	BatteryStatus       string            `json:"battery_status"`
+	AgentCPUUsage       float64           `json:"agent_cpu_usage"`
+	AgentMemoryBytes    uint64            `json:"agent_memory_bytes"`
+	AgentVersion        string            `json:"agent_version,omitempty"`
+	OperatingSystem     string            `json:"operating_system"`
+	Architecture        string            `json:"architecture"`
+	CPUModel            string            `json:"cpu_model"`
+	KernelVersion       string            `json:"kernel_version"`
+	DesktopEnvironment  string            `json:"desktop_environment"`
+	Locale              string            `json:"locale"`
+	Timezone            string            `json:"timezone"`
+	BootTime            string            `json:"boot_time"`
+	UptimeSeconds       int64             `json:"uptime_seconds"`
+	LoadAverage         string            `json:"load_average"`
+	NetworkIFaces       []NetworkIface    `json:"network_ifaces,omitempty"`
+	DiskReadBytes       uint64            `json:"disk_read_bytes"`
+	DiskWriteBytes      uint64            `json:"disk_write_bytes"`
+	DiskReadRate        float64           `json:"disk_read_rate"`
+	DiskWriteRate       float64           `json:"disk_write_rate"`
+	DiskPartitions      []DiskPartition   `json:"disk_partitions,omitempty"`
+	SwapUsedBytes       uint64            `json:"swap_used_bytes"`
+	SwapTotalBytes      uint64            `json:"swap_total_bytes"`
+	MemoryBuffersBytes  uint64            `json:"memory_buffers_bytes"`
+	MemoryCachedBytes   uint64            `json:"memory_cached_bytes"`
+	CPUCoreUsage        []float64         `json:"cpu_core_usage,omitempty"`
+	TopCPUProcesses     []ProcessInfo     `json:"top_cpu_processes,omitempty"`
+	TopMemProcesses     []ProcessInfo     `json:"top_mem_processes,omitempty"`
+	DockerAvailable     bool              `json:"docker_available"`
+	DockerContainers    []DockerContainer `json:"docker_containers,omitempty"`
+	DockerInfo          *DockerInfo       `json:"docker_info,omitempty"`
+	LynisAvailable      bool              `json:"lynis_available"`
+	LynisInstallCmd     string            `json:"lynis_install_cmd,omitempty"`
+	Logs                []DeviceLog       `json:"logs,omitempty"`
+	HardwareFingerprint string            `json:"-"`
+	CollectedAt         string            `json:"collected_at"`
 }
 
 type DiskPartition struct {
@@ -240,22 +245,22 @@ type PreferenceInput struct {
 }
 
 type PreferenceFile struct {
-	ID            string    `json:"id"`
-	DeviceID      string    `json:"device_id"`
-	UserID        string    `json:"user_id"`
-	Category      string    `json:"category"`
-	Filename      string    `json:"filename"`
-	RelativePath  string    `json:"relative_path"`
-	Content       string    `json:"content"`
-	ContentHash   string    `json:"content_hash"`
-	SizeBytes     int64     `json:"size_bytes"`
-	SyncedAt      time.Time `json:"synced_at"`
-	Status        string    `json:"status"`
+	ID           string    `json:"id"`
+	DeviceID     string    `json:"device_id"`
+	UserID       string    `json:"user_id"`
+	Category     string    `json:"category"`
+	Filename     string    `json:"filename"`
+	RelativePath string    `json:"relative_path"`
+	Content      string    `json:"content"`
+	ContentHash  string    `json:"content_hash"`
+	SizeBytes    int64     `json:"size_bytes"`
+	SyncedAt     time.Time `json:"synced_at"`
+	Status       string    `json:"status"`
 }
 
 type PreferenceRejection struct {
-	Filename  string `json:"filename"`
-	Reason    string `json:"reason"`
+	Filename string `json:"filename"`
+	Reason   string `json:"reason"`
 }
 
 type DeviceCommand struct {
@@ -273,10 +278,10 @@ type DeviceCommand struct {
 }
 
 type User struct {
-	ID             string    `json:"id"`
-	Email          string    `json:"email"`
-	PasswordHash   string    `json:"password_hash"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID           string    `json:"id"`
+	Email        string    `json:"email"`
+	PasswordHash string    `json:"-"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 type Session struct {
@@ -311,6 +316,7 @@ func NewStore(root string) (*Store, error) {
 	}
 	s.migrateAddStatusColumn()
 	s.migrateAddFingerprintColumn()
+	s.migrateHashDeviceTokens()
 	s.migrateAddSecurityAuditsTable()
 	if err := migrateLegacyJSON(db, root); err != nil {
 		return nil, fmt.Errorf("migrate legacy: %w", err)
@@ -332,6 +338,25 @@ func (s *Store) migrateAddFingerprintColumn() {
 	if count == 0 {
 		s.db.Exec("ALTER TABLE devices ADD COLUMN hardware_fingerprint TEXT DEFAULT ''")
 		s.db.Exec("CREATE INDEX IF NOT EXISTS idx_devices_fingerprint ON devices(hardware_fingerprint)")
+	}
+}
+
+func (s *Store) migrateHashDeviceTokens() {
+	rows, err := s.db.Query("SELECT id, device_token FROM devices")
+	if err != nil {
+		return
+	}
+	type pending struct{ id, token string }
+	var updates []pending
+	for rows.Next() {
+		var id, token string
+		if rows.Scan(&id, &token) == nil && token != "" && !isTokenHash(token) {
+			updates = append(updates, pending{id: id, token: hashToken(token)})
+		}
+	}
+	rows.Close()
+	for _, update := range updates {
+		_, _ = s.db.Exec("UPDATE devices SET device_token = ? WHERE id = ?", update.token, update.id)
 	}
 }
 
@@ -604,13 +629,8 @@ func (s *Store) RegisterDevice(hostname, userID, ownerID, fingerprint string) (D
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// If a fingerprint is provided, check for an existing device with the same hardware.
-	if fingerprint != "" {
-		if existing, err := s.findDeviceByFingerprintLocked(fingerprint); err == nil && existing.ID != "" {
-			return existing, nil
-		}
-	}
-
+	// Hardware fingerprints are metadata only. They must never authenticate or
+	// silently reconnect a device; enrollment always creates a fresh credential.
 	if userID == "" {
 		userID = "user-" + newID()
 	}
@@ -620,12 +640,12 @@ func (s *Store) RegisterDevice(hostname, userID, ownerID, fingerprint string) (D
 	if hostname == "" {
 		hostname = "unknown"
 	}
-
-	// Check for existing device with the same owner_id and hostname.
-	if existing, err := s.findDeviceByOwnerHostnameLocked(ownerID, hostname); err == nil && existing.ID != "" {
-		return existing, nil
+	if err := validateHostname(hostname); err != nil {
+		return Device{}, err
 	}
 
+	// Do not reuse a device record based on owner/hostname either: a new
+	// enrollment must always receive a new credential.
 	token := newToken()
 
 	now := time.Now().UTC()
@@ -640,7 +660,7 @@ func (s *Store) RegisterDevice(hostname, userID, ownerID, fingerprint string) (D
 	}
 	_, err := s.db.Exec(
 		"INSERT INTO devices ("+deviceColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		device.ID, device.UserID, device.OwnerID, device.Hostname, device.DeviceToken,
+		device.ID, device.UserID, device.OwnerID, device.Hostname, hashToken(device.DeviceToken),
 		"", "", 0, "", "", "{}", "[]", "online", timeText(now), timeText(now), fingerprint,
 	)
 	if err != nil {
@@ -890,6 +910,17 @@ func (s *Store) ListFiles(deviceID string) ([]PreferenceFile, error) {
 }
 
 func (s *Store) SavePreferenceBatch(deviceID string, inputs []PreferenceInput) ([]PreferenceFile, []PreferenceRejection, error) {
+	if len(inputs) > maxBatchItems {
+		return nil, nil, fmt.Errorf("too many preference files: maximum %d", maxBatchItems)
+	}
+	var totalBytes int64
+	for _, input := range inputs {
+		totalBytes += int64(len(input.Content))
+		if totalBytes > maxFileTotalBytes {
+			return nil, nil, fmt.Errorf("preference batch is too large: maximum %d bytes", maxFileTotalBytes)
+		}
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1231,7 +1262,10 @@ func validatePreferenceInput(input PreferenceInput) error {
 	if input.Filename == "" {
 		return errInvalidFilename
 	}
-	if input.Filename == "." || input.Filename == ".." {
+	if input.Content == "" {
+		return errors.New("empty content")
+	}
+	if input.Filename == "." || input.Filename == ".." || strings.ContainsAny(input.Filename, "/\\\x00\r\n") {
 		return errInvalidFilename
 	}
 	if len(input.Filename) > maxFilenameLength {
@@ -1320,16 +1354,40 @@ var secretPatterns = []string{
 	"-----BEGIN RSA PRIVATE KEY-----", "-----BEGIN OPENSSH PRIVATE KEY-----",
 }
 
+func mustRandomBytes(n int) []byte {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Sprintf("secure random source failed: %v", err))
+	}
+	return b
+}
+
 func newID() string {
-	b := make([]byte, 16)
-	rand.Read(b)
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(mustRandomBytes(16))
 }
 
 func newToken() string {
-	b := make([]byte, 32)
-	rand.Read(b)
-	return base64.URLEncoding.EncodeToString(b)
+	return base64.URLEncoding.EncodeToString(mustRandomBytes(32))
+}
+
+func hashToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+func isTokenHash(value string) bool {
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func persistedDeviceToken(value string) string {
+	if value == "" || isTokenHash(value) {
+		return value
+	}
+	return hashToken(value)
 }
 
 func preferencePathKey(deviceID, category, relativePath, filename string) string {
@@ -1345,10 +1403,46 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+const (
+	minPasswordLength = 8
+	maxPasswordLength = 256
+	maxEmailLength    = 254
+)
+
+func validateEmail(email string) error {
+	email = strings.TrimSpace(email)
+	if email == "" || len(email) > maxEmailLength || !strings.Contains(email, "@") || strings.ContainsAny(email, "\x00\r\n") {
+		return errors.New("invalid email")
+	}
+	return nil
+}
+
+func validateHostname(hostname string) error {
+	hostname = strings.TrimSpace(hostname)
+	if hostname == "" || len(hostname) > 255 || strings.ContainsAny(hostname, "\x00\r\n/\\") {
+		return errors.New("invalid hostname")
+	}
+	return nil
+}
+
+func validatePassword(password string) error {
+	if len(password) < minPasswordLength {
+		return errors.New("password too short")
+	}
+	if len(password) > maxPasswordLength {
+		return errors.New("password too long")
+	}
+	return nil
+}
+
 // CreateUser inserts a new user row.
 func (s *Store) CreateUser(email, password string) (User, error) {
-	if len(password) < 8 {
-		return User{}, errors.New("password too short")
+	email = strings.TrimSpace(email)
+	if err := validateEmail(email); err != nil {
+		return User{}, err
+	}
+	if err := validatePassword(password); err != nil {
+		return User{}, err
 	}
 	hash := saltedHash(password)
 	s.mu.Lock()
@@ -1362,30 +1456,73 @@ func (s *Store) CreateUser(email, password string) (User, error) {
 	return User{ID: id, Email: email, PasswordHash: hash, CreatedAt: textTime(now)}, nil
 }
 
+const (
+	argonTime    = 3
+	argonMemory  = 64 * 1024
+	argonThreads = 2
+	argonKeyLen  = 32
+)
+
 func saltedHash(password string) string {
-	salt := make([]byte, 16)
-	rand.Read(salt)
-	h := sha256.Sum256(append(salt, []byte(password)...))
-	return "s256$" + hex.EncodeToString(salt) + "$" + hex.EncodeToString(h[:])
+	salt := mustRandomBytes(16)
+	digest := argon2.IDKey([]byte(password), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
+	return fmt.Sprintf("argon2id$v=19$m=%d,t=%d,p=%d$%s$%s", argonMemory, argonTime, argonThreads, base64.RawStdEncoding.EncodeToString(salt), base64.RawStdEncoding.EncodeToString(digest))
 }
 
 func verifyPassword(stored, password string) bool {
 	parts := strings.Split(stored, "$")
-	if len(parts) == 3 && parts[0] == "s256" {
-		salt, _ := hex.DecodeString(parts[1])
-		h := sha256.Sum256(append(salt, []byte(password)...))
-		return hex.EncodeToString(h[:]) == parts[2]
+	if len(parts) == 5 && parts[0] == "argon2id" && parts[1] == "v=19" {
+		var memory, iterations uint32
+		var threads uint8
+		if _, err := fmt.Sscanf(parts[2], "m=%d,t=%d,p=%d", &memory, &iterations, &threads); err != nil {
+			return false
+		}
+		if memory < 8*1024 || memory > 1<<20 || iterations < 1 || iterations > 10 || threads < 1 || threads > 16 {
+			return false
+		}
+		salt, err := base64.RawStdEncoding.DecodeString(parts[3])
+		if err != nil {
+			return false
+		}
+		expected, err := base64.RawStdEncoding.DecodeString(parts[4])
+		if err != nil || len(expected) == 0 {
+			return false
+		}
+		actual := argon2.IDKey([]byte(password), salt, iterations, memory, threads, uint32(len(expected)))
+		return subtle.ConstantTimeCompare(actual, expected) == 1
 	}
-	return stored == password
+
+	// Legacy hashes are accepted only to allow a successful login to trigger
+	// an immediate Argon2id rehash.
+	if len(parts) == 3 && parts[0] == "s256" {
+		salt, err := hex.DecodeString(parts[1])
+		if err != nil {
+			return false
+		}
+		expected, err := hex.DecodeString(parts[2])
+		if err != nil {
+			return false
+		}
+		actual := sha256.Sum256(append(salt, []byte(password)...))
+		return subtle.ConstantTimeCompare(actual[:], expected) == 1
+	}
+	return false
 }
 
 // AuthenticateUser looks up a user by email and password.
 func (s *Store) AuthenticateUser(email, password string) (User, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	email = strings.TrimSpace(email)
+	if err := validateEmail(email); err != nil {
+		return User{}, errors.New("invalid credentials")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var u User
 	var created string
 	err := s.db.QueryRow("SELECT id, email, password_hash, created_at FROM users WHERE email = ?", email).Scan(&u.ID, &u.Email, &u.PasswordHash, &created)
+	if errors.Is(err, sql.ErrNoRows) {
+		return User{}, errors.New("invalid credentials")
+	}
 	if err != nil {
 		return User{}, err
 	}
@@ -1393,16 +1530,23 @@ func (s *Store) AuthenticateUser(email, password string) (User, error) {
 	if !verifyPassword(u.PasswordHash, password) {
 		return User{}, errors.New("invalid credentials")
 	}
+	if strings.HasPrefix(u.PasswordHash, "s256$") {
+		u.PasswordHash = saltedHash(password)
+		if _, err := s.db.Exec("UPDATE users SET password_hash = ? WHERE id = ?", u.PasswordHash, u.ID); err != nil {
+			return User{}, err
+		}
+	}
 	return u, nil
 }
 
-// CreateSession creates a new session for the given owner.
+// CreateSession creates a new session for the given owner. Only a hash of the
+// bearer token is persisted; the raw token is returned to the client once.
 func (s *Store) CreateSession(ownerID string) (Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	token := newToken()
 	now := timeText(time.Now().UTC())
-	_, err := s.db.Exec("INSERT INTO sessions (token, owner_id, created_at) VALUES (?, ?, ?)", token, ownerID, now)
+	_, err := s.db.Exec("INSERT INTO sessions (token, owner_id, created_at) VALUES (?, ?, ?)", hashToken(token), ownerID, now)
 	if err != nil {
 		return Session{}, err
 	}
@@ -1411,17 +1555,48 @@ func (s *Store) CreateSession(ownerID string) (Session, error) {
 
 // SessionOwner returns the owner_id for a session token, or "" if expired/missing.
 func (s *Store) SessionOwner(token string) (string, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	var ownerID, created string
-	err := s.db.QueryRow("SELECT owner_id, created_at FROM sessions WHERE token = ?", token).Scan(&ownerID, &created)
+	if token == "" {
+		return "", false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var ownerID, created, storedToken string
+	err := s.db.QueryRow("SELECT token, owner_id, created_at FROM sessions WHERE token = ?", hashToken(token)).Scan(&storedToken, &ownerID, &created)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Migrate sessions created before token hashing was introduced.
+		err = s.db.QueryRow("SELECT token, owner_id, created_at FROM sessions WHERE token = ?", token).Scan(&storedToken, &ownerID, &created)
+		if err == nil {
+			_, _ = s.db.Exec("UPDATE sessions SET token = ? WHERE token = ?", hashToken(token), token)
+			storedToken = hashToken(token)
+		}
+	}
 	if err != nil {
 		return "", false
 	}
 	if time.Since(textTime(created)) > sessionTTL {
+		_, _ = s.db.Exec("DELETE FROM sessions WHERE token = ?", storedToken)
 		return "", false
 	}
 	return ownerID, true
+}
+
+// RevokeSession invalidates one session token.
+func (s *Store) RevokeSession(token string) error {
+	if token == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec("DELETE FROM sessions WHERE token = ? OR token = ?", hashToken(token), token)
+	return err
+}
+
+// RevokeUserSessions invalidates all sessions for an owner.
+func (s *Store) RevokeUserSessions(ownerID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec("DELETE FROM sessions WHERE owner_id = ?", ownerID)
+	return err
 }
 
 // UserByID returns a user by ID.
@@ -1440,6 +1615,10 @@ func (s *Store) UserByID(id string) (*User, error) {
 
 // UpdateUserEmail changes the email for a user.
 func (s *Store) UpdateUserEmail(userID, email string) error {
+	email = strings.TrimSpace(email)
+	if err := validateEmail(email); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.db.Exec("UPDATE users SET email = ? WHERE id = ?", email, userID)
@@ -1448,6 +1627,10 @@ func (s *Store) UpdateUserEmail(userID, email string) error {
 
 // UpdateUserPassword changes the password for a user after verifying the current one.
 func (s *Store) UpdateUserPassword(userID, currentPassword, newPassword string) error {
+	if err := validatePassword(newPassword); err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var hash string
@@ -1460,6 +1643,10 @@ func (s *Store) UpdateUserPassword(userID, currentPassword, newPassword string) 
 	}
 	newHash := saltedHash(newPassword)
 	_, err = s.db.Exec("UPDATE users SET password_hash = ? WHERE id = ?", newHash, userID)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec("DELETE FROM sessions WHERE owner_id = ?", userID)
 	return err
 }
 
@@ -1616,8 +1803,34 @@ func (s *Store) GetSyncConfig(ownerID string) ([]string, error) {
 	return dirs, nil
 }
 
+func validateExtraDirs(dirs []string) error {
+	if len(dirs) > maxExtraDirs {
+		return fmt.Errorf("too many extra directories: maximum %d", maxExtraDirs)
+	}
+	for _, dir := range dirs {
+		dir = strings.TrimSpace(dir)
+		if dir == "" {
+			return errors.New("extra directory cannot be empty")
+		}
+		if len(dir) > maxExtraDirLength {
+			return fmt.Errorf("extra directory is too long: maximum %d", maxExtraDirLength)
+		}
+		if strings.Contains(dir, "..") {
+			return errors.New("extra directory cannot contain '..'")
+		}
+		if strings.ContainsAny(dir, "\x00\r\n") {
+			return errors.New("extra directory contains invalid characters")
+		}
+	}
+	return nil
+}
+
 // SetSyncConfig stores extra directories for a user.
 func (s *Store) SetSyncConfig(ownerID string, dirs []string) error {
+	if err := validateExtraDirs(dirs); err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	dirsJSON, _ := json.Marshal(dirs)
@@ -1886,11 +2099,11 @@ func (s *Store) GetExtraDirs(ownerID string) ([]string, error) {
 
 // RetentionSettings holds data retention configuration per owner.
 type RetentionSettings struct {
-	OwnerID         string `json:"owner_id"`
-	RawHours        int    `json:"raw_hours"`
-	Resolution1mDays int   `json:"1m_days"`
-	Resolution5mDays int   `json:"5m_days"`
-	Resolution1hDays int   `json:"1h_days"`
+	OwnerID          string `json:"owner_id"`
+	RawHours         int    `json:"raw_hours"`
+	Resolution1mDays int    `json:"1m_days"`
+	Resolution5mDays int    `json:"5m_days"`
+	Resolution1hDays int    `json:"1h_days"`
 }
 
 // Rejection represents a rejected preference file (alias for PreferenceRejection).
@@ -1912,8 +2125,31 @@ func (s *Store) GetRetentionSettings(ownerID string) (*RetentionSettings, error)
 	return &rs, nil
 }
 
+func validateRetentionSettings(rs RetentionSettings) error {
+	if strings.TrimSpace(rs.OwnerID) == "" {
+		return errors.New("owner_id is required")
+	}
+	if rs.RawHours < 1 || rs.RawHours > 168 {
+		return errors.New("raw_hours must be between 1 and 168")
+	}
+	for name, value := range map[string]int{
+		"1m_days": rs.Resolution1mDays,
+		"5m_days": rs.Resolution5mDays,
+		"1h_days": rs.Resolution1hDays,
+	} {
+		if value < 1 || value > 3650 {
+			return fmt.Errorf("%s must be between 1 and 3650", name)
+		}
+	}
+	return nil
+}
+
 // UpdateRetentionSettings stores retention settings.
 func (s *Store) UpdateRetentionSettings(rs RetentionSettings) error {
+	if err := validateRetentionSettings(rs); err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := timeText(time.Now().UTC())
@@ -1934,7 +2170,27 @@ func (s *Store) CleanupOldLogs(days int) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cutoff := time.Now().UTC().AddDate(0, 0, -days)
-	result, err := s.db.Exec("DELETE FROM log_entries WHERE level != 'audit' AND created_at < ?", timeText(cutoff))
+	result, err := s.db.Exec("DELETE FROM logs WHERE level != 'AUDIT' AND ts < ?", timeText(cutoff))
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+// CleanupOldLogsForOwner deletes old log entries visible to one owner.
+func (s *Store) CleanupOldLogsForOwner(ownerID string, days int) (int64, error) {
+	if ownerID == "" {
+		return 0, errors.New("owner_id is required")
+	}
+	if days < 1 {
+		return 0, errors.New("days must be positive")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cutoff := time.Now().UTC().AddDate(0, 0, -days)
+	result, err := s.db.Exec(`DELETE FROM logs
+		WHERE level != 'AUDIT' AND ts < ?
+		  AND (user_id = ? OR device_id IN (SELECT id FROM devices WHERE owner_id = ?))`, timeText(cutoff), ownerID, ownerID)
 	if err != nil {
 		return 0, err
 	}
@@ -1947,7 +2203,7 @@ func (s *Store) CreateEnrollmentToken(ownerID string) (string, error) {
 	defer s.mu.Unlock()
 	token := newToken()
 	now := timeText(time.Now().UTC())
-	expires := timeText(time.Now().UTC().Add(24 * time.Hour))
+	expires := timeText(time.Now().UTC().Add(15 * time.Minute))
 	id := "et_" + token[:12]
 	_, err := s.db.Exec("INSERT INTO enrollment_tokens (id, token, owner_id, created_at, expires_at, used_at, device_id) VALUES (?, ?, ?, ?, ?, '', '')", id, token, ownerID, now, expires)
 	return token, err
@@ -2105,19 +2361,19 @@ func (s *Store) DeleteDeviceAttachment(attID, ownerID string) error {
 
 // SecurityAudit represents a stored Lynis security audit report.
 type SecurityAudit struct {
-	ID                string `json:"id"`
-	DeviceID          string `json:"device_id"`
-	OwnerID           string `json:"owner_id"`
-	HardeningIndex    int    `json:"hardening_index"`
-	TotalWarnings     int    `json:"total_warnings"`
-	TotalSuggestions  int    `json:"total_suggestions"`
-	TotalTests        int    `json:"total_tests"`
-	TestsPassed       int    `json:"tests_passed"`
-	LynisVersion      string `json:"lynis_version"`
-	OSInfo            string `json:"os_info"`
-	KernelVersion     string `json:"kernel_version"`
-	ReportJSON        string `json:"report_json"`
-	CreatedAt         string `json:"created_at"`
+	ID               string `json:"id"`
+	DeviceID         string `json:"device_id"`
+	OwnerID          string `json:"owner_id"`
+	HardeningIndex   int    `json:"hardening_index"`
+	TotalWarnings    int    `json:"total_warnings"`
+	TotalSuggestions int    `json:"total_suggestions"`
+	TotalTests       int    `json:"total_tests"`
+	TestsPassed      int    `json:"tests_passed"`
+	LynisVersion     string `json:"lynis_version"`
+	OSInfo           string `json:"os_info"`
+	KernelVersion    string `json:"kernel_version"`
+	ReportJSON       string `json:"report_json"`
+	CreatedAt        string `json:"created_at"`
 }
 
 // SaveSecurityAudit stores a Lynis audit report.

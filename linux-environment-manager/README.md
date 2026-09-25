@@ -33,7 +33,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design.
 
 The server is a Go application that runs in Docker. It exposes a REST API, stores state in SQLite with WAL journal mode, and keeps small text files and base64-encoded saves in a data directory. It serves the web dashboard from the same origin (no CORS). Features include:
 
-- User authentication (register, login, session-based Bearer tokens)
+- User authentication (register, login, HttpOnly session cookie with CSRF protection)
 - Device registry with heartbeat tracking and online/offline status
 - Preference file storage (text + base64-encoded saves)
 - Docker command queue management (proxy to agents)
@@ -54,7 +54,7 @@ The agent is a lightweight Go binary (zero external dependencies) installed on e
 - Installed application inventory (apt, flatpak, pacman, AUR, AppImages)
 - Local policy enforcement (any command type can be disabled)
 - Exponential backoff with jitter for server outages
-- Hardware fingerprint-based device reconnection
+- Fresh enrollment-token recovery when device credentials are lost (hardware fingerprints are never used for authentication)
 
 Everything the agent collects and executes is defined in an explicit written contract (`COLLECTION-CONTRACT.md`, machine-readable at `agent/internal/contract/contract.json`). The agent owns command execution: a local policy file (`~/.config/lem/policy.json`) can disable any command type, and refusals are reported back to the server. Commands run with hard timeouts and output caps; sync survives server outages via exponential backoff with jitter.
 

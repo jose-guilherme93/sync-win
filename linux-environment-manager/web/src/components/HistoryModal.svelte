@@ -12,7 +12,7 @@
     Legend
   } from 'chart.js'
   import { getCachedHistory, setCachedHistory } from '../lib/telemetry-cache'
-  import { serverBase } from '../lib/api'
+  import { apiFetch, serverBase } from '../lib/api'
 
   Chart.register(LineController, LineElement, PointElement, LinearScale, CategoryScale, Filler, Tooltip, Legend)
 
@@ -48,11 +48,6 @@
   let tempChart: Chart
   let powerChart: Chart
 
-  function getAuthHeaders(): Record<string, string> {
-    const token = localStorage.getItem('auth_token') || sessionStorage.getItem('auth_token')
-    return token ? { Authorization: `Bearer ${token}` } : {}
-  }
-
   function getTimeRange(): { from: string; to: string } {
     const to = new Date()
     const p = periods.find((x) => x.value === period) || periods[2]
@@ -74,9 +69,7 @@
       }
 
       const params = new URLSearchParams({ from, to, resolution })
-      const response = await fetch(`${serverBase}/api/devices/${device.id}/telemetry/history-v2?${params}`, {
-        headers: getAuthHeaders()
-      })
+      const response = await apiFetch(`${serverBase}/api/devices/${device.id}/telemetry/history-v2?${params}`)
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       const data = await response.json()
       history = mapPoints(data.points || [])

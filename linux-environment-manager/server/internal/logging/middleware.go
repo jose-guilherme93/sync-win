@@ -39,6 +39,11 @@ func HTTPMiddleware(logger *Logger, next http.Handler) http.Handler {
 		// Wrap response writer to capture status
 		rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 
+		// Never persist bearer-like secrets carried in a URL path. Enrollment
+		// scripts use /install/{token}; the raw path is still used internally
+		// for routing decisions, but logs receive a redacted form.
+		loggedPath := redactPath(r.URL.Path)
+
 		// Create request-scoped logger
 		reqLogger := &requestLogger{
 			logger:        logger,
@@ -46,7 +51,7 @@ func HTTPMiddleware(logger *Logger, next http.Handler) http.Handler {
 			correlationID: correlationID,
 			startTime:     start,
 			method:        r.Method,
-			path:          r.URL.Path,
+			path:          loggedPath,
 			remoteAddr:    r.RemoteAddr,
 		}
 
@@ -71,6 +76,13 @@ func HTTPMiddleware(logger *Logger, next http.Handler) http.Handler {
 			reqLogger.logEvent(status, duration)
 		}
 	})
+}
+
+func redactPath(path string) string {
+	if strings.HasPrefix(path, "/install/") {
+		return "/install/[REDACTED]"
+	}
+	return path
 }
 
 type requestLogger struct {

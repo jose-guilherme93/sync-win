@@ -1,7 +1,10 @@
 package notify
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -135,6 +138,9 @@ func TestWebhookValidateRejectsBadURL(t *testing.T) {
 		json.RawMessage(`{}`),
 		json.RawMessage(`{"url":"ftp://nope"}`),
 		json.RawMessage(`{"url":"not-a-url"}`),
+		json.RawMessage(`{"url":"http://127.0.0.1/hook"}`),
+		json.RawMessage(`{"url":"http://[::1]/hook"}`),
+		json.RawMessage(`{"url":"http://localhost/hook"}`),
 		json.RawMessage(`{"url":"http://ok.com","secret":"` + longString() + `"}`),
 	}
 	for _, cfg := range tests {
@@ -157,6 +163,24 @@ func TestWebhookValidateAcceptsGoodURL(t *testing.T) {
 	cfg := json.RawMessage(`{"url":"http://homeassistant.local:8123/api/notify/lem"}`)
 	if err := p.Validate(cfg); err != nil {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestWebhookPostRejectsPrivateTargetBeforeRequest(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	p := webhookProvider{}
+	err := p.post(context.Background(), server.Client(), webhookConfig{URL: server.URL}, webhookPayload{})
+	if err == nil {
+		t.Fatal("private webhook target must be rejected")
+	}
+	if called {
+		t.Fatal("private webhook target received a request")
 	}
 }
 

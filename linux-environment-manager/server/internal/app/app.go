@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -28,13 +29,16 @@ import (
 const maxRequestBytes = 2 << 20
 
 type Server struct {
-	store            *store.Store
-	logStore         *logging.Store
-	log              *logging.Logger
-	aggregator       *store.Aggregator
-	notifier         *notify.Dispatcher
-	dockerQueue      *docker.Queue
+	store             *store.Store
+	logStore          *logging.Store
+	log               *logging.Logger
+	aggregator        *store.Aggregator
+	notifier          *notify.Dispatcher
+	dockerQueue       *docker.Queue
 	dockerBroadcaster *docker.Broadcaster
+	streamTickets     *streamTicketStore
+	rateLimiter       *rateLimiter
+	flags             featureFlags
 }
 
 type statusWriter struct {
@@ -57,7 +61,6 @@ func (w *statusWriter) Write(body []byte) (int, error) {
 type registerRequest struct {
 	Hostname string `json:"hostname"`
 	UserID   string `json:"user_id"`
-	OwnerID  string `json:"owner_id"`
 }
 
 type authRequest struct {
@@ -155,12 +158,19 @@ func Run() error {
 	notifier := notify.NewDispatcher(dataStore, structLogger)
 	dockerQueue := docker.NewQueue(30 * time.Second)
 	dockerBroadcaster := docker.NewBroadcaster()
-	server := &Server{store: dataStore, logStore: logStore, log: structLogger, aggregator: aggregator, notifier: notifier, dockerQueue: dockerQueue, dockerBroadcaster: dockerBroadcaster}
+	flags := loadFeatureFlags()
+	server := &Server{store: dataStore, logStore: logStore, log: structLogger, aggregator: aggregator, notifier: notifier, dockerQueue: dockerQueue, dockerBroadcaster: dockerBroadcaster, streamTickets: newStreamTicketStore(), rateLimiter: newRateLimiter(), flags: flags}
 
 	// Log application startup
 	structLogger.Info(logging.CatSystem, logging.EventAppStarted,
 		fmt.Sprintf("LEM server starting version=%s", readAgentVersion()),
-		map[string]any{"data_dir": root})
+		map[string]any{
+			"data_dir":              root,
+			"fingerprint_reconnect": flags.EnableFingerprintReconnect,
+			"legacy_install":        flags.EnableLegacyInstall,
+			"remote_mutations":      flags.EnableRemoteMutations,
+			"docker_mutations":      flags.EnableDockerMutations,
+		})
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", server.handleHealth)
@@ -169,6 +179,7 @@ func Run() error {
 	mux.HandleFunc("/api/auth/me", server.handleAuthMe)
 	mux.HandleFunc("/api/auth/update-email", server.handleAuthUpdateEmail)
 	mux.HandleFunc("/api/auth/update-password", server.handleAuthUpdatePassword)
+	mux.HandleFunc("/api/auth/logout", server.handleAuthLogout)
 	mux.HandleFunc("/api/sync-config", server.handleSyncConfig)
 	mux.HandleFunc("/api/agent/version", server.handleAgentVersion)
 	mux.HandleFunc("/api/devices", server.handleDevices)
@@ -199,6 +210,7 @@ func Run() error {
 	mux.HandleFunc("/api/notifications/telegram/detect-chat", server.handleTelegramDetectChat)
 	mux.HandleFunc("/api/notifications/inbox", server.handleNotificationInbox)
 	mux.HandleFunc("/api/notifications/inbox/read", server.handleNotificationInboxRead)
+	mux.HandleFunc("/api/notifications/stream-token", server.handleNotificationStreamToken)
 	mux.HandleFunc("/api/notifications/stream", server.handleNotificationStream)
 
 	// Serve the built dashboard from the same origin when a web build is
@@ -231,7 +243,7 @@ func Run() error {
 	}
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           corsMiddleware(logging.HTTPMiddleware(structLogger, gzipMiddleware(limitBody(mux)))),
+		Handler:           securityHeadersMiddleware(corsMiddleware(csrfMiddleware(logging.HTTPMiddleware(structLogger, gzipMiddleware(limitBody(mux)))))),
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      0, // no timeout: SSE needs long-lived connections
 		IdleTimeout:       15 * time.Second,
@@ -462,6 +474,9 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.allowRate(w, r, "auth-register", 10, time.Minute) {
+		return
+	}
 	var req authRequest
 	if !s.decodeBody(w, r, &req) {
 		return
@@ -473,7 +488,7 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log.Audit(logging.CatAuth, logging.EventAuthSuccess, "user registered", map[string]any{"user_id": user.ID, "email": req.Email})
-	s.writeAuth(w, user)
+	s.writeAuth(w, r, user)
 }
 
 func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
@@ -486,6 +501,9 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.allowRate(w, r, "auth-register", 10, time.Minute) {
+		return
+	}
 	var req authRequest
 	if !s.decodeBody(w, r, &req) {
 		return
@@ -496,11 +514,12 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	s.writeAuth(w, user)
+	s.writeAuth(w, r, user)
 }
 
 func (s *Server) decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
-	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(dst); err != nil {
 		status := http.StatusBadRequest
 		if strings.Contains(err.Error(), "request body too large") {
 			status = http.StatusRequestEntityTooLarge
@@ -508,15 +527,30 @@ func (s *Server) decodeBody(w http.ResponseWriter, r *http.Request, dst any) boo
 		s.writeError(w, status, err)
 		return false
 	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			err = errors.New("request body must contain one JSON value")
+		}
+		s.writeError(w, http.StatusBadRequest, err)
+		return false
+	}
 	return true
 }
 
-func (s *Server) writeAuth(w http.ResponseWriter, user store.User) {
+func (s *Server) writeAuth(w http.ResponseWriter, r *http.Request, user store.User) {
 	session, err := s.store.CreateSession(user.ID)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	setSessionCookie(w, r, session.Token)
+	csrfToken, err := newCSRFToken()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	setCSRFCookie(w, r, csrfToken)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"token": session.Token, "owner_id": user.ID, "email": user.Email})
 }
@@ -529,16 +563,19 @@ func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	ownerID, ok := s.store.SessionOwner(token)
+	ownerID, ok := s.requireSession(w, r)
 	if !ok {
-		s.writeError(w, http.StatusUnauthorized, errors.New("invalid or expired session"))
 		return
 	}
 	user, err := s.store.UserByID(ownerID)
 	if err != nil {
 		s.writeError(w, http.StatusUnauthorized, errors.New("invalid or expired session"))
 		return
+	}
+	if _, err := r.Cookie(csrfCookieName); err != nil {
+		if csrfToken, csrfErr := newCSRFToken(); csrfErr == nil {
+			setCSRFCookie(w, r, csrfToken)
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"owner_id": user.ID, "email": user.Email})
@@ -554,10 +591,8 @@ func (s *Server) handleAuthUpdateEmail(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	ownerID, ok := s.store.SessionOwner(token)
+	ownerID, ok := s.requireSession(w, r)
 	if !ok {
-		s.writeError(w, http.StatusUnauthorized, errors.New("invalid or expired session"))
 		return
 	}
 	var req updateEmailRequest
@@ -583,10 +618,8 @@ func (s *Server) handleAuthUpdatePassword(w http.ResponseWriter, r *http.Request
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	ownerID, ok := s.store.SessionOwner(token)
+	ownerID, ok := s.requireSession(w, r)
 	if !ok {
-		s.writeError(w, http.StatusUnauthorized, errors.New("invalid or expired session"))
 		return
 	}
 	var req updatePasswordRequest
@@ -598,14 +631,34 @@ func (s *Server) handleAuthUpdatePassword(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.log.Audit(logging.CatAuth, logging.EventAuthSuccess, "profile password updated", map[string]any{"user_id": ownerID})
+	clearSessionCookie(w, r)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
+	setCORSHeaders(w)
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	token := s.sessionToken(r)
+	if token == "" {
+		clearSessionCookie(w, r)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err := s.store.RevokeSession(token); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	clearSessionCookie(w, r)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleSyncConfig(w http.ResponseWriter, r *http.Request) {
 	setCORSHeaders(w)
-	ownerID := s.ownerID(r)
-	if ownerID == "" {
-		s.writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
+	ownerID, ok := s.requireSession(w, r)
+	if !ok {
 		return
 	}
 	switch r.Method {
@@ -660,7 +713,7 @@ func (s *Server) handleDeviceSyncConfig(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
 		return
 	}
-	if device.DeviceToken != token {
+	if !s.validDeviceTokenValue(deviceID, token) {
 		s.writeError(w, http.StatusUnauthorized, errors.New("invalid device token"))
 		return
 	}
@@ -674,18 +727,8 @@ func (s *Server) handleDeviceSyncConfig(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) ownerID(r *http.Request) string {
-	if token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "); token != "" {
-		if ownerID, ok := s.store.SessionOwner(token); ok {
-			return ownerID
-		}
-	}
-	if ownerID := strings.TrimSpace(r.Header.Get("X-LEM-Anonymous-ID")); ownerID != "" {
-		return ownerID
-	}
-	if ownerID := strings.TrimSpace(r.URL.Query().Get("owner_id")); ownerID != "" {
-		return ownerID
-	}
-	return "anonymous"
+	ownerID, _ := s.sessionOwner(r)
+	return ownerID
 }
 
 func scheme(r *http.Request) string {
@@ -706,13 +749,21 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		devices, err := s.store.ListDeviceSummariesForOwner(s.ownerID(r))
+		ownerID, ok := s.requireSession(w, r)
+		if !ok {
+			return
+		}
+		devices, err := s.store.ListDeviceSummariesForOwner(ownerID)
 		if err != nil {
 			s.writeError(w, http.StatusInternalServerError, err)
 			return
 		}
 		_ = json.NewEncoder(w).Encode(devices)
 	case http.MethodPost:
+		ownerID, ok := s.requireSession(w, r)
+		if !ok {
+			return
+		}
 		var req registerRequest
 		if !s.decodeBody(w, r, &req) {
 			return
@@ -721,15 +772,12 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusBadRequest, errors.New("hostname is required"))
 			return
 		}
-		if req.OwnerID == "" {
-			req.OwnerID = s.ownerID(r)
-		}
-		device, err := s.store.RegisterDevice(req.Hostname, req.UserID, req.OwnerID, "")
+		device, err := s.store.RegisterDevice(req.Hostname, req.UserID, ownerID, "")
 		if err != nil {
 			s.writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		s.log.Audit(logging.CatDevice, logging.EventDeviceRegistered, "device registered", map[string]any{"device_id": device.ID, "hostname": req.Hostname, "owner_id": req.OwnerID})
+		s.log.Audit(logging.CatDevice, logging.EventDeviceRegistered, "device registered", map[string]any{"device_id": device.ID, "hostname": req.Hostname, "owner_id": ownerID})
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(device)
@@ -894,6 +942,10 @@ func (s *Server) handleAppInstall(w http.ResponseWriter, r *http.Request, device
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.flags.EnableRemoteMutations {
+		s.writeError(w, http.StatusServiceUnavailable, errors.New("remote mutations are disabled"))
+		return
+	}
 	device, err := s.store.GetDevice(deviceID)
 	if err != nil || device.OwnerID != s.ownerID(r) {
 		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
@@ -937,6 +989,10 @@ func (s *Server) handleFileDelete(w http.ResponseWriter, r *http.Request, device
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.flags.EnableRemoteMutations {
+		s.writeError(w, http.StatusServiceUnavailable, errors.New("remote mutations are disabled"))
+		return
+	}
 	device, err := s.store.GetDevice(deviceID)
 	if err != nil || device.OwnerID != s.ownerID(r) {
 		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
@@ -970,6 +1026,15 @@ func (s *Server) handleFileDelete(w http.ResponseWriter, r *http.Request, device
 	_ = json.NewEncoder(w).Encode(command)
 }
 
+func isRemoteMutationCommand(cmdType string) bool {
+	switch cmdType {
+	case "install_app", "restore_saves", "exclude_file":
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request, deviceID string) {
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -983,7 +1048,18 @@ func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request, deviceID
 		s.writeError(w, http.StatusUnauthorized, errors.New("invalid device token"))
 		return
 	}
-	_ = json.NewEncoder(w).Encode(s.store.ListPendingCommands(deviceID))
+	pending := s.store.ListPendingCommands(deviceID)
+	allowed := make([]store.DeviceCommand, 0, len(pending))
+	for _, cmd := range pending {
+		if !s.flags.EnableRemoteMutations && isRemoteMutationCommand(cmd.Type) {
+			if err := s.store.CompleteCommand(cmd.ID, deviceID, "failed", "remote mutations are disabled"); err != nil && s.log != nil {
+				s.log.Warn(logging.CatCommand, logging.EventCmdRejected, "queued remote mutation rejected by feature flag", map[string]any{"command_id": cmd.ID, "device_id": deviceID, "type": cmd.Type})
+			}
+			continue
+		}
+		allowed = append(allowed, cmd)
+	}
+	_ = json.NewEncoder(w).Encode(allowed)
 }
 
 func (s *Server) handleCommandStatus(w http.ResponseWriter, r *http.Request, deviceID, commandID string) {
@@ -1030,6 +1106,10 @@ func (s *Server) handleCommandResult(w http.ResponseWriter, r *http.Request, dev
 		s.writeError(w, http.StatusBadRequest, errors.New("invalid command status"))
 		return
 	}
+	if len(req.Message) > 64<<10 {
+		s.writeError(w, http.StatusRequestEntityTooLarge, errors.New("command result is too large"))
+		return
+	}
 
 	// Look up command type before completing (for special post-processing)
 	cmdType, _ := s.store.GetCommandType(commandID, deviceID)
@@ -1063,6 +1143,10 @@ func (s *Server) handleRestoreSaves(w http.ResponseWriter, r *http.Request, devi
 	}
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.flags.EnableRemoteMutations {
+		s.writeError(w, http.StatusServiceUnavailable, errors.New("remote mutations are disabled"))
 		return
 	}
 	device, err := s.store.GetDevice(deviceID)
@@ -1156,7 +1240,13 @@ func (s *Server) validDeviceTokenValue(deviceID, token string) bool {
 	if err != nil || token == "" || device.DeviceToken == "" {
 		return false
 	}
-	return subtle.ConstantTimeCompare([]byte(device.DeviceToken), []byte(token)) == 1
+	stored := device.DeviceToken
+	if isDeviceTokenDigest(stored) {
+		return subtle.ConstantTimeCompare([]byte(stored), []byte(deviceTokenDigest(token))) == 1
+	}
+	// Compatibility for databases that have not been migrated yet. New writes
+	// always store only the hash above.
+	return subtle.ConstantTimeCompare([]byte(stored), []byte(token)) == 1
 }
 
 func (s *Server) handleTelemetry(w http.ResponseWriter, r *http.Request, deviceID string) {
@@ -1353,11 +1443,11 @@ func (s *Server) handleRetention(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.log.Audit(logging.CatSystem, logging.EventAppStarted, "retention settings updated", map[string]any{
-			"owner_id": ownerID,
+			"owner_id":  ownerID,
 			"raw_hours": rs.RawHours,
-			"1m_days": rs.Resolution1mDays,
-			"5m_days": rs.Resolution5mDays,
-			"1h_days": rs.Resolution1hDays,
+			"1m_days":   rs.Resolution1mDays,
+			"5m_days":   rs.Resolution5mDays,
+			"1h_days":   rs.Resolution1hDays,
 		})
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(rs)
@@ -1403,9 +1493,8 @@ func (s *Server) handleDeleteLogs(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	ownerID := s.ownerID(r)
-	if ownerID == "" {
-		s.writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
+	ownerID, ok := s.requireSession(w, r)
+	if !ok {
 		return
 	}
 	days := 5
@@ -1414,7 +1503,7 @@ func (s *Server) handleDeleteLogs(w http.ResponseWriter, r *http.Request) {
 			days = parsed
 		}
 	}
-	deleted, err := s.store.CleanupOldLogs(days)
+	deleted, err := s.store.CleanupOldLogsForOwner(ownerID, days)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
@@ -1505,9 +1594,22 @@ func (s *Server) handleDeviceFiles(w http.ResponseWriter, r *http.Request, devic
 }
 
 func setCORSHeaders(w http.ResponseWriter) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	origin := strings.TrimSpace(os.Getenv("LEM_CORS_ALLOWED_ORIGIN"))
+	if strings.Contains(origin, "*") {
+		origin = ""
+	}
+	if origin != "" {
+		if parsed, err := neturl.Parse(origin); err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
+			origin = ""
+		}
+	}
+	if origin != "" {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+		w.Header().Add("Vary", "Origin")
+	}
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-LEM-Anonymous-ID")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-LEM-CSRF")
 }
 
 func (s *Server) handleAgentDownload(w http.ResponseWriter, r *http.Request) {
@@ -1535,6 +1637,14 @@ func (s *Server) handleAgentInstallScript(w http.ResponseWriter, r *http.Request
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.flags.EnableLegacyInstall {
+		s.writeError(w, http.StatusGone, errors.New("legacy installer is disabled"))
+		return
+	}
+	ownerID, ok := s.requireSession(w, r)
+	if !ok {
+		return
+	}
 	setCORSHeaders(w)
 	userID := r.URL.Query().Get("user")
 	if userID == "" {
@@ -1543,10 +1653,6 @@ func (s *Server) handleAgentInstallScript(w http.ResponseWriter, r *http.Request
 	hostname := r.URL.Query().Get("hostname")
 	if hostname == "" {
 		hostname = "$(hostname)"
-	}
-	ownerID := r.URL.Query().Get("owner_id")
-	if ownerID == "" {
-		ownerID = s.ownerID(r)
 	}
 	device, err := s.store.RegisterDevice(hostname, userID, ownerID, "")
 	if err != nil {
@@ -1659,8 +1765,11 @@ func (s *Server) handleEnrollToken(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.allowRate(w, r, "enroll-token", 20, time.Minute) {
+		return
+	}
 	ownerID := s.ownerID(r)
-	if ownerID == "" || ownerID == "anonymous" {
+	if ownerID == "" {
 		s.writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
 		return
 	}
@@ -1732,6 +1841,9 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.allowRate(w, r, "enroll", 30, time.Minute) {
+		return
+	}
 	var req enrollRequest
 	if !s.decodeBody(w, r, &req) {
 		return
@@ -1780,39 +1892,9 @@ func (s *Server) handleReconnect(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-	var req reconnectRequest
-	if !s.decodeBody(w, r, &req) {
-		return
-	}
-	if req.Fingerprint == "" {
-		s.writeError(w, http.StatusBadRequest, errors.New("fingerprint required"))
-		return
-	}
-
-	device, err := s.store.FindDeviceByFingerprint(req.Fingerprint)
-	if err != nil || device.ID == "" {
-		// No device with this fingerprint — agent must enroll normally.
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(reconnectResponse{Reconnected: false})
-		return
-	}
-
-	// Update hostname if provided.
-	if req.Hostname != "" && device.Hostname != req.Hostname {
-		_ = s.store.UpdateDeviceHostname(device.ID, req.Hostname)
-	}
-
-	s.log.Audit(logging.CatAgent, logging.EventAgentReconnect, "device reconnected", map[string]any{"device_id": device.ID, "hostname": device.Hostname})
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(reconnectResponse{
-		DeviceID:    device.ID,
-		DeviceToken: device.DeviceToken,
-		Reconnected: true,
-	})
+	// A hardware fingerprint is observable metadata, not an authenticator.
+	// Recovery therefore always requires a fresh, single-use enrollment token.
+	s.writeError(w, http.StatusGone, errors.New("fingerprint reconnect is permanently disabled; enroll again"))
 }
 
 func (s *Server) handleChecksums(w http.ResponseWriter, r *http.Request) {
@@ -1843,9 +1925,13 @@ exit 1
 
 func (s *Server) writeError(w http.ResponseWriter, status int, err error) {
 	setCORSHeaders(w)
+	message := err.Error()
+	if status >= http.StatusInternalServerError {
+		message = "internal server error"
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
 // =============================================================================
@@ -1862,8 +1948,13 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	ownerID, ok := s.requireSession(w, r)
+	if !ok {
+		return
+	}
 
 	params := logging.QueryParams{
+		OwnerID:       ownerID,
 		Level:         r.URL.Query().Get("level"),
 		Category:      r.URL.Query().Get("category"),
 		Event:         r.URL.Query().Get("event"),
@@ -1906,6 +1997,10 @@ func (s *Server) handleLogByID(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	ownerID, ok := s.requireSession(w, r)
+	if !ok {
+		return
+	}
 
 	// Extract ID from path: /api/logs/{id}
 	idStr := strings.TrimPrefix(r.URL.Path, "/api/logs/")
@@ -1920,7 +2015,7 @@ func (s *Server) handleLogByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entry, err := s.logStore.GetByID(id)
+	entry, err := s.logStore.GetByIDForOwner(id, ownerID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			s.writeError(w, http.StatusNotFound, errors.New("log entry not found"))
@@ -1944,8 +2039,12 @@ func (s *Server) handleLogStats(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	ownerID, ok := s.requireSession(w, r)
+	if !ok {
+		return
+	}
 
-	stats, err := s.logStore.Stats()
+	stats, err := s.logStore.StatsForOwner(ownerID)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
@@ -1965,6 +2064,10 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	ownerID, ok := s.requireSession(w, r)
+	if !ok {
+		return
+	}
 
 	limit := 100
 	offset := 0
@@ -1979,7 +2082,7 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	result, err := s.logStore.GetAuditTrail(limit, offset)
+	result, err := s.logStore.GetAuditTrailForOwner(ownerID, limit, offset)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
@@ -1999,6 +2102,10 @@ func (s *Server) handleErrors(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	ownerID, ok := s.requireSession(w, r)
+	if !ok {
+		return
+	}
 
 	limit := 100
 	offset := 0
@@ -2013,7 +2120,7 @@ func (s *Server) handleErrors(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	result, err := s.logStore.GetErrors(limit, offset)
+	result, err := s.logStore.GetErrorsForOwner(ownerID, limit, offset)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
@@ -2189,15 +2296,9 @@ func (s *Server) handleDeviceAttachmentByID(w http.ResponseWriter, r *http.Reque
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	ownerID := s.ownerID(r)
-	// Accept bearer token via query param for image/tag requests where
-	// the browser cannot set the Authorization header.
-	if ownerID == "anonymous" || ownerID == "" {
-		if token := r.URL.Query().Get("token"); token != "" {
-			if oid, ok := s.store.SessionOwner(token); ok {
-				ownerID = oid
-			}
-		}
+	ownerID, ok := s.requireSession(w, r)
+	if !ok {
+		return
 	}
 	device, err := s.store.GetDevice(deviceID)
 	if err != nil {
@@ -2247,10 +2348,10 @@ func (s *Server) handleDeviceAttachmentByID(w http.ResponseWriter, r *http.Reque
 // ──────────────────────────────────────────────────────────────────────────────
 
 type notificationConfigRequest struct {
-	Provider string            `json:"provider"`
-	Enabled  bool              `json:"enabled"`
-	Events   []string          `json:"events"`
-	Config   json.RawMessage   `json:"config"`
+	Provider string          `json:"provider"`
+	Enabled  bool            `json:"enabled"`
+	Events   []string        `json:"events"`
+	Config   json.RawMessage `json:"config"`
 }
 
 // maskedConfig returns the config with non-public fields replaced by "***".
@@ -2304,11 +2405,11 @@ func mergeConfigs(existing, incoming json.RawMessage) json.RawMessage {
 // GET /api/notifications/config. Secrets are masked; configured indicates
 // whether a config has been saved (even if masked).
 type notificationConfigResponse struct {
-	Provider  string          `json:"provider"`
-	Enabled   bool            `json:"enabled"`
-	Events    []string        `json:"events"`
-	Config    json.RawMessage `json:"config"`
-	Configured bool           `json:"configured"`
+	Provider   string          `json:"provider"`
+	Enabled    bool            `json:"enabled"`
+	Events     []string        `json:"events"`
+	Config     json.RawMessage `json:"config"`
+	Configured bool            `json:"configured"`
 }
 
 func (s *Server) handleNotificationConfig(w http.ResponseWriter, r *http.Request) {
@@ -2440,6 +2541,9 @@ func (s *Server) handleNotificationTest(w http.ResponseWriter, r *http.Request) 
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.allowRate(w, r, "notification-test", 10, time.Minute) {
+		return
+	}
 	ownerID := s.ownerID(r)
 	if ownerID == "" {
 		s.writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
@@ -2501,6 +2605,9 @@ func (s *Server) handleTelegramDetectChat(w http.ResponseWriter, r *http.Request
 	}
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.allowRate(w, r, "telegram-detect", 10, time.Minute) {
 		return
 	}
 	ownerID := s.ownerID(r)
@@ -2593,6 +2700,28 @@ func (s *Server) handleNotificationInboxRead(w http.ResponseWriter, r *http.Requ
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) handleNotificationStreamToken(w http.ResponseWriter, r *http.Request) {
+	setCORSHeaders(w)
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	ownerID, ok := s.requireSession(w, r)
+	if !ok || s.streamTickets == nil {
+		if ok {
+			s.writeError(w, http.StatusServiceUnavailable, errors.New("stream tickets unavailable"))
+		}
+		return
+	}
+	ticket, err := s.streamTickets.issue(ownerID)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"ticket": ticket})
+}
+
 // handleNotificationStream is an SSE endpoint that streams notification events in real-time.
 func (s *Server) handleNotificationStream(w http.ResponseWriter, r *http.Request) {
 	setCORSHeaders(w)
@@ -2602,8 +2731,9 @@ func (s *Server) handleNotificationStream(w http.ResponseWriter, r *http.Request
 	}
 
 	ownerID := s.ownerID(r)
-	if ownerID == "" {
-		s.writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
+	ticket := strings.TrimSpace(r.URL.Query().Get("ticket"))
+	if ownerID == "" || s.streamTickets == nil || !s.streamTickets.consume(ticket, ownerID) {
+		s.writeError(w, http.StatusUnauthorized, errors.New("invalid stream ticket"))
 		return
 	}
 
@@ -2641,6 +2771,15 @@ func (s *Server) handleNotificationStream(w http.ResponseWriter, r *http.Request
 
 // --- Docker Management Handlers ---
 
+func dockerRequestIsReadOnly(reqType string) bool {
+	switch reqType {
+	case "list", "stats", "logs", "compose_read", "compose_ps", "compose_logs":
+		return true
+	default:
+		return false
+	}
+}
+
 // enqueueDockerRequest validates ownership, validates the type, enqueues, and returns the ID.
 func (s *Server) enqueueDockerRequest(w http.ResponseWriter, r *http.Request, deviceID string, req dockerRequestUI) {
 	device, err := s.store.GetDevice(deviceID)
@@ -2655,13 +2794,17 @@ func (s *Server) enqueueDockerRequest(w http.ResponseWriter, r *http.Request, de
 	validTypes := map[string]bool{
 		"list": true, "stats": true, "logs": true,
 		"start": true, "stop": true, "restart": true, "kill": true, "remove": true,
-		"exec": true,
+		"exec":         true,
 		"compose_read": true, "compose_write": true,
 		"compose_up": true, "compose_down": true, "compose_ps": true, "compose_logs": true,
 		"prune_system": true, "prune_image": true, "prune_container": true, "prune_network": true,
 	}
 	if !validTypes[req.Type] {
 		s.writeError(w, http.StatusBadRequest, errors.New("unsupported docker type"))
+		return
+	}
+	if !s.flags.EnableDockerMutations && !dockerRequestIsReadOnly(req.Type) {
+		s.writeError(w, http.StatusServiceUnavailable, errors.New("Docker mutations are disabled"))
 		return
 	}
 	reqID := s.dockerQueue.EnqueueForDevice(deviceID, req.Type, req.Target, req.Payload)
@@ -2767,7 +2910,7 @@ func (s *Server) handleDockerGetResult(w http.ResponseWriter, r *http.Request, d
 		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
 		return
 	}
-	result := s.dockerQueue.GetAndConsumeResult(requestID)
+	result := s.dockerQueue.GetAndConsumeResult(deviceID, requestID)
 	if result == nil {
 		w.WriteHeader(http.StatusAccepted) // 202 = still pending
 		return
@@ -2825,7 +2968,7 @@ func (s *Server) handleDockerStream(w http.ResponseWriter, r *http.Request, devi
 	defer s.dockerBroadcaster.Unsubscribe(deviceID, ch)
 
 	// Send current state immediately
- currentState := s.getDockerState(deviceID)
+	currentState := s.getDockerState(deviceID)
 	if data, err := json.Marshal(currentState); err == nil {
 		fmt.Fprintf(w, "data: %s\n\n", data)
 		flusher.Flush()
@@ -2895,7 +3038,16 @@ func (s *Server) handleDockerPostResult(w http.ResponseWriter, r *http.Request, 
 	if !s.decodeBody(w, r, &req) {
 		return
 	}
+	if req.Status != "completed" && req.Status != "failed" {
+		s.writeError(w, http.StatusBadRequest, errors.New("invalid docker result status"))
+		return
+	}
+	if len(req.Message) > 64<<10 {
+		s.writeError(w, http.StatusRequestEntityTooLarge, errors.New("docker result is too large"))
+		return
+	}
 	s.dockerQueue.StoreResult(&docker.Response{
+		DeviceID:  deviceID,
 		RequestID: req.RequestID,
 		Status:    req.Status,
 		Message:   req.Message,

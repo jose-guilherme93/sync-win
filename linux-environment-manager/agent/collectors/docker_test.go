@@ -45,7 +45,7 @@ func TestStripDockerStreamHeaders(t *testing.T) {
 			want:  "hello world",
 		},
 		{
-			name: "single frame",
+			name:  "single frame",
 			input: append([]byte{1, 0, 0, 0, 0, 0, 0, 5}, []byte("hello")...),
 			want:  "hello",
 		},
@@ -263,6 +263,36 @@ func TestDockerExecCreateInvalidID(t *testing.T) {
 	_, err := DockerExecCreate("not-valid!!!", []string{"ls"})
 	if err == nil {
 		t.Error("expected error for invalid container ID")
+	}
+}
+
+func TestComposePathAllowlist(t *testing.T) {
+	for _, path := range []string{"relative/compose.yml", "/etc/docker-compose.yml", "/home/user/../etc/compose.yml"} {
+		if validComposePath(path) {
+			t.Errorf("path %q should be rejected", path)
+		}
+	}
+	if !validComposePath("/home/user/compose.yml") {
+		t.Error("approved compose path should be accepted")
+	}
+}
+
+func TestDockerOutputCap(t *testing.T) {
+	if got := capDockerOutput(string(make([]byte, maxDockerOutputBytes+1))); len(got) != maxDockerOutputBytes {
+		t.Fatalf("capped output length = %d", len(got))
+	}
+}
+
+func TestDockerExecArgumentLimits(t *testing.T) {
+	args := make([]string, 33)
+	for i := range args {
+		args[i] = "echo"
+	}
+	if _, err := DockerExecCreate("abc123", args); err == nil {
+		t.Fatal("too many exec arguments should be rejected")
+	}
+	if _, err := DockerExecCreate("abc123", []string{"echo", "x\x00y"}); err == nil {
+		t.Fatal("NUL exec argument should be rejected")
 	}
 }
 

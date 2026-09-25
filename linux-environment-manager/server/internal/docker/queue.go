@@ -3,6 +3,7 @@ package docker
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -19,6 +20,7 @@ type Request struct {
 
 // Response represents the result of a Docker operation executed by the agent.
 type Response struct {
+	DeviceID  string    `json:"device_id"`
 	RequestID string    `json:"request_id"`
 	Status    string    `json:"status"`
 	Message   string    `json:"message,omitempty"`
@@ -28,18 +30,22 @@ type Response struct {
 // Queue is a thread-safe in-memory request/response store for Docker operations.
 // Requests are ephemeral with a configurable TTL; results are stored until consumed.
 type Queue struct {
-	mu      sync.RWMutex
-	pending map[string][]*Request // deviceID → pending requests
-	results map[string]*Response  // requestID → result
-	ttl     time.Duration
+	mu           sync.RWMutex
+	pending      map[string][]*Request // deviceID → pending requests
+	results      map[string]*Response  // requestID → result
+	owners       map[string]string     // requestID → deviceID
+	ownerCreated map[string]time.Time  // requestID → enqueue time
+	ttl          time.Duration
 }
 
 // NewQueue creates a new Docker request queue.
 func NewQueue(ttl time.Duration) *Queue {
 	return &Queue{
-		pending: make(map[string][]*Request),
-		results: make(map[string]*Response),
-		ttl:     ttl,
+		pending:      make(map[string][]*Request),
+		results:      make(map[string]*Response),
+		owners:       make(map[string]string),
+		ownerCreated: make(map[string]time.Time),
+		ttl:          ttl,
 	}
 }
 
@@ -54,6 +60,8 @@ func (q *Queue) Enqueue(req *Request) string {
 		req.CreatedAt = time.Now().UTC()
 	}
 	q.pending[req.Target] = append(q.pending[req.Target], req) // Target is deviceID for pending map
+	q.owners[req.ID] = req.Target
+	q.ownerCreated[req.ID] = req.CreatedAt
 	return req.ID
 }
 
@@ -69,6 +77,8 @@ func (q *Queue) EnqueueForDevice(deviceID, reqType, target, payload string) stri
 		CreatedAt: time.Now().UTC(),
 	}
 	q.pending[deviceID] = append(q.pending[deviceID], req)
+	q.owners[req.ID] = deviceID
+	q.ownerCreated[req.ID] = req.CreatedAt
 	return req.ID
 }
 
@@ -86,6 +96,9 @@ func (q *Queue) DequeueAll(deviceID string) []*Request {
 func (q *Queue) StoreResult(resp *Response) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	if resp == nil || resp.RequestID == "" || q.owners[resp.RequestID] != resp.DeviceID {
+		return
+	}
 	if resp.CreatedAt.IsZero() {
 		resp.CreatedAt = time.Now().UTC()
 	}
@@ -93,21 +106,27 @@ func (q *Queue) StoreResult(resp *Response) {
 }
 
 // GetResult returns the result for a request, or nil if not yet available.
-func (q *Queue) GetResult(requestID string) *Response {
+func (q *Queue) GetResult(deviceID, requestID string) *Response {
 	q.mu.RLock()
 	defer q.mu.RUnlock()
-	return q.results[requestID]
+	resp := q.results[requestID]
+	if resp == nil || resp.DeviceID != deviceID {
+		return nil
+	}
+	return resp
 }
 
 // GetAndConsumeResult returns the result and removes it from the store.
-func (q *Queue) GetAndConsumeResult(requestID string) *Response {
+func (q *Queue) GetAndConsumeResult(deviceID, requestID string) *Response {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	resp, ok := q.results[requestID]
-	if !ok {
+	if !ok || resp.DeviceID != deviceID {
 		return nil
 	}
 	delete(q.results, requestID)
+	delete(q.owners, requestID)
+	delete(q.ownerCreated, requestID)
 	return resp
 }
 
@@ -124,6 +143,9 @@ func (q *Queue) Cleanup() {
 		for _, req := range requests {
 			if now.Sub(req.CreatedAt) < q.ttl {
 				alive = append(alive, req)
+			} else {
+				delete(q.owners, req.ID)
+				delete(q.ownerCreated, req.ID)
 			}
 		}
 		if len(alive) == 0 {
@@ -137,6 +159,14 @@ func (q *Queue) Cleanup() {
 	for id, resp := range q.results {
 		if now.Sub(resp.CreatedAt) > 2*q.ttl {
 			delete(q.results, id)
+			delete(q.owners, id)
+			delete(q.ownerCreated, id)
+		}
+	}
+	for id, created := range q.ownerCreated {
+		if now.Sub(created) > 2*q.ttl {
+			delete(q.owners, id)
+			delete(q.ownerCreated, id)
 		}
 	}
 }
@@ -149,7 +179,9 @@ func (q *Queue) PendingCount(deviceID string) int {
 }
 
 func newRequestID() string {
-	b := make([]byte, 8)
-	_, _ = rand.Read(b)
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Sprintf("secure random source failed: %v", err))
+	}
 	return "dreq-" + hex.EncodeToString(b)
 }

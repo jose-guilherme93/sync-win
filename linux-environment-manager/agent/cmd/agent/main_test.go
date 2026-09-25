@@ -32,8 +32,8 @@ func TestLocalPolicyControlsCommands(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
 
 	policy := loadLocalPolicy()
-	if !policy.AllowInstallApp || !policy.AllowExcludeFile {
-		t.Fatalf("defaults must allow both command types, got %#v", policy)
+	if policy.AllowInstallApp || policy.AllowExcludeFile || policy.AllowDockerExec || policy.AllowDockerPrune {
+		t.Fatalf("defaults must be safe, got %#v", policy)
 	}
 
 	configDir := filepath.Join(home, ".config", "lem")
@@ -51,8 +51,23 @@ func TestLocalPolicyControlsCommands(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(configDir, "policy.json"), []byte(`{not json`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if policy = loadLocalPolicy(); !policy.AllowInstallApp {
-		t.Fatal("malformed policy must fall back to defaults")
+	if policy = loadLocalPolicy(); policy.AllowInstallApp || !policy.AllowDockerRead {
+		t.Fatal("malformed policy must fall back to safe defaults")
+	}
+}
+
+func TestDockerPolicyDefaults(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	policy := loadLocalPolicy()
+	if !dockerRequestAllowed(policy, "list") {
+		t.Fatal("docker read should be allowed by default")
+	}
+	for _, reqType := range []string{"start", "exec", "prune_system", "compose_write"} {
+		if dockerRequestAllowed(policy, reqType) {
+			t.Errorf("%s should be disabled by default", reqType)
+		}
 	}
 }
 

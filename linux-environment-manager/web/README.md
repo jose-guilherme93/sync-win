@@ -50,7 +50,8 @@ Output goes to `dist/`. In production, the Go server serves this directory from 
 ## Architecture notes
 
 - The dashboard is account-first: the entry screen is sign in / create account.
-- All API calls use Bearer token authentication.
+- Authentication uses the server's HttpOnly `lem_session` cookie; mutating requests include the CSRF header through `apiFetch`.
+- A short-lived, owner-bound ticket is used for the notification SSE stream.
 - The dashboard polls the server for device updates and telemetry.
 - Large app inventories use lazy loading and search to keep interactions smooth.
 - Telemetry charts update in real-time with a 60-second cache.

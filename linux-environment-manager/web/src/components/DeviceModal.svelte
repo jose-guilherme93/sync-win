@@ -3,7 +3,7 @@
   import SystemMetrics from './SystemMetrics.svelte'
   import DockerTab from './DockerTab.svelte'
   import SecurityTab from './SecurityTab.svelte'
-  import { serverBase } from '../lib/api'
+  import { apiFetch, serverBase } from '../lib/api'
 
   type AppInfo = { name: string; version: string; source: string; path?: string }
 
@@ -94,8 +94,9 @@
   export let initialFiles: PreferenceFile[] = []
 
   const dispatch = createEventDispatcher()
-  const authToken = localStorage.getItem('lem-auth-token') || ''
-  const attAuth = authToken ? `?token=${encodeURIComponent(authToken)}` : ''
+  // Attachment previews use the HttpOnly session cookie; do not put bearer
+  // tokens in URLs where they can leak through history or proxy logs.
+  const attAuth = ''
 
   const TAB_NAMES = ['system', 'files', 'apps', 'saves', 'docker', 'security', 'notes'] as const
   type TabName = (typeof TAB_NAMES)[number]
@@ -262,7 +263,7 @@
   async function loadFiles() {
     filesLoading = true
     try {
-      const response = await fetch(`${serverBase}/api/devices/${device.id}`, {
+      const response = await apiFetch(`${serverBase}/api/devices/${device.id}`, {
         headers: authHeaders
       })
       if (!response.ok) throw new Error(`${response.status}`)
@@ -280,7 +281,7 @@
     appsLoading = true
     appsError = ''
     try {
-      const response = await fetch(`${serverBase}/api/devices/${device.id}/apps`, {
+      const response = await apiFetch(`${serverBase}/api/devices/${device.id}/apps`, {
         headers: authHeaders
       })
       if (!response.ok) throw new Error(`${response.status}`)
@@ -304,7 +305,7 @@
     savesLoading = true
     savesError = ''
     try {
-      const response = await fetch(`${serverBase}/api/devices/${device.id}`, {
+      const response = await apiFetch(`${serverBase}/api/devices/${device.id}`, {
         headers: authHeaders
       })
       if (!response.ok) throw new Error(`${response.status}`)
@@ -348,7 +349,7 @@
       return
     }
     try {
-      const response = await fetch(`${serverBase}/api/devices/${device.id}/apps?action=install`, {
+      const response = await apiFetch(`${serverBase}/api/devices/${device.id}/apps?action=install`, {
         method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({ source: app.source, name: app.name })
       })
@@ -362,7 +363,7 @@
   async function excludeFile(file: PreferenceFile) {
     if (!window.confirm(`Exclude ${file.filename} from synchronization?`)) return
     try {
-      const response = await fetch(`${serverBase}/api/devices/${device.id}/files/${file.id}`, {
+      const response = await apiFetch(`${serverBase}/api/devices/${device.id}/files/${file.id}`, {
         method: 'DELETE',
         headers: authHeaders
       })
@@ -377,7 +378,7 @@
   async function deleteDevice() {
     if (!window.confirm(`Remove ${device.hostname} and all synchronized data?`)) return
     try {
-      const response = await fetch(`${serverBase}/api/devices/${device.id}`, { method: 'DELETE', headers: authHeaders })
+      const response = await apiFetch(`${serverBase}/api/devices/${device.id}`, { method: 'DELETE', headers: authHeaders })
       if (!response.ok) throw new Error(`${response.status}`)
       dispatch('removed')
       close()
@@ -471,7 +472,7 @@
   async function loadNotes() {
     notesLoading = true
     try {
-      const response = await fetch(`${serverBase}/api/devices/${device.id}/notes`, { headers: authHeaders })
+      const response = await apiFetch(`${serverBase}/api/devices/${device.id}/notes`, { headers: authHeaders })
       if (!response.ok) throw new Error(`${response.status}`)
       notes = await response.json()
       if (!Array.isArray(notes)) notes = []
@@ -484,7 +485,7 @@
 
   async function loadAttachments() {
     try {
-      const response = await fetch(`${serverBase}/api/devices/${device.id}/attachments`, { headers: authHeaders })
+      const response = await apiFetch(`${serverBase}/api/devices/${device.id}/attachments`, { headers: authHeaders })
       if (!response.ok) throw new Error(`${response.status}`)
       attachments = await response.json()
       if (!Array.isArray(attachments)) attachments = []
@@ -497,7 +498,7 @@
     if (!noteContent.trim() || noteSaving) return
     noteSaving = true
     try {
-      const response = await fetch(`${serverBase}/api/devices/${device.id}/notes`, {
+      const response = await apiFetch(`${serverBase}/api/devices/${device.id}/notes`, {
         method: 'POST',
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: noteContent.trim() })
@@ -515,7 +516,7 @@
   async function updateNote(noteId: string) {
     if (!editNoteContent.trim()) return
     try {
-      const response = await fetch(`${serverBase}/api/devices/${device.id}/notes/${noteId}`, {
+      const response = await apiFetch(`${serverBase}/api/devices/${device.id}/notes/${noteId}`, {
         method: 'PUT',
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: editNoteContent.trim() })
@@ -531,7 +532,7 @@
 
   async function deleteNote(noteId: string) {
     try {
-      const response = await fetch(`${serverBase}/api/devices/${device.id}/notes/${noteId}`, {
+      const response = await apiFetch(`${serverBase}/api/devices/${device.id}/notes/${noteId}`, {
         method: 'DELETE',
         headers: authHeaders
       })
@@ -561,7 +562,7 @@
       if (uploadNoteContent.trim()) {
         formData.append('content', uploadNoteContent.trim())
       }
-      const response = await fetch(`${serverBase}/api/devices/${device.id}/attachments`, {
+      const response = await apiFetch(`${serverBase}/api/devices/${device.id}/attachments`, {
         method: 'POST',
         headers: authHeaders,
         body: formData
@@ -584,7 +585,7 @@
 
   async function deleteAttachment(attId: string) {
     try {
-      const response = await fetch(`${serverBase}/api/devices/${device.id}/attachments/${attId}`, {
+      const response = await apiFetch(`${serverBase}/api/devices/${device.id}/attachments/${attId}`, {
         method: 'DELETE',
         headers: authHeaders
       })

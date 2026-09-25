@@ -12,7 +12,7 @@
     Legend
   } from 'chart.js'
   import { setHistoryFromAPI, addTelemetryPoint, deviceHistoryStore, type ChartPoint } from '../lib/telemetry-store'
-  import { serverBase } from '../lib/api'
+  import { apiFetch, serverBase } from '../lib/api'
 
   Chart.register(LineController, LineElement, PointElement, LinearScale, CategoryScale, Filler, Tooltip, Legend)
 
@@ -310,7 +310,7 @@
   async function loadInitialHistory() {
     loadingHistory = true
     try {
-      const response = await fetch(`${serverBase}/api/devices/${device.id}/telemetry/history?limit=${MAX_POINTS}`, {
+      const response = await apiFetch(`${serverBase}/api/devices/${device.id}/telemetry/history?limit=${MAX_POINTS}`, {
         headers: authHeaders
       })
       if (!response.ok) throw new Error(`${response.status}`)
@@ -365,7 +365,7 @@
   async function refreshLogs() {
     loadingLogs = true
     try {
-      const response = await fetch(`${serverBase}/api/devices/${device.id}/detail`, {
+      const response = await apiFetch(`${serverBase}/api/devices/${device.id}/detail`, {
         headers: authHeaders
       })
       if (!response.ok) throw new Error(`${response.status}`)

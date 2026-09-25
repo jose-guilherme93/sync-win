@@ -99,6 +99,15 @@ func TestRedactMetadata(t *testing.T) {
 	}
 }
 
+func TestRedactInstallPath(t *testing.T) {
+	if got := redactPath("/install/secret-enrollment-token"); got != "/install/[REDACTED]" {
+		t.Fatalf("redactPath returned %q", got)
+	}
+	if got := redactPath("/api/devices/dev-1"); got != "/api/devices/dev-1" {
+		t.Fatalf("non-secret path changed to %q", got)
+	}
+}
+
 func TestDeduplication(t *testing.T) {
 	var flushed []*dedupEntry
 	d := newDeduplicator(time.Minute, 100, func(entry *dedupEntry) {
@@ -152,9 +161,9 @@ func TestShouldPersistHTTP(t *testing.T) {
 		{"GET", "/api/devices/dev-1/telemetry", 200, 0, false},
 		{"OPTIONS", "/api/devices", 204, 0, false},
 		{"POST", "/api/devices/dev-1/sync", 200, 0, true},
-		{"GET", "/api/devices", 200, 2000, true},    // slow
-		{"GET", "/api/devices", 500, 0, true},       // error
-		{"GET", "/api/devices", 404, 0, false},      // 404 GET
+		{"GET", "/api/devices", 200, 2000, true},       // slow
+		{"GET", "/api/devices", 500, 0, true},          // error
+		{"GET", "/api/devices", 404, 0, false},         // 404 GET
 		{"DELETE", "/api/devices/dev-1", 200, 0, true}, // state change
 		{"GET", "/api/logs", 200, 0, false},            // normal GET
 		{"POST", "/api/logs", 200, 0, true},            // state change

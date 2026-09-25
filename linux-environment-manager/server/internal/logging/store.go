@@ -86,6 +86,7 @@ type QueryParams struct {
 	Search        string
 	Limit         int
 	Offset        int
+	OwnerID       string
 }
 
 // QueryResult holds paginated log results.
@@ -179,7 +180,65 @@ func (s *Store) GetByID(id int64) (*LogEntry, error) {
 	return &entry, nil
 }
 
-// Stats returns aggregate log statistics.
+// GetByIDForOwner returns a log entry only when it belongs to the owner or one
+// of the owner's devices.
+func (s *Store) GetByIDForOwner(id int64, ownerID string) (*LogEntry, error) {
+	row := s.db.QueryRow(`SELECT id, ts, level, category, event, message, device_id, user_id, request_id, correlation_id, duration_ms, status, metadata, redacted
+		FROM logs WHERE id = ? AND (user_id = ? OR device_id IN (SELECT id FROM devices WHERE owner_id = ?))`, id, ownerID, ownerID)
+	var entry LogEntry
+	var ts, level, category, event, metaJSON string
+	var redacted int
+	if err := row.Scan(&entry.ID, &ts, &level, &category, &event, &entry.Message, &entry.DeviceID, &entry.UserID, &entry.RequestID, &entry.CorrelationID, &entry.DurationMs, &entry.Status, &metaJSON, &redacted); err != nil {
+		return nil, err
+	}
+	entry.Timestamp, _ = time.Parse(time.RFC3339Nano, ts)
+	entry.Level = ParseLevel(level)
+	entry.Category = Category(category)
+	entry.Event = Event(event)
+	entry.Redacted = redacted == 1
+	if metaJSON != "" && metaJSON != "{}" {
+		_ = json.Unmarshal([]byte(metaJSON), &entry.Metadata)
+	}
+	return &entry, nil
+}
+
+// StatsForOwner returns aggregate statistics scoped to an owner.
+func (s *Store) StatsForOwner(ownerID string) (map[string]any, error) {
+	where := "(user_id = ? OR device_id IN (SELECT id FROM devices WHERE owner_id = ?))"
+	args := []any{ownerID, ownerID}
+	stats := make(map[string]any)
+	var total int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM logs WHERE "+where, args...).Scan(&total); err != nil {
+		return nil, err
+	}
+	stats["total"] = total
+	byLevel := make(map[string]int)
+	rows, err := s.db.Query("SELECT level, COUNT(*) FROM logs WHERE "+where+" GROUP BY level", args...)
+	if err == nil {
+		for rows.Next() {
+			var level string
+			var count int
+			if rows.Scan(&level, &count) == nil {
+				byLevel[level] = count
+			}
+		}
+		rows.Close()
+	}
+	stats["by_level"] = byLevel
+	stats["dedup"] = map[string]any{}
+	return stats, nil
+}
+
+// GetAuditTrailForOwner returns audit events visible to an owner.
+func (s *Store) GetAuditTrailForOwner(ownerID string, limit, offset int) (*QueryResult, error) {
+	return s.Query(QueryParams{Level: "AUDIT", Limit: limit, Offset: offset, OwnerID: ownerID})
+}
+
+// GetErrorsForOwner returns error events visible to an owner.
+func (s *Store) GetErrorsForOwner(ownerID string, limit, offset int) (*QueryResult, error) {
+	return s.Query(QueryParams{Level: "ERROR", Limit: limit, Offset: offset, OwnerID: ownerID})
+}
+
 func (s *Store) Stats() (map[string]any, error) {
 	stats := make(map[string]any)
 
@@ -356,6 +415,10 @@ func buildWhereClause(params QueryParams) (string, []any) {
 	if params.Search != "" {
 		conditions = append(conditions, "(message LIKE ? OR event LIKE ?)")
 		args = append(args, "%"+params.Search+"%", "%"+params.Search+"%")
+	}
+	if params.OwnerID != "" {
+		conditions = append(conditions, "(user_id = ? OR device_id IN (SELECT id FROM devices WHERE owner_id = ?))")
+		args = append(args, params.OwnerID, params.OwnerID)
 	}
 
 	if len(conditions) == 0 {

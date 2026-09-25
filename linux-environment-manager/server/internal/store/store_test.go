@@ -10,6 +10,24 @@ import (
 	"time"
 )
 
+func TestFingerprintDoesNotReuseDeviceCredentials(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.RegisterDevice("pc", "user", "owner", "same-fingerprint")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.RegisterDevice("pc", "user", "owner", "same-fingerprint")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID == second.ID || first.DeviceToken == second.DeviceToken {
+		t.Fatal("fingerprint or hostname must not reuse a device credential")
+	}
+}
+
 func TestRegisterDeviceAndSync(t *testing.T) {
 	store, err := NewStore(t.TempDir())
 	if err != nil {
@@ -22,6 +40,13 @@ func TestRegisterDeviceAndSync(t *testing.T) {
 	}
 	if device.ID == "" || device.DeviceToken == "" {
 		t.Fatal("device id or token missing")
+	}
+	var storedToken string
+	if err := store.DB().QueryRow("SELECT device_token FROM devices WHERE id = ?", device.ID).Scan(&storedToken); err != nil {
+		t.Fatal(err)
+	}
+	if storedToken == device.DeviceToken || !isTokenHash(storedToken) {
+		t.Fatalf("device token must be stored as a hash, got %q", storedToken)
 	}
 
 	if _, err := store.RecordHeartbeat(device.ID); err != nil {
@@ -297,8 +322,8 @@ func TestPasswordHashing(t *testing.T) {
 		t.Fatalf("create user: %v", err)
 	}
 	parts := strings.Split(user.PasswordHash, "$")
-	if len(parts) != 3 || parts[0] != "s256" || len(parts[1]) < 16 || len(parts[2]) != 64 {
-		t.Fatalf("expected salted hash s256$salt$sha256hex, got %q", user.PasswordHash)
+	if len(parts) != 5 || parts[0] != "argon2id" || parts[1] != "v=19" || parts[2] == "" || parts[3] == "" || parts[4] == "" {
+		t.Fatalf("expected Argon2id hash, got %q", user.PasswordHash)
 	}
 
 	again, err := store.CreateUser("hash@example.com", "correct horse battery staple")
@@ -315,8 +340,22 @@ func TestPasswordHashing(t *testing.T) {
 	if authed.ID != user.ID {
 		t.Fatalf("authenticated wrong user: %s", authed.ID)
 	}
-	if !strings.HasPrefix(authed.PasswordHash, "s256$") {
-		t.Fatalf("legacy hash should upgrade to salted format, got %q", authed.PasswordHash)
+	if !strings.HasPrefix(authed.PasswordHash, "argon2id$") {
+		t.Fatalf("authenticated hash should use Argon2id, got %q", authed.PasswordHash)
+	}
+}
+
+func TestPasswordUpdateRejectsShortPassword(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	user, err := store.CreateUser("short-update@example.com", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if err := store.UpdateUserPassword(user.ID, "correct horse battery staple", "short"); err == nil {
+		t.Fatal("short replacement password must be rejected")
 	}
 }
 
@@ -398,8 +437,8 @@ func TestLegacyJSONMigration(t *testing.T) {
 	if devices[0].OwnerID != "u1" {
 		t.Fatalf("expected owner fallback from user_id, got %q", devices[0].OwnerID)
 	}
-	if devices[0].DeviceToken != "legacytoken12345" {
-		t.Fatalf("token not preserved: %q", devices[0].DeviceToken)
+	if !isTokenHash(devices[0].DeviceToken) {
+		t.Fatalf("legacy token was not hashed: %q", devices[0].DeviceToken)
 	}
 	files, err := storeA.ListFiles("dev-7")
 	if err != nil {
@@ -626,6 +665,35 @@ func TestRetentionSettings(t *testing.T) {
 	}
 }
 
+func TestSyncConfigValidation(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	if err := store.SetSyncConfig("owner", []string{"../escape"}); err == nil {
+		t.Fatal("directory traversal must be rejected")
+	}
+	if err := store.SetSyncConfig("owner", []string{strings.Repeat("x", maxExtraDirLength+1)}); err == nil {
+		t.Fatal("overlong directory must be rejected")
+	}
+	if err := store.SetSyncConfig("owner", make([]string, maxExtraDirs+1)); err == nil {
+		t.Fatal("too many directories must be rejected")
+	}
+}
+
+func TestRetentionSettingsValidation(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	if err := store.UpdateRetentionSettings(RetentionSettings{OwnerID: "owner", RawHours: 0, Resolution1mDays: 7, Resolution5mDays: 30, Resolution1hDays: 365}); err == nil {
+		t.Fatal("zero raw retention must be rejected")
+	}
+	if err := store.UpdateRetentionSettings(RetentionSettings{OwnerID: "owner", RawHours: 2, Resolution1mDays: 7, Resolution5mDays: 30, Resolution1hDays: 365}); err != nil {
+		t.Fatalf("valid retention rejected: %v", err)
+	}
+}
+
 func TestCleanupDeviceTelemetry(t *testing.T) {
 	store, err := NewStore(t.TempDir())
 	if err != nil {
@@ -685,11 +753,11 @@ func TestResolutionForInterval(t *testing.T) {
 		toOffset   time.Duration
 		want       string
 	}{
-		{-1 * time.Hour, 0, "raw"},           // 1 hour → raw
-		{-3 * time.Hour, 0, "1m"},            // 3 hours → 1m
-		{-12 * time.Hour, 0, "5m"},           // 12 hours → 5m
-		{-7 * 24 * time.Hour, 0, "1h"},       // 7 days → 1h
-		{-30 * 24 * time.Hour, 0, "1h"},      // 30 days → 1h
+		{-1 * time.Hour, 0, "raw"},      // 1 hour → raw
+		{-3 * time.Hour, 0, "1m"},       // 3 hours → 1m
+		{-12 * time.Hour, 0, "5m"},      // 12 hours → 5m
+		{-7 * 24 * time.Hour, 0, "1h"},  // 7 days → 1h
+		{-30 * 24 * time.Hour, 0, "1h"}, // 30 days → 1h
 	}
 
 	for _, tt := range tests {
