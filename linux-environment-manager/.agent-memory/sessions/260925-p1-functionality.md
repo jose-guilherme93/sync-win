@@ -27,6 +27,7 @@ status: active
 - Fixed the device modal reset by initializing the active tab once on mount instead of on every reactive prop update.
 - Made empty device file responses JSON arrays instead of `null`, removing the dashboard `invalid files response` error.
 - Implemented fixed-command `install_app` for APT, Flatpak, Pacman and AUR with fail-closed policy and privilege handling.
+- Added operator-configured workspace project roots and explicit `.vscode` file collection.
 - Updated the contract, `ROADMAP.md` and the active P1 functionality context.
 
 ## Validation
@@ -35,6 +36,7 @@ status: active
 - `go vet ./...` passed for both modules.
 - `npm run check` passed in the web development container with 0 errors and 15 pre-existing accessibility warnings.
 - `git diff --check` passed after the final P1.3 documentation update.
+- Workspace config tests cover explicit discovery, symlink/traversal rejection, server configuration and agent upload persistence.
 - Live user service synchronized three real preference files and a binary save test.
 - Live user update timer completed successfully; a controlled 0.6.1 -> 0.6.2 upgrade and rollback path was verified.
 - Pre-existing untracked `../.agents/`, `../skills-lock.json` and `.opencode/` were not modified.

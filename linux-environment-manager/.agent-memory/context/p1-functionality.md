@@ -135,6 +135,26 @@ expires: 2026-10-25
 - Flatpak uses the expected fixed argument list.
 - AppImage reinstall is refused with an actionable message.
 
+## P1.6 — Workspace project configuration
+
+### Scope
+
+- Configure project roots per owner through `workspace_dirs`.
+- Collect only `.vscode/settings.json`, `.vscode/tasks.json` and `.vscode/launch.json`.
+- Keep workspace files in the `workspace` category with independent hashes.
+
+### Observations
+
+- Project roots are explicit operator configuration; the agent never scans the home directory.
+- Symlinks, binary content, secret-bearing content and paths outside the home are skipped.
+- Workspace limits are 256 KiB per file and 2 MiB per cycle.
+
+### Tests
+
+- Explicit file discovery, symlink and traversal rejection.
+- Agent upload of a configured project file with state persistence.
+- Server workspace directory configuration and validation.
+
 ### Next
 
 - P1 is complete; choose the next product priority before extending the collection contract.

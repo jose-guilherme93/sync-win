@@ -14,7 +14,7 @@
     ],
     "extra_allowlist_path": "~/.config/lem/allowed-files",
     "excluded_files_path": "~/.config/lem/excluded-files",
-    "categories": ["kde", "desktop", "shell", "app", "general", "saves"],
+    "categories": ["kde", "desktop", "shell", "app", "general", "workspace", "saves"],
     "rejected_content_rules": {
       "binary_or_invalid_utf8": true,
       "empty_content": true,
@@ -53,6 +53,11 @@
       "max_save_file_bytes": 1048576,
       "max_total_bytes_per_cycle": 16777216,
       "max_depth": 12
+    },
+    "workspace": {
+      "files": [".vscode/settings.json", ".vscode/tasks.json", ".vscode/launch.json"],
+      "max_file_bytes": 262144,
+      "max_total_bytes": 2097152
     }
   },
   "telemetry": {

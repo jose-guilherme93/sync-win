@@ -46,9 +46,11 @@ type agentState struct {
 	HardwareFingerprint  string            `json:"hardware_fingerprint,omitempty"`
 	LastSyncHashes       map[string]string `json:"last_sync_hashes"`
 	LastSaveSyncHashes   map[string]string `json:"last_save_sync_hashes"`
+	LastWorkspaceHashes  map[string]string `json:"last_workspace_hashes"`
 	LastPreferenceSync   time.Time         `json:"last_preference_sync"`
 	LastAppInventorySync time.Time         `json:"last_app_inventory_sync"`
 	LastSaveSync         time.Time         `json:"last_save_sync"`
+	LastWorkspaceSync    time.Time         `json:"last_workspace_sync"`
 }
 
 type preferencePayload struct {
@@ -80,20 +82,23 @@ func stateFilePath() string {
 }
 
 func loadAgentState() *agentState {
-	state := &agentState{LastSyncHashes: map[string]string{}, LastSaveSyncHashes: map[string]string{}}
+	state := &agentState{LastSyncHashes: map[string]string{}, LastSaveSyncHashes: map[string]string{}, LastWorkspaceHashes: map[string]string{}}
 	data, err := os.ReadFile(stateFilePath())
 	if err != nil {
 		return state
 	}
 	if err := json.Unmarshal(data, state); err != nil {
 		log.Printf("discarding corrupt agent state %s: %v", stateFilePath(), err)
-		return &agentState{LastSyncHashes: map[string]string{}, LastSaveSyncHashes: map[string]string{}}
+		return &agentState{LastSyncHashes: map[string]string{}, LastSaveSyncHashes: map[string]string{}, LastWorkspaceHashes: map[string]string{}}
 	}
 	if state.LastSyncHashes == nil {
 		state.LastSyncHashes = map[string]string{}
 	}
 	if state.LastSaveSyncHashes == nil {
 		state.LastSaveSyncHashes = map[string]string{}
+	}
+	if state.LastWorkspaceHashes == nil {
+		state.LastWorkspaceHashes = map[string]string{}
 	}
 	return state
 }
@@ -505,6 +510,7 @@ func cmdDaemon(args []string) {
 	preferenceInterval := fs.Duration("preference-interval", time.Duration(lemContract.PreferencesSync.IntervalSecondsDefault)*time.Second, "preference sync interval")
 	appsInterval := fs.Duration("apps-interval", time.Duration(lemContract.AppsInventory.RefreshIntervalSeconds)*time.Second, "application inventory interval")
 	savesInterval := fs.Duration("saves-interval", time.Duration(lemContract.PreferencesSync.IntervalSecondsDefault)*time.Second, "save game sync interval")
+	workspaceInterval := fs.Duration("workspace-interval", time.Duration(lemContract.PreferencesSync.IntervalSecondsDefault)*time.Second, "workspace config sync interval")
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
 	}
@@ -516,6 +522,9 @@ func cmdDaemon(args []string) {
 	}
 	if *savesInterval <= 0 {
 		*savesInterval = time.Duration(lemContract.PreferencesSync.IntervalSecondsDefault) * time.Second
+	}
+	if *workspaceInterval <= 0 {
+		*workspaceInterval = time.Duration(lemContract.PreferencesSync.IntervalSecondsDefault) * time.Second
 	}
 
 	state := loadAgentState()
@@ -571,6 +580,7 @@ func cmdDaemon(args []string) {
 	lastPreferenceAttempt := time.Time{}
 	lastAppInventoryAttempt := time.Time{}
 	lastSaveAttempt := time.Time{}
+	lastWorkspaceAttempt := time.Time{}
 
 	for {
 		now := time.Now()
@@ -601,6 +611,14 @@ func cmdDaemon(args []string) {
 			lastSaveAttempt = now
 			if err := syncSaves(*serverURL, *deviceID, *deviceToken, state); err != nil {
 				log.Printf("save sync failed: %v", err)
+				hadError = true
+			}
+		}
+
+		if lastWorkspaceAttempt.IsZero() || now.Sub(lastWorkspaceAttempt) >= *workspaceInterval {
+			lastWorkspaceAttempt = now
+			if err := syncWorkspaceConfigs(*serverURL, *deviceID, *deviceToken, state); err != nil {
+				log.Printf("workspace sync failed: %v", err)
 				hadError = true
 			}
 		}

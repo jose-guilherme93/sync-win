@@ -40,6 +40,11 @@ type Contract struct {
 			MaxTotalBytesPerCycle int64    `json:"max_total_bytes_per_cycle"`
 			MaxDepth              int      `json:"max_depth"`
 		} `json:"saves"`
+		Workspace struct {
+			Files         []string `json:"files"`
+			MaxFileBytes  int64    `json:"max_file_bytes"`
+			MaxTotalBytes int64    `json:"max_total_bytes"`
+		} `json:"workspace"`
 	} `json:"collection"`
 	Telemetry struct {
 		IntervalSecondsDefault int      `json:"interval_seconds_default"`

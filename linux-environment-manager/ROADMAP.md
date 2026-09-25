@@ -51,6 +51,14 @@ A próxima etapa é P1 (funcionalidade), não parte desta remediação.
 - [x] recusar AppImage sem arquivo local
 - [x] testes de argumentos, validação e recusa
 
+## P1.6 — Workspace config (concluída)
+- [x] configurar raízes de projetos pelo operador
+- [x] coletar apenas arquivos `.vscode` explícitos
+- [x] aplicar limites, symlink e secret checks
+- [x] manter categoria e hashes separados
+- [x] expor configuração no dashboard e no endpoint de sync
+- [x] testes de coleta, upload e persistência
+
 A funcionalidade P1 está concluída. A próxima etapa é uma nova priorização.
 
 ## FASE 0 — Arquitetura e contratos
@@ -120,7 +128,7 @@ A funcionalidade P1 está concluída. A próxima etapa é uma nova priorização
 - [x] desktop settings
 - [x] shell preferences
 - [x] app config files
-- [ ] workspace config
+- [x] workspace config
 - [x] KDE preferences
 
 ## FASE 9 — Device Health

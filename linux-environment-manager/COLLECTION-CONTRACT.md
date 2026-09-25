@@ -24,8 +24,17 @@ Este documento é o contrato vinculante entre **agent (client)** e **server**. T
 - Extras: caminhos absolutos, um por linha, em `~/.config/lem/allowed-files`.
 - Exclusões: `~/.config/lem/excluded-files` (por caminho ou basename).
 - Limite por arquivo: **512 KiB** (agente) / espelhado no servidor: **256 KiB**, request total: **2 MiB**.
-- Categorias válidas: `kde`, `desktop`, `shell`, `app`, `general`, `saves`.
+- Categorias válidas: `kde`, `desktop`, `shell`, `app`, `general`, `workspace`, `saves`.
 - Recusas automáticas: conteúdo vazio, binário/Não-UTF8 (exceto categoria `saves` com `encoding: "base64"`), padrões de segredo (PEM private key, AWS AKIA, GitHub `ghp_`/`gho_`/etc., Slack `xox*-`, Stripe `sk_live_`, Google `AIza…`) e filenames sensíveis (`id_rsa*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`). Para `encoding: "base64"` a verificação de segredos é pulada.
+
+### Workspace projects (categoria `workspace`)
+
+- Raízes: pastas de projeto configuradas pelo operador em `workspace_dirs` (`GET/PUT /api/sync-config`).
+- Arquivos explícitos: `.vscode/settings.json`, `.vscode/tasks.json` e `.vscode/launch.json`.
+- A pasta raiz não é varrida: o agent verifica apenas esses caminhos relativos.
+- Limites: 256 KiB por arquivo e 2 MiB por ciclo.
+- Symlinks, binários, conteúdo secret ou paths fora de `$HOME` são ignorados.
+- O agent mantém hashes separados dos demais preferences.
 
 ### Save Games (categoria `saves`)
 

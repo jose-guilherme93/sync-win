@@ -331,6 +331,7 @@ func NewStore(root string) (*Store, error) {
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
 	s.migrateAddFileEncodingColumn()
+	s.migrateAddWorkspaceDirsColumn()
 	s.migrateAddStatusColumn()
 	s.migrateAddFingerprintColumn()
 	s.migrateHashDeviceTokens()
@@ -339,6 +340,14 @@ func NewStore(root string) (*Store, error) {
 		return nil, fmt.Errorf("migrate legacy: %w", err)
 	}
 	return s, nil
+}
+
+func (s *Store) migrateAddWorkspaceDirsColumn() {
+	var count int
+	s.db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('sync_config') WHERE name='workspace_dirs'").Scan(&count)
+	if count == 0 {
+		_, _ = s.db.Exec("ALTER TABLE sync_config ADD COLUMN workspace_dirs TEXT NOT NULL DEFAULT '[]'")
+	}
 }
 
 func (s *Store) migrateAddFileEncodingColumn() {
@@ -528,6 +537,7 @@ func (s *Store) initSchema() error {
 	CREATE TABLE IF NOT EXISTS sync_config (
 		owner_id TEXT PRIMARY KEY,
 		extra_dirs TEXT NOT NULL DEFAULT '[]',
+		workspace_dirs TEXT NOT NULL DEFAULT '[]',
 		updated_at TEXT NOT NULL
 	);
 	CREATE TABLE IF NOT EXISTS retention_settings (
@@ -1905,6 +1915,37 @@ func (s *Store) SetSyncConfig(ownerID string, dirs []string) error {
 	_, err := s.db.Exec(
 		`INSERT INTO sync_config (owner_id, extra_dirs, updated_at) VALUES (?, ?, ?)
 		 ON CONFLICT(owner_id) DO UPDATE SET extra_dirs = excluded.extra_dirs, updated_at = excluded.updated_at`,
+		ownerID, string(dirsJSON), now,
+	)
+	return err
+}
+
+func (s *Store) GetWorkspaceDirs(ownerID string) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var dirsJSON string
+	err := s.db.QueryRow("SELECT workspace_dirs FROM sync_config WHERE owner_id = ?", ownerID).Scan(&dirsJSON)
+	if err != nil {
+		return []string{}, nil
+	}
+	var dirs []string
+	if err := json.Unmarshal([]byte(dirsJSON), &dirs); err != nil {
+		return []string{}, nil
+	}
+	return dirs, nil
+}
+
+func (s *Store) SetWorkspaceDirs(ownerID string, dirs []string) error {
+	if err := validateExtraDirs(dirs); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dirsJSON, _ := json.Marshal(dirs)
+	now := timeText(time.Now().UTC())
+	_, err := s.db.Exec(
+		`INSERT INTO sync_config (owner_id, extra_dirs, workspace_dirs, updated_at) VALUES (?, '[]', ?, ?)
+		 ON CONFLICT(owner_id) DO UPDATE SET workspace_dirs = excluded.workspace_dirs, updated_at = excluded.updated_at`,
 		ownerID, string(dirsJSON), now,
 	)
 	return err

@@ -22,6 +22,9 @@ func TestLoadEmbeddedContract(t *testing.T) {
 	if len(c.AppsInventory.Sources) == 0 || c.AppsInventory.RefreshIntervalSeconds <= 0 {
 		t.Fatal("application inventory rules incomplete")
 	}
+	if len(c.Collection.Workspace.Files) == 0 || c.Collection.Workspace.MaxFileBytes <= 0 || c.Collection.Workspace.MaxTotalBytes <= 0 {
+		t.Fatal("workspace configuration rules incomplete")
+	}
 	knownAppSources := map[string]bool{"apt": true, "flatpak": true, "pacman": true, "aur": true, "appimage": true}
 	for _, source := range c.AppsInventory.Sources {
 		if !knownAppSources[source] {
@@ -29,7 +32,7 @@ func TestLoadEmbeddedContract(t *testing.T) {
 		}
 	}
 	for _, category := range c.Collection.Categories {
-		if category != "kde" && category != "desktop" && category != "shell" && category != "app" && category != "general" && category != "saves" {
+		if category != "kde" && category != "desktop" && category != "shell" && category != "app" && category != "general" && category != "workspace" && category != "saves" {
 			t.Fatalf("unknown category in contract: %s", category)
 		}
 	}

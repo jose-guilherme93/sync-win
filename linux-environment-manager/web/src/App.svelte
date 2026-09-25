@@ -170,6 +170,8 @@
   let notifSound = 'beep'
   let extraDirs: string[] = []
   let newExtraDir = ''
+  let workspaceDirs: string[] = []
+  let newWorkspaceDir = ''
   let settingsLoading = false
   let restoringState: Record<string, boolean> = {}
   let restoreModalOpen = false
@@ -537,6 +539,7 @@
       if (!response.ok) throw new Error(`config request failed: ${response.status}`)
       const payload = await response.json()
       extraDirs = Array.isArray(payload.extra_dirs) ? payload.extra_dirs : []
+      workspaceDirs = Array.isArray(payload.workspace_dirs) ? payload.workspace_dirs : []
     } catch (err) {
       notify(err instanceof Error ? err.message : 'Could not load settings', 'error')
     } finally {
@@ -550,7 +553,7 @@
       const response = await apiFetch(`${serverBase}/api/sync-config`, {
         method: 'PUT',
         headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ extra_dirs: extraDirs })
+        body: JSON.stringify({ extra_dirs: extraDirs, workspace_dirs: workspaceDirs })
       })
       if (!response.ok) throw new Error(`config save failed: ${response.status}`)
       notify('Extra save folders updated.')
@@ -571,6 +574,17 @@
 
   function removeExtraDir(dir: string) {
     extraDirs = extraDirs.filter((d) => d !== dir)
+  }
+
+  function addWorkspaceDir() {
+    const dir = newWorkspaceDir.trim()
+    if (!dir || workspaceDirs.includes(dir)) return
+    workspaceDirs = [...workspaceDirs, dir]
+    newWorkspaceDir = ''
+  }
+
+  function removeWorkspaceDir(dir: string) {
+    workspaceDirs = workspaceDirs.filter((item) => item !== dir)
   }
 
   function openSettings() {
@@ -1705,6 +1719,30 @@
             <button on:click={saveSyncConfig} disabled={settingsLoading}>Save configuration</button>
           </div>
         {/if}
+      </section>
+
+      <section class="settings-section">
+        <h3>Workspace projects</h3>
+        <p class="muted">Collect only .vscode/settings.json, tasks.json and launch.json from these project roots.</p>
+        <form class="extra-dirs-form" on:submit|preventDefault={addWorkspaceDir}>
+          <input type="text" bind:value={newWorkspaceDir} placeholder="/path/to/project" disabled={settingsLoading} />
+          <button type="submit" disabled={settingsLoading || !newWorkspaceDir.trim()}>Add</button>
+        </form>
+        {#if workspaceDirs.length === 0}
+          <p class="muted">No workspace projects configured.</p>
+        {:else}
+          <ul class="extra-dirs-list">
+            {#each workspaceDirs as dir (dir)}
+              <li>
+                <code>{dir}</code>
+                <button class="inline danger" on:click={() => removeWorkspaceDir(dir)}>Remove</button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+        <div class="settings-actions">
+          <button on:click={saveSyncConfig} disabled={settingsLoading}>Save configuration</button>
+        </div>
       </section>
     </div>
   </div>

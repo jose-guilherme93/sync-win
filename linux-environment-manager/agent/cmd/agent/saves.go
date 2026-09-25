@@ -19,7 +19,8 @@ import (
 const maxSaveBatchItems = 256
 
 type saveConfigResponse struct {
-	ExtraDirs []string `json:"extra_dirs"`
+	ExtraDirs     []string `json:"extra_dirs"`
+	WorkspaceDirs []string `json:"workspace_dirs"`
 }
 
 type restoreSaveFilePayload struct {

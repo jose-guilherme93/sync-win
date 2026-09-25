@@ -668,11 +668,17 @@ func (s *Server) handleSyncConfig(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+		workspaceDirs, err := s.store.GetWorkspaceDirs(ownerID)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, err)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"extra_dirs": dirs})
+		_ = json.NewEncoder(w).Encode(map[string]any{"extra_dirs": dirs, "workspace_dirs": workspaceDirs})
 	case http.MethodPut:
 		var req struct {
-			ExtraDirs []string `json:"extra_dirs"`
+			ExtraDirs     []string  `json:"extra_dirs"`
+			WorkspaceDirs *[]string `json:"workspace_dirs"`
 		}
 		if !s.decodeBody(w, r, &req) {
 			return
@@ -680,6 +686,12 @@ func (s *Server) handleSyncConfig(w http.ResponseWriter, r *http.Request) {
 		if err := s.store.SetSyncConfig(ownerID, req.ExtraDirs); err != nil {
 			s.writeError(w, http.StatusBadRequest, err)
 			return
+		}
+		if req.WorkspaceDirs != nil {
+			if err := s.store.SetWorkspaceDirs(ownerID, *req.WorkspaceDirs); err != nil {
+				s.writeError(w, http.StatusBadRequest, err)
+				return
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -722,8 +734,13 @@ func (s *Server) handleDeviceSyncConfig(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	workspaceDirs, err := s.store.GetWorkspaceDirs(device.OwnerID)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"extra_dirs": dirs})
+	_ = json.NewEncoder(w).Encode(map[string]any{"extra_dirs": dirs, "workspace_dirs": workspaceDirs})
 }
 
 func (s *Server) ownerID(r *http.Request) string {
