@@ -2,7 +2,7 @@
   "$schema": "https://opencode.ai/config.json",
   "model": "opencode/space-bunny-free",
   "plugins": [
-    "@dietrichgebert/ponytail"
+    "./.opencode/ponytail/plugin.mjs"
   ],
   "tool_output": {
     "max_lines": 400,
@@ -17,7 +17,7 @@
   },
   "agents": {
     "build": {
-      "steps": 10,
+      "steps": 25,
       "permissions": [
         {
           "action": "webfetch",
@@ -37,7 +37,7 @@
       ]
     },
     "plan": {
-      "steps": 4,
+      "steps": 5,
       "permissions": [
         {
           "action": "edit",
