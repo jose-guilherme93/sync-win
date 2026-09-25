@@ -239,7 +239,7 @@ check_dependencies() {
         success "Lynis is installed (security audits available)"
     else
         warn "Lynis is NOT installed (security audits unavailable)"
-        if [ "$OS_ID" = "arch" ] || [ "$OS_ID" = "manjaro" ] || [ "$OS_ID" = "endeavouros" ]; then
+        if [ "${LEM_DISTRO_ID:-}" = "arch" ] || [ "${LEM_DISTRO_ID:-}" = "manjaro" ] || [ "${LEM_DISTRO_ID:-}" = "endeavouros" ]; then
             printf "    Install with: ${BOLD}sudo pacman -S lynis${NC}\n"
         else
             printf "    Install with: ${BOLD}sudo apt install lynis${NC}\n"
