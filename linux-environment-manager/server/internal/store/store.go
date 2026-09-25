@@ -231,10 +231,10 @@ type NetworkIface struct {
 }
 
 type AppInfo struct {
-	Source     string `json:"source"`
-	Name       string `json:"name"`
-	Version    string `json:"version"`
-	InstallDir string `json:"install_dir,omitempty"`
+	Source  string `json:"source"`
+	Name    string `json:"name"`
+	Version string `json:"version,omitempty"`
+	Path    string `json:"path,omitempty"`
 }
 
 type PreferenceInput struct {

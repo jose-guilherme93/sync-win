@@ -18,7 +18,14 @@ A próxima etapa é P1 (funcionalidade), não parte desta remediação.
 - [x] persistir rejeições e estado de sincronização
 - [x] testes de retry, rejeição, allowlist e arquivos inalterados
 
-P1.2 (inventário de apps) e P1.3 (saves/restore) permanecem pendentes.
+## P1.2 — Inventário de apps (concluída)
+- [x] coletar APT, Flatpak, Pacman, AUR e AppImages pelo contrato
+- [x] enviar o inventário autenticado a cada 5 minutos
+- [x] preservar o último inventário em falhas de coleta ou upload
+- [x] alinhar o payload do servidor ao campo `path`
+- [x] testar fontes, filtragem, symlinks, payload e retry
+
+P1.3 (saves/restore) permanece pendente.
 
 ## FASE 0 — Arquitetura e contratos
 - [x] definir o modelo de preferências por dispositivo

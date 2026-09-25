@@ -41,11 +41,12 @@ var (
 var httpClient = &http.Client{Timeout: lemContract.HTTPTimeout()}
 
 type agentState struct {
-	DeviceID            string            `json:"device_id,omitempty"`
-	DeviceToken         string            `json:"device_token,omitempty"`
-	HardwareFingerprint string            `json:"hardware_fingerprint,omitempty"`
-	LastSyncHashes      map[string]string `json:"last_sync_hashes"`
-	LastPreferenceSync  time.Time         `json:"last_preference_sync"`
+	DeviceID             string            `json:"device_id,omitempty"`
+	DeviceToken          string            `json:"device_token,omitempty"`
+	HardwareFingerprint  string            `json:"hardware_fingerprint,omitempty"`
+	LastSyncHashes       map[string]string `json:"last_sync_hashes"`
+	LastPreferenceSync   time.Time         `json:"last_preference_sync"`
+	LastAppInventorySync time.Time         `json:"last_app_inventory_sync"`
 }
 
 type preferencePayload struct {
@@ -496,11 +497,15 @@ func cmdDaemon(args []string) {
 	deviceToken := fs.String("device-token", "", "device token")
 	interval := fs.Duration("interval", 10*time.Second, "telemetry interval")
 	preferenceInterval := fs.Duration("preference-interval", time.Duration(lemContract.PreferencesSync.IntervalSecondsDefault)*time.Second, "preference sync interval")
+	appsInterval := fs.Duration("apps-interval", time.Duration(lemContract.AppsInventory.RefreshIntervalSeconds)*time.Second, "application inventory interval")
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
 	}
 	if *preferenceInterval <= 0 {
 		*preferenceInterval = time.Duration(lemContract.PreferencesSync.IntervalSecondsDefault) * time.Second
+	}
+	if *appsInterval <= 0 {
+		*appsInterval = time.Duration(lemContract.AppsInventory.RefreshIntervalSeconds) * time.Second
 	}
 
 	state := loadAgentState()
@@ -554,6 +559,7 @@ func cmdDaemon(args []string) {
 	logCycle := 0
 	lastStateJSON := ""
 	lastPreferenceAttempt := time.Time{}
+	lastAppInventoryAttempt := time.Time{}
 
 	for {
 		now := time.Now()
@@ -564,6 +570,18 @@ func cmdDaemon(args []string) {
 			lastPreferenceAttempt = now
 			if err := syncPreferences(*serverURL, *deviceID, *deviceToken, state); err != nil {
 				log.Printf("preference sync failed: %v", err)
+				hadError = true
+			}
+		}
+
+		if lastAppInventoryAttempt.IsZero() || now.Sub(lastAppInventoryAttempt) >= *appsInterval {
+			lastAppInventoryAttempt = now
+			apps, err := collectors.CollectApps(lemContract.AppsInventory.Sources)
+			if err != nil {
+				log.Printf("application inventory collection failed: %v", err)
+				hadError = true
+			} else if err := sendAppInventory(*serverURL, *deviceID, *deviceToken, state, apps); err != nil {
+				log.Printf("application inventory sync failed: %v", err)
 				hadError = true
 			}
 		}
@@ -1973,5 +1991,21 @@ func syncPreferences(serverURL, deviceID, deviceToken string, st *agentState) er
 	st.LastPreferenceSync = time.Now().UTC()
 	st.save()
 	log.Printf("preference sync completed candidates=%d saved=%d rejected=%d", len(payloads), len(response.Saved), len(response.Rejected))
+	return nil
+}
+
+func sendAppInventory(serverURL, deviceID, deviceToken string, st *agentState, apps []collectors.AppInfo) error {
+	if apps == nil {
+		apps = []collectors.AppInfo{}
+	}
+	if err := postJSON(serverURL+"/api/devices/"+deviceID+"/apps", deviceToken, map[string]any{
+		"device_token": deviceToken,
+		"apps":         apps,
+	}); err != nil {
+		return err
+	}
+	st.LastAppInventorySync = time.Now().UTC()
+	st.save()
+	log.Printf("application inventory sync completed apps=%d", len(apps))
 	return nil
 }

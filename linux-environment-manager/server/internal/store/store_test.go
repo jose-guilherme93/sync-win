@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
@@ -9,6 +10,23 @@ import (
 	"testing"
 	"time"
 )
+
+func TestAppInfoUsesPathContract(t *testing.T) {
+	data, err := json.Marshal(AppInfo{Source: "appimage", Name: "Example", Path: "/home/user/Applications/Example.AppImage"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["path"] != "/home/user/Applications/Example.AppImage" {
+		t.Fatalf("path missing from app contract: %s", data)
+	}
+	if _, exists := payload["install_dir"]; exists {
+		t.Fatalf("legacy install_dir leaked into app contract: %s", data)
+	}
+}
 
 func TestFingerprintDoesNotReuseDeviceCredentials(t *testing.T) {
 	store, err := NewStore(t.TempDir())

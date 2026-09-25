@@ -388,6 +388,86 @@ func TestPreferencePathsHonorsExtraAllowlist(t *testing.T) {
 	}
 }
 
+func TestSendAppInventorySendsEmptyArray(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Apps json.RawMessage `json:"apps"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		if string(body.Apps) != "[]" {
+			t.Errorf("apps = %s, want []", body.Apps)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	if err := sendAppInventory(server.URL, "device-1", "device-token", &agentState{LastSyncHashes: map[string]string{}}, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSendAppInventoryRetriesUntilSaved(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
+
+	inventory := []collectors.AppInfo{{
+		Source:  "flatpak",
+		Name:    "org.mozilla.firefox",
+		Version: "141.0",
+	}}
+	requests := 0
+	fail := true
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/devices/device-1/apps" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer device-token" {
+			t.Errorf("authorization = %q", got)
+		}
+		var body struct {
+			DeviceToken string               `json:"device_token"`
+			Apps        []collectors.AppInfo `json:"apps"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		if body.DeviceToken != "device-token" || len(body.Apps) != 1 || body.Apps[0].Name != inventory[0].Name {
+			t.Errorf("unexpected inventory request: %+v", body)
+		}
+		requests++
+		if fail {
+			http.Error(w, "temporary outage", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	state := &agentState{LastSyncHashes: map[string]string{}}
+	if err := sendAppInventory(server.URL, "device-1", "device-token", state, inventory); err == nil {
+		t.Fatal("failed inventory upload should return an error")
+	}
+	if !state.LastAppInventorySync.IsZero() {
+		t.Fatal("failed inventory upload advanced state")
+	}
+
+	fail = false
+	if err := sendAppInventory(server.URL, "device-1", "device-token", state, inventory); err != nil {
+		t.Fatalf("inventory retry failed: %v", err)
+	}
+	if requests != 2 || state.LastAppInventorySync.IsZero() {
+		t.Fatalf("successful retry did not persist state: requests=%d state=%#v", requests, state)
+	}
+	if reloaded := loadAgentState(); reloaded.LastAppInventorySync.IsZero() {
+		t.Fatal("inventory timestamp was not persisted")
+	}
+}
+
 func TestSystemMetadataCollection(t *testing.T) {
 	t.Setenv("XDG_CURRENT_DESKTOP", "KDE")
 	t.Setenv("LANG", "pt_BR.UTF-8")

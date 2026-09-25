@@ -19,6 +19,15 @@ func TestLoadEmbeddedContract(t *testing.T) {
 	if !c.Collection.RejectedContentRules.BinaryOrInvalidUTF8 || len(c.Collection.RejectedContentRules.SecretPatterns) == 0 {
 		t.Fatal("rejection rules incomplete")
 	}
+	if len(c.AppsInventory.Sources) == 0 || c.AppsInventory.RefreshIntervalSeconds <= 0 {
+		t.Fatal("application inventory rules incomplete")
+	}
+	knownAppSources := map[string]bool{"apt": true, "flatpak": true, "pacman": true, "aur": true, "appimage": true}
+	for _, source := range c.AppsInventory.Sources {
+		if !knownAppSources[source] {
+			t.Fatalf("unknown application inventory source: %s", source)
+		}
+	}
 	for _, category := range c.Collection.Categories {
 		if category != "kde" && category != "desktop" && category != "shell" && category != "app" && category != "general" && category != "saves" {
 			t.Fatalf("unknown category in contract: %s", category)
