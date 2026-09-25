@@ -1,6 +1,9 @@
 package main
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -271,6 +274,117 @@ func TestCollectPreferencesSkipsUnchanged(t *testing.T) {
 	}
 	if payloads = collectPreferences([]string{path}, state); len(payloads) != 1 {
 		t.Fatalf("changed file should be collected again, got %d payloads", len(payloads))
+	}
+}
+
+func TestSyncPreferencesRetriesUntilSaved(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
+	if err := os.WriteFile(filepath.Join(home, ".bashrc"), []byte("export EDITOR=vi\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	requests := 0
+	fail := true
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/devices/device-1/sync" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		requests++
+		if fail {
+			http.Error(w, "temporary outage", http.StatusInternalServerError)
+			return
+		}
+		var body struct {
+			DeviceToken string              `json:"device_token"`
+			Preferences []preferencePayload `json:"preferences"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		if body.DeviceToken != "device-token" || len(body.Preferences) != 1 {
+			t.Errorf("unexpected sync request: %+v", body)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"saved": body.Preferences})
+	}))
+	defer server.Close()
+
+	state := &agentState{LastSyncHashes: map[string]string{}}
+	if err := syncPreferences(server.URL, "device-1", "device-token", state); err == nil {
+		t.Fatal("failed upload should return an error")
+	}
+	if len(state.LastSyncHashes) != 0 || !state.LastPreferenceSync.IsZero() {
+		t.Fatalf("failed upload advanced state: %#v", state)
+	}
+
+	fail = false
+	if err := syncPreferences(server.URL, "device-1", "device-token", state); err != nil {
+		t.Fatalf("retry failed: %v", err)
+	}
+	if requests != 2 || state.LastSyncHashes[".bashrc"] == "" || state.LastPreferenceSync.IsZero() {
+		t.Fatalf("successful retry did not persist state: requests=%d state=%#v", requests, state)
+	}
+	if err := syncPreferences(server.URL, "device-1", "device-token", state); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 {
+		t.Fatalf("unchanged preference was uploaded again: requests=%d", requests)
+	}
+}
+
+func TestSyncPreferencesDoesNotHashRejectedFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
+	if err := os.WriteFile(filepath.Join(home, ".bashrc"), []byte("export EDITOR=vi\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"saved":    []preferencePayload{},
+			"rejected": []map[string]string{{"filename": ".bashrc", "reason": "test rejection"}},
+		})
+	}))
+	defer server.Close()
+
+	state := &agentState{LastSyncHashes: map[string]string{}}
+	if err := syncPreferences(server.URL, "device-1", "device-token", state); err != nil {
+		t.Fatal(err)
+	}
+	if state.LastSyncHashes[".bashrc"] != "" {
+		t.Fatal("rejected preference must remain eligible for retry")
+	}
+}
+
+func TestPreferencePathsHonorsExtraAllowlist(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	allowDir := filepath.Join(home, ".config", "lem")
+	if err := os.MkdirAll(allowDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	allowed := filepath.Join(home, "custom-pref.conf")
+	if err := os.WriteFile(allowed, []byte("key=value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	allowlist := filepath.Join(allowDir, "allowed-files")
+	if err := os.WriteFile(allowlist, []byte("# comment\n\ncustom-pref.conf\n/etc/passwd\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	paths := preferencePaths()
+	found := false
+	for _, path := range paths {
+		if path == allowed {
+			found = true
+		}
+		if path == "/etc/passwd" {
+			t.Fatal("outside-home allowlist entry was accepted")
+		}
+	}
+	if !found {
+		t.Fatalf("explicit allowlist file was not included: %v", paths)
 	}
 }
 

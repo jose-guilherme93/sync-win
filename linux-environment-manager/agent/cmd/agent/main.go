@@ -22,6 +22,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"lem/agent/collectors"
 	"lem/agent/internal/contract"
@@ -45,6 +46,21 @@ type agentState struct {
 	HardwareFingerprint string            `json:"hardware_fingerprint,omitempty"`
 	LastSyncHashes      map[string]string `json:"last_sync_hashes"`
 	LastPreferenceSync  time.Time         `json:"last_preference_sync"`
+}
+
+type preferencePayload struct {
+	Category     string `json:"category"`
+	Filename     string `json:"filename"`
+	RelativePath string `json:"relative_path"`
+	Content      string `json:"content"`
+}
+
+type preferenceSyncResponse struct {
+	Saved    []preferencePayload `json:"saved"`
+	Rejected []struct {
+		Filename string `json:"filename"`
+		Reason   string `json:"reason"`
+	} `json:"rejected"`
 }
 
 func (st *agentState) save() {
@@ -479,8 +495,12 @@ func cmdDaemon(args []string) {
 	deviceID := fs.String("device-id", "", "device ID")
 	deviceToken := fs.String("device-token", "", "device token")
 	interval := fs.Duration("interval", 10*time.Second, "telemetry interval")
+	preferenceInterval := fs.Duration("preference-interval", time.Duration(lemContract.PreferencesSync.IntervalSecondsDefault)*time.Second, "preference sync interval")
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
+	}
+	if *preferenceInterval <= 0 {
+		*preferenceInterval = time.Duration(lemContract.PreferencesSync.IntervalSecondsDefault) * time.Second
 	}
 
 	state := loadAgentState()
@@ -533,11 +553,20 @@ func cmdDaemon(args []string) {
 	const logCollectCycles = 6
 	logCycle := 0
 	lastStateJSON := ""
+	lastPreferenceAttempt := time.Time{}
 
 	for {
 		now := time.Now()
 		log.Printf("cycle started device=%s failures=%d", *deviceID, consecutiveFailures)
 		hadError := false
+
+		if lastPreferenceAttempt.IsZero() || now.Sub(lastPreferenceAttempt) >= *preferenceInterval {
+			lastPreferenceAttempt = now
+			if err := syncPreferences(*serverURL, *deviceID, *deviceToken, state); err != nil {
+				log.Printf("preference sync failed: %v", err)
+				hadError = true
+			}
+		}
 
 		if collectors.DockerIsAvailable() {
 			if err := processDockerRequests(*serverURL, *deviceID, *deviceToken); err != nil {
@@ -1751,12 +1780,33 @@ func categorizePath(path string) string {
 
 // relativeToHome computes a relative path from home.
 func relativeToHome(home, path string) string {
-	if strings.HasPrefix(path, home) {
-		rel := strings.TrimPrefix(path, home)
-		rel = strings.TrimPrefix(rel, "/")
-		return rel
+	if rel, err := filepath.Rel(home, path); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return filepath.ToSlash(rel)
 	}
 	return filepath.Base(path)
+}
+
+func agentHome() string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return home
+	}
+	return os.Getenv("HOME")
+}
+
+func safePreferencePath(home, path string) bool {
+	if home == "" || !filepath.IsAbs(path) {
+		return false
+	}
+	rel, err := filepath.Rel(home, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func sensitivePreferencePath(path string) bool {
+	name := strings.ToLower(filepath.Base(path))
+	if name == "id_rsa" || name == "id_dsa" || name == "id_ecdsa" || name == "id_ed25519" || name == ".netrc" || name == ".pgpass" || name == ".my.cnf" {
+		return true
+	}
+	return strings.HasSuffix(name, ".pem") || strings.HasSuffix(name, ".key") || strings.HasSuffix(name, ".p12") || strings.HasSuffix(name, ".pfx")
 }
 
 // findSecret scans content for known secret patterns.
@@ -1784,35 +1834,31 @@ func hashContent(content string) string {
 }
 
 // buildPreference reads a file and builds a preference payload.
-func buildPreference(home, path, categoryOverride string) (struct {
-	Category     string `json:"category"`
-	Filename     string `json:"filename"`
-	RelativePath string `json:"relative_path"`
-	Content      string `json:"content"`
-}, error) {
-	type preferencePayload struct {
-		Category     string `json:"category"`
-		Filename     string `json:"filename"`
-		RelativePath string `json:"relative_path"`
-		Content      string `json:"content"`
+func buildPreference(home, path, categoryOverride string) (preferencePayload, error) {
+	if sensitivePreferencePath(path) {
+		return preferencePayload{}, fmt.Errorf("sensitive filename rejected")
 	}
-
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if err != nil {
 		return preferencePayload{}, fmt.Errorf("stat file: %w", err)
 	}
-	if info.Size() > maxFileSizeBytes {
-		return preferencePayload{}, fmt.Errorf("file exceeds size limit (%d > %d bytes)", info.Size(), maxFileSizeBytes)
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return preferencePayload{}, fmt.Errorf("preference path is not a regular file")
+	}
+	if info.Size() > maxUploadFileBytes {
+		return preferencePayload{}, fmt.Errorf("file exceeds size limit (%d > %d bytes)", info.Size(), maxUploadFileBytes)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return preferencePayload{}, fmt.Errorf("read file: %w", err)
 	}
-	content := string(data)
-	// Check for binary content
-	if bytes.Contains(data, []byte{0}) {
+	if len(data) == 0 {
+		return preferencePayload{}, fmt.Errorf("empty file rejected")
+	}
+	if bytes.IndexByte(data, 0) >= 0 || !utf8.Valid(data) {
 		return preferencePayload{}, fmt.Errorf("binary file rejected")
 	}
+	content := string(data)
 	if reason := findSecret(content); reason != "" {
 		return preferencePayload{}, fmt.Errorf("secret detected: %s", reason)
 	}
@@ -1820,57 +1866,112 @@ func buildPreference(home, path, categoryOverride string) (struct {
 	if category == "" {
 		category = categorizePath(path)
 	}
-	relPath := relativeToHome(home, path)
 	return preferencePayload{
 		Category:     category,
 		Filename:     filepath.Base(path),
-		RelativePath: relPath,
+		RelativePath: relativeToHome(home, path),
 		Content:      content,
 	}, nil
 }
 
-// collectPreferences collects preference files, skipping unchanged ones.
-func collectPreferences(paths []string, st *agentState) []struct {
-	Category     string `json:"category"`
-	Filename     string `json:"filename"`
-	RelativePath string `json:"relative_path"`
-	Content      string `json:"content"`
-} {
-	type preferencePayload struct {
-		Category     string `json:"category"`
-		Filename     string `json:"filename"`
-		RelativePath string `json:"relative_path"`
-		Content      string `json:"content"`
-	}
-
-	home, _ := os.UserHomeDir()
-	var payloads []struct {
-		Category     string `json:"category"`
-		Filename     string `json:"filename"`
-		RelativePath string `json:"relative_path"`
-		Content      string `json:"content"`
-	}
+// scanPreferences returns changed payloads and hashes for all readable,
+// explicitly selected files. It never mutates the state before upload succeeds.
+func scanPreferences(paths []string, st *agentState) ([]preferencePayload, map[string]string) {
+	home := agentHome()
+	hashes := make(map[string]string)
+	payloads := make([]preferencePayload, 0, len(paths))
+	seen := make(map[string]bool)
 	for _, path := range paths {
 		payload, err := buildPreference(home, path, "")
-		if err != nil {
+		if err != nil || seen[payload.RelativePath] {
 			continue
 		}
+		seen[payload.RelativePath] = true
 		hash := hashContent(payload.Content)
-		if existing, ok := st.LastSyncHashes[payload.RelativePath]; ok && existing == hash {
+		hashes[payload.RelativePath] = hash
+		if st != nil && st.LastSyncHashes[payload.RelativePath] == hash {
 			continue
 		}
-		st.LastSyncHashes[payload.RelativePath] = hash
-		payloads = append(payloads, struct {
-			Category     string `json:"category"`
-			Filename     string `json:"filename"`
-			RelativePath string `json:"relative_path"`
-			Content      string `json:"content"`
-		}{
-			Category:     payload.Category,
-			Filename:     payload.Filename,
-			RelativePath: payload.RelativePath,
-			Content:      payload.Content,
-		})
+		payloads = append(payloads, payload)
 	}
+	return payloads, hashes
+}
+
+// collectPreferences collects preference files, skipping unchanged ones.
+// The caller must commit hashes to state only after a successful server sync.
+func collectPreferences(paths []string, st *agentState) []preferencePayload {
+	payloads, _ := scanPreferences(paths, st)
 	return payloads
+}
+
+func preferencePaths() []string {
+	home := agentHome()
+	candidates := append([]string(nil), lemContract.Collection.DefaultFiles...)
+	if data, err := os.ReadFile(contract.ExpandPath(lemContract.Collection.ExtraAllowlistPath)); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			candidates = append(candidates, line)
+		}
+	}
+
+	paths := make([]string, 0, len(candidates))
+	seen := make(map[string]bool)
+	for _, candidate := range candidates {
+		path := contract.ExpandPath(candidate)
+		if !filepath.IsAbs(path) && home != "" {
+			path = filepath.Join(home, path)
+		}
+		path = filepath.Clean(path)
+		if !safePreferencePath(home, path) || seen[path] {
+			continue
+		}
+		seen[path] = true
+		paths = append(paths, path)
+	}
+	return paths
+}
+
+func syncPreferences(serverURL, deviceID, deviceToken string, st *agentState) error {
+	payloads, hashes := scanPreferences(preferencePaths(), st)
+	if len(payloads) == 0 {
+		keep := make(map[string]bool, len(hashes))
+		for path := range hashes {
+			keep[path] = true
+		}
+		st.pruneSyncHashes(keep)
+		st.LastPreferenceSync = time.Now().UTC()
+		st.save()
+		return nil
+	}
+
+	responseBody, err := postJSONWithResponse(serverURL+"/api/devices/"+deviceID+"/sync", deviceToken, map[string]any{
+		"device_token": deviceToken,
+		"preferences":  payloads,
+	})
+	if err != nil {
+		return err
+	}
+	var response preferenceSyncResponse
+	if err := json.Unmarshal(responseBody, &response); err != nil {
+		return fmt.Errorf("decode preference sync response: %w", err)
+	}
+
+	// Only files explicitly returned as saved may advance the local hash.
+	keep := make(map[string]bool, len(hashes))
+	for path := range hashes {
+		keep[path] = true
+	}
+	st.pruneSyncHashes(keep)
+	for _, saved := range response.Saved {
+		if hash, ok := hashes[saved.RelativePath]; ok {
+			st.LastSyncHashes[saved.RelativePath] = hash
+		}
+	}
+	st.LastPreferenceSync = time.Now().UTC()
+	st.save()
+	log.Printf("preference sync completed candidates=%d saved=%d rejected=%d", len(payloads), len(response.Saved), len(response.Rejected))
+	return nil
 }

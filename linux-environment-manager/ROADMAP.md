@@ -10,6 +10,16 @@
 
 A próxima etapa é P1 (funcionalidade), não parte desta remediação.
 
+## P1.1 — Preference sync (concluída)
+- [x] conectar o collector ao ciclo do agent
+- [x] usar somente o contrato e a allowlist explícita
+- [x] enviar preferências ao endpoint autenticado do servidor
+- [x] retry sem avançar hashes antes do sucesso
+- [x] persistir rejeições e estado de sincronização
+- [x] testes de retry, rejeição, allowlist e arquivos inalterados
+
+P1.2 (inventário de apps) e P1.3 (saves/restore) permanecem pendentes.
+
 ## FASE 0 — Arquitetura e contratos
 - [x] definir o modelo de preferências por dispositivo
 - [x] ajustar a API inicial para sync de arquivos pequenos

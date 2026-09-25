@@ -6,6 +6,9 @@ entries:
   - id: context/p0-remediation
     path: context/p0-remediation.md
     type: context
+  - id: context/p1-functionality
+    path: context/p1-functionality.md
+    type: context
   - id: decisions/security-hardening
     path: decisions/security-hardening.md
     type: decision
