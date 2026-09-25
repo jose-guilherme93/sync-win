@@ -71,6 +71,30 @@ Este documento é o contrato vinculante entre **agent (client)** e **server**. T
 
 Resposta: `{"saved": [PreferenceFile...], "rejected": [{"filename", "reason"}]}` — o servidor deduplica por hash de conteúdo.
 
+O agent sincroniza saves no mesmo intervalo padrão de preferências (300 s), em lotes menores que o limite HTTP do servidor. O estado mantém hashes separados para preferências e saves; um hash só avança após o servidor confirmar o item como salvo.
+
+### Restore de saves
+
+O comando `restore_saves` é pulling, fica sujeito à feature flag de mutações remotas e à política local `allow_restore_saves` (por padrão `false`). O servidor envia no payload:
+
+```json
+{
+  "source_device_id": "...",
+  "prefix_id": "1222670",
+  "game_name": "Publisher/Game",
+  "files": [
+    {
+      "filename": "slot.sav",
+      "relative_path": ".config/hydralauncher/wine-prefixes/1222670/drive_c/users/user/Documents/Game/slot.sav",
+      "content": "...",
+      "encoding": "base64"
+    }
+  ]
+}
+```
+
+O agent valida tamanho, encoding e paths relativos, rejeita traversal/symlinks, grava cada arquivo por arquivo temporário + rename e processa somente arquivos de saves do prefixo/jogo solicitados. A feature flag do servidor deve estar habilitada e a política local do dispositivo deve permitir a operação.
+
 ## Telemetria (`POST /api/devices/{id}/telemetry`)
 
 Campos enviados (todos opcionais no display, mas parte do contrato):
@@ -105,7 +129,7 @@ Corpo: `{"device_token": "..."}` — zera contador de falhas e marca online. O s
 
 - HTTP timeout: 15 s por requisição.
 - Backoff exponencial em falhas consecutivas de ciclo: intervalo × 2^n até 10 min, com jitter de ~10% (evita sincronização de rebanho).
-- Estado persistente: hashes dos últimos conteúdos sincronizados + timestamp do último sync de preferências; restart não re-envia arquivo inalterado nem perde o agendamento.
+- Estado persistente: hashes separados para preferências e saves + timestamps de sincronização; restart não re-envia arquivo inalterado nem perde o agendamento.
 - systemd user unit gerada pelo `install.sh`: `Restart=always`, `RestartSec=15`, `StartLimitIntervalSec=0` (nunca entra em ban).
 - Arquivos individuais problemáticos são pulados com log — um arquivo ruim nunca aborta o lote.
 

@@ -29,6 +29,13 @@ LEM_LOG_DIR="/var/log/lem"
 LEM_SERVICE_NAME="lem-agent.service"
 LEM_SERVICE_FILE="/etc/systemd/system/${LEM_SERVICE_NAME}"
 LEM_SERVICE_TEMPLATE="/app/lem-agent.service"
+LEM_UPDATE_SERVICE_NAME="lem-agent-update.service"
+LEM_UPDATE_TIMER_NAME="lem-agent-update.timer"
+LEM_UPDATE_SERVICE_FILE="/etc/systemd/system/${LEM_UPDATE_SERVICE_NAME}"
+LEM_UPDATE_TIMER_FILE="/etc/systemd/system/${LEM_UPDATE_TIMER_NAME}"
+LEM_UPDATE_SERVICE_TEMPLATE="/app/lem-agent-update.service"
+LEM_UPDATE_TIMER_TEMPLATE="/app/lem-agent-update.timer"
+LEM_AUTO_UPDATE="${LEM_AUTO_UPDATE:-1}"
 
 # Temp directory for downloads (cleaned up on exit)
 TMP_DIR=""
@@ -413,14 +420,14 @@ install_systemd_service() {
 Description=LEM Linux Agent
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/lem-agent daemon --server {{SERVER_URL}} --device-id {{DEVICE_ID}} --device-token {{DEVICE_TOKEN}}
 Restart=always
 RestartSec=5
-StartLimitIntervalSec=300
-StartLimitBurst=5
 
 User=lem
 Group=lem
@@ -448,6 +455,30 @@ WantedBy=multi-user.target'
     echo "$service_content" > "$LEM_SERVICE_FILE"
     systemctl daemon-reload
     success "Systemd service installed"
+}
+
+install_auto_update() {
+    if [ "$LEM_AUTO_UPDATE" != "1" ]; then
+        warn "Automatic agent updates disabled (LEM_AUTO_UPDATE=$LEM_AUTO_UPDATE)"
+        return 0
+    fi
+    if [ ! -f "$LEM_UPDATE_SERVICE_TEMPLATE" ] || [ ! -f "$LEM_UPDATE_TIMER_TEMPLATE" ]; then
+        warn "Updater templates not found — automatic updates were not enabled"
+        return 0
+    fi
+    sed \
+        -e "s|{{AGENT_BINARY}}|${LEM_BINARY}|g" \
+        -e "s|{{SERVER_URL}}|${LEM_SERVER}|g" \
+        -e "s|{{SERVICE_NAME}}|${LEM_SERVICE_NAME}|g" \
+        -e "s|{{USER_FLAG}}||g" \
+        "$LEM_UPDATE_SERVICE_TEMPLATE" > "$LEM_UPDATE_SERVICE_FILE"
+    cp "$LEM_UPDATE_TIMER_TEMPLATE" "$LEM_UPDATE_TIMER_FILE"
+    systemctl daemon-reload
+    if systemctl enable --now "$LEM_UPDATE_TIMER_NAME" >/dev/null 2>&1; then
+        success "Automatic agent updates enabled (every 15 minutes)"
+    else
+        warn "Could not enable ${LEM_UPDATE_TIMER_NAME}; install it manually"
+    fi
 }
 
 enroll_device() {
@@ -622,6 +653,7 @@ main() {
     enroll_device
     configure_service
     start_service
+    install_auto_update
     print_summary
 }
 

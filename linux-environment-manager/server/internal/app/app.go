@@ -1184,7 +1184,7 @@ func (s *Server) handleRestoreSaves(w http.ResponseWriter, r *http.Request, devi
 		s.writeError(w, http.StatusNotFound, errors.New("no save files found for this game"))
 		return
 	}
-	command, err := s.store.QueueRestoreSaves(target.ID, req.PrefixID, req.GameName)
+	command, err := s.store.QueueRestoreSavesWithFiles(target.ID, deviceID, req.PrefixID, req.GameName, files)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
@@ -1692,13 +1692,13 @@ cat > "$TARGET_HOME/.config/systemd/user/lem-agent.service" <<UNIT
 [Unit]
 Description=Linux Environment Manager agent
 After=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 ExecStart=${TARGET_HOME}/.local/bin/lem-agent daemon --server $SERVER_URL --device-id $DEVICE_ID --device-token $DEVICE_TOKEN
 Restart=always
 RestartSec=15
-StartLimitIntervalSec=0
 
 [Install]
 WantedBy=default.target
@@ -1708,6 +1708,32 @@ systemctl --user daemon-reload
 step "4/5" "Starting service for user $TARGET_USER"
 systemctl --user enable lem-agent.service > /dev/null
 systemctl --user restart lem-agent.service
+if [ "\${LEM_AUTO_UPDATE:-1}" = "1" ]; then
+  cat > "$TARGET_HOME/.config/systemd/user/lem-agent-update.service" <<UNIT
+[Unit]
+Description=LEM Agent automatic update
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=${TARGET_HOME}/.local/bin/lem-agent update --server $SERVER_URL --service lem-agent.service --user-systemd
+UNIT
+  cat > "$TARGET_HOME/.config/systemd/user/lem-agent-update.timer" <<UNIT
+[Unit]
+Description=Check for LEM Agent updates
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+  systemctl --user daemon-reload
+  systemctl --user enable --now lem-agent-update.timer > /dev/null 2>&1 || true
+fi
 loginctl enable-linger "$TARGET_USER" > /dev/null 2>&1 || true
 
 step "5/5" "Verifying connection to the server (up to 20 seconds)"

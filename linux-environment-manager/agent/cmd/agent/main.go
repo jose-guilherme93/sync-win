@@ -45,8 +45,10 @@ type agentState struct {
 	DeviceToken          string            `json:"device_token,omitempty"`
 	HardwareFingerprint  string            `json:"hardware_fingerprint,omitempty"`
 	LastSyncHashes       map[string]string `json:"last_sync_hashes"`
+	LastSaveSyncHashes   map[string]string `json:"last_save_sync_hashes"`
 	LastPreferenceSync   time.Time         `json:"last_preference_sync"`
 	LastAppInventorySync time.Time         `json:"last_app_inventory_sync"`
+	LastSaveSync         time.Time         `json:"last_save_sync"`
 }
 
 type preferencePayload struct {
@@ -54,6 +56,7 @@ type preferencePayload struct {
 	Filename     string `json:"filename"`
 	RelativePath string `json:"relative_path"`
 	Content      string `json:"content"`
+	Encoding     string `json:"encoding,omitempty"`
 }
 
 type preferenceSyncResponse struct {
@@ -77,17 +80,20 @@ func stateFilePath() string {
 }
 
 func loadAgentState() *agentState {
-	state := &agentState{LastSyncHashes: map[string]string{}}
+	state := &agentState{LastSyncHashes: map[string]string{}, LastSaveSyncHashes: map[string]string{}}
 	data, err := os.ReadFile(stateFilePath())
 	if err != nil {
 		return state
 	}
 	if err := json.Unmarshal(data, state); err != nil {
 		log.Printf("discarding corrupt agent state %s: %v", stateFilePath(), err)
-		return &agentState{LastSyncHashes: map[string]string{}}
+		return &agentState{LastSyncHashes: map[string]string{}, LastSaveSyncHashes: map[string]string{}}
 	}
 	if state.LastSyncHashes == nil {
 		state.LastSyncHashes = map[string]string{}
+	}
+	if state.LastSaveSyncHashes == nil {
+		state.LastSaveSyncHashes = map[string]string{}
 	}
 	return state
 }
@@ -498,6 +504,7 @@ func cmdDaemon(args []string) {
 	interval := fs.Duration("interval", 10*time.Second, "telemetry interval")
 	preferenceInterval := fs.Duration("preference-interval", time.Duration(lemContract.PreferencesSync.IntervalSecondsDefault)*time.Second, "preference sync interval")
 	appsInterval := fs.Duration("apps-interval", time.Duration(lemContract.AppsInventory.RefreshIntervalSeconds)*time.Second, "application inventory interval")
+	savesInterval := fs.Duration("saves-interval", time.Duration(lemContract.PreferencesSync.IntervalSecondsDefault)*time.Second, "save game sync interval")
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
 	}
@@ -506,6 +513,9 @@ func cmdDaemon(args []string) {
 	}
 	if *appsInterval <= 0 {
 		*appsInterval = time.Duration(lemContract.AppsInventory.RefreshIntervalSeconds) * time.Second
+	}
+	if *savesInterval <= 0 {
+		*savesInterval = time.Duration(lemContract.PreferencesSync.IntervalSecondsDefault) * time.Second
 	}
 
 	state := loadAgentState()
@@ -560,6 +570,7 @@ func cmdDaemon(args []string) {
 	lastStateJSON := ""
 	lastPreferenceAttempt := time.Time{}
 	lastAppInventoryAttempt := time.Time{}
+	lastSaveAttempt := time.Time{}
 
 	for {
 		now := time.Now()
@@ -582,6 +593,14 @@ func cmdDaemon(args []string) {
 				hadError = true
 			} else if err := sendAppInventory(*serverURL, *deviceID, *deviceToken, state, apps); err != nil {
 				log.Printf("application inventory sync failed: %v", err)
+				hadError = true
+			}
+		}
+
+		if lastSaveAttempt.IsZero() || now.Sub(lastSaveAttempt) >= *savesInterval {
+			lastSaveAttempt = now
+			if err := syncSaves(*serverURL, *deviceID, *deviceToken, state); err != nil {
+				log.Printf("save sync failed: %v", err)
 				hadError = true
 			}
 		}
@@ -717,6 +736,12 @@ func main() {
 	switch os.Args[1] {
 	case "daemon":
 		cmdDaemon(os.Args[2:])
+	case "update":
+		if err := cmdUpdate(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+	case "--version", "version":
+		fmt.Println(agentVersion)
 	default:
 		log.Fatalf("unknown command: %s", os.Args[1])
 	}
@@ -746,11 +771,13 @@ func processCommands(serverURL, deviceID, deviceToken string) error {
 	for _, cmd := range commands {
 		result := executeCommand(cmd)
 		resultURL := serverURL + "/api/devices/" + deviceID + "/commands/" + cmd.ID
-		postJSON(resultURL, deviceToken, map[string]string{
+		if err := postJSON(resultURL, deviceToken, map[string]string{
 			"device_token": deviceToken,
 			"status":       result.Status,
 			"message":      result.Message,
-		})
+		}); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -781,7 +808,11 @@ func executeCommand(cmd struct {
 		if !policy.AllowRestoreSaves {
 			return commandResult{"failed", "command disabled by local policy"}
 		}
-		return commandResult{"failed", "restore_saves is not implemented"}
+		count, err := restoreSaves(cmd.Payload)
+		if err != nil {
+			return commandResult{"failed", err.Error()}
+		}
+		return commandResult{"completed", fmt.Sprintf("restored %d save files", count)}
 	case "lynis_audit":
 		if !policy.AllowLynisAudit {
 			return commandResult{"failed", "command disabled by local policy"}

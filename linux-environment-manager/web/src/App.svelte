@@ -1753,6 +1753,7 @@
     device={modalDevice}
     open={deviceModalOpen}
     on:close={closeDeviceModal}
+    on:restore={(event) => restoreGameSaves(event.detail.deviceId, event.detail.prefixId, event.detail.gameName)}
     authHeaders={ownerHeaders}
     initialFiles={filesByDevice[modalDevice.id] || []}
   />

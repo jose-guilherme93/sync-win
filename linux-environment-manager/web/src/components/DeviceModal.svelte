@@ -465,6 +465,11 @@
     return fileList.reduce((acc, f) => acc + (f.size_bytes || 0), 0)
   }
 
+  function requestRestore(group: SaveGroup) {
+    if (!group.prefixId) return
+    dispatch('restore', { deviceId: device.id, prefixId: group.prefixId, gameName: group.label })
+  }
+
   function toggleGroup(key: string) {
     expandedGroups = { ...expandedGroups, [key]: !expandedGroups[key] }
   }
@@ -853,6 +858,11 @@
                         <span class="save-group-meta">{group.files.length} files · {formatBytes(groupSizeBytes(group.files))}</span>
                       </button>
                     </div>
+                    {#if group.prefixId}
+                      <div class="save-group-actions">
+                        <button class="inline" on:click={() => requestRestore(group)}>Restore…</button>
+                      </div>
+                    {/if}
                     {#if isExpanded}
                       <ul class="file-list save-group-files">
                         {#each group.files.sort((a, b) => a.filename.localeCompare(b.filename)) as file (file.id)}

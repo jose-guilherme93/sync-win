@@ -3,9 +3,9 @@ id: context/p1-functionality
 type: context
 title: "P1 functionality remediation"
 description: >-
-  P1 connects the agent's existing collectors to the server. P1.1 preference
-  synchronization and P1.2 application inventory are complete; save
-  synchronization and restore remain separate follow-up capabilities.
+  P1 connects the agent's existing collectors to the server. Preference sync,
+  application inventory, save synchronization, policy-gated restore and
+  automatic agent updates are complete.
 tags: [p1, functionality, preferences, agent]
 source: other
 created: 2026-09-25
@@ -67,6 +67,54 @@ expires: 2026-10-25
 - Embedded contract and server `AppInfo.path` JSON shape.
 - Full `go test ./...` and `go vet ./...` pass for both agent and server modules.
 
+## P1.3 — Save synchronization and restore
+
+### Scope
+
+- Discover only the contract roots and operator-configured extra directories.
+- Enforce extension, directory, depth, per-file and per-cycle limits.
+- Send text as UTF-8 and binary files as base64 in request-sized chunks.
+- Keep save hashes separate from preference hashes and advance them only after server confirmation.
+- Queue restore only for the selected Wine prefix and game, with the selected files in the command payload.
+
+### Observations
+
+- The server now persists `files.encoding`; hashes and displayed sizes use decoded bytes.
+- Restore remains fail-closed: the server mutation flag and local `allow_restore_saves` policy are both required.
+- The agent rejects absolute/traversal paths, invalid encodings, oversized payloads and symlink components.
+- Restore writes through a same-directory temporary file followed by rename.
+
+### Tests
+
+- Collector roots, extras, filters, depth, total cap and symlink rejection.
+- UTF-8/base64 classification, unchanged-file skipping and request chunking.
+- Atomic restore, binary restoration, traversal rejection and symlink-parent rejection.
+- Server encoding persistence, invalid base64 rejection, game filtering and restore payload.
+- Full agent/server Go tests and vet pass.
+
+## P1.4 — Automatic agent updates
+
+### Scope
+
+- Check the configured server version every 15 minutes through systemd timers.
+- Download the agent only when the remote version is newer.
+- Verify the server SHA-256 checksum and the downloaded binary version.
+- Replace atomically with backup, restart, health check and rollback.
+
+### Observations
+
+- System-wide installations use a root updater unit; user installations use `systemctl --user`.
+- The desktop agent is deployed as a user service for `joseti`, with `HOME` and `XDG_STATE_HOME` pointing at that user's real paths.
+- The live deployment was verified with a controlled `0.6.1 -> 0.6.2` upgrade, then restored to the server-deployed `0.6.1` binary.
+- The system-level `lem` user is reserved for headless/system-only deployments; it must not be used to read another user's home.
+
+### Tests
+
+- Version comparison and parsing.
+- Checksum/download/replace/rollback unit test with mocked systemd.
+- Real user-timer execution reporting the current version.
+- Real controlled upgrade and health check, followed by restoration.
+
 ### Next
 
-- P1.3: connect save collection and restore handling.
+- P1 and the operational update gate are complete; choose the next product priority.

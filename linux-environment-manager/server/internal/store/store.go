@@ -242,6 +242,7 @@ type PreferenceInput struct {
 	Filename     string `json:"filename"`
 	RelativePath string `json:"relative_path"`
 	Content      string `json:"content"`
+	Encoding     string `json:"encoding,omitempty"`
 }
 
 type PreferenceFile struct {
@@ -252,6 +253,7 @@ type PreferenceFile struct {
 	Filename     string    `json:"filename"`
 	RelativePath string    `json:"relative_path"`
 	Content      string    `json:"content"`
+	Encoding     string    `json:"encoding,omitempty"`
 	ContentHash  string    `json:"content_hash"`
 	SizeBytes    int64     `json:"size_bytes"`
 	SyncedAt     time.Time `json:"synced_at"`
@@ -261,6 +263,20 @@ type PreferenceFile struct {
 type PreferenceRejection struct {
 	Filename string `json:"filename"`
 	Reason   string `json:"reason"`
+}
+
+type RestoreSaveFile struct {
+	Filename     string `json:"filename"`
+	RelativePath string `json:"relative_path"`
+	Content      string `json:"content"`
+	Encoding     string `json:"encoding,omitempty"`
+}
+
+type RestoreSavesPayload struct {
+	SourceDeviceID string            `json:"source_device_id"`
+	PrefixID       string            `json:"prefix_id"`
+	GameName       string            `json:"game_name"`
+	Files          []RestoreSaveFile `json:"files"`
 }
 
 type DeviceCommand struct {
@@ -314,6 +330,7 @@ func NewStore(root string) (*Store, error) {
 	if err := s.initSchema(); err != nil {
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
+	s.migrateAddFileEncodingColumn()
 	s.migrateAddStatusColumn()
 	s.migrateAddFingerprintColumn()
 	s.migrateHashDeviceTokens()
@@ -322,6 +339,14 @@ func NewStore(root string) (*Store, error) {
 		return nil, fmt.Errorf("migrate legacy: %w", err)
 	}
 	return s, nil
+}
+
+func (s *Store) migrateAddFileEncodingColumn() {
+	var count int
+	s.db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('files') WHERE name='encoding'").Scan(&count)
+	if count == 0 {
+		_, _ = s.db.Exec("ALTER TABLE files ADD COLUMN encoding TEXT NOT NULL DEFAULT ''")
+	}
 }
 
 func (s *Store) migrateAddStatusColumn() {
@@ -417,6 +442,7 @@ func (s *Store) initSchema() error {
 		filename TEXT NOT NULL,
 		relative_path TEXT NOT NULL,
 		content TEXT NOT NULL,
+		encoding TEXT NOT NULL DEFAULT '',
 		content_hash TEXT NOT NULL,
 		size_bytes INTEGER NOT NULL,
 		synced_at TEXT NOT NULL,
@@ -888,7 +914,7 @@ func (s *Store) ListFiles(deviceID string) ([]PreferenceFile, error) {
 	defer s.mu.RUnlock()
 
 	rows, err := s.db.Query(
-		"SELECT id, device_id, user_id, category, filename, relative_path, content, content_hash, size_bytes, synced_at, status FROM files WHERE device_id = ? ORDER BY synced_at DESC",
+		"SELECT id, device_id, user_id, category, filename, relative_path, content, encoding, content_hash, size_bytes, synced_at, status FROM files WHERE device_id = ? ORDER BY synced_at DESC",
 		deviceID,
 	)
 	if err != nil {
@@ -900,7 +926,7 @@ func (s *Store) ListFiles(deviceID string) ([]PreferenceFile, error) {
 	for rows.Next() {
 		var f PreferenceFile
 		var syncedAt string
-		if err := rows.Scan(&f.ID, &f.DeviceID, &f.UserID, &f.Category, &f.Filename, &f.RelativePath, &f.Content, &f.ContentHash, &f.SizeBytes, &syncedAt, &f.Status); err != nil {
+		if err := rows.Scan(&f.ID, &f.DeviceID, &f.UserID, &f.Category, &f.Filename, &f.RelativePath, &f.Content, &f.Encoding, &f.ContentHash, &f.SizeBytes, &syncedAt, &f.Status); err != nil {
 			return nil, err
 		}
 		f.SyncedAt = textTime(syncedAt)
@@ -937,14 +963,20 @@ func (s *Store) SavePreferenceBatch(deviceID string, inputs []PreferenceInput) (
 			rejected = append(rejected, PreferenceRejection{Filename: input.Filename, Reason: err.Error()})
 			continue
 		}
-		hash := hashContent(input.Content)
+		decoded, err := decodePreferenceContent(input)
+		if err != nil {
+			rejected = append(rejected, PreferenceRejection{Filename: input.Filename, Reason: err.Error()})
+			continue
+		}
+		hash := hashBytes(decoded)
+		size := int64(len(decoded))
 		var existing PreferenceFile
 		var existingSyncedAt string
-		err := s.db.QueryRow(
-			"SELECT id, device_id, user_id, category, filename, relative_path, content, content_hash, size_bytes, synced_at, status FROM files WHERE device_id = ? AND category = ? AND relative_path = ? AND filename = ?",
+		err = s.db.QueryRow(
+			"SELECT id, device_id, user_id, category, filename, relative_path, content, encoding, content_hash, size_bytes, synced_at, status FROM files WHERE device_id = ? AND category = ? AND relative_path = ? AND filename = ?",
 			deviceID, input.Category, input.RelativePath, input.Filename,
-		).Scan(&existing.ID, &existing.DeviceID, &existing.UserID, &existing.Category, &existing.Filename, &existing.RelativePath, &existing.Content, &existing.ContentHash, &existing.SizeBytes, &existingSyncedAt, &existing.Status)
-		if err == nil && existing.ContentHash == hash {
+		).Scan(&existing.ID, &existing.DeviceID, &existing.UserID, &existing.Category, &existing.Filename, &existing.RelativePath, &existing.Content, &existing.Encoding, &existing.ContentHash, &existing.SizeBytes, &existingSyncedAt, &existing.Status)
+		if err == nil && existing.ContentHash == hash && existing.Encoding == input.Encoding {
 			continue
 		}
 
@@ -954,15 +986,16 @@ func (s *Store) SavePreferenceBatch(deviceID string, inputs []PreferenceInput) (
 		}
 		now := time.Now().UTC()
 		_, err = s.db.Exec(
-			`INSERT INTO files (id, device_id, user_id, category, filename, relative_path, content, content_hash, size_bytes, synced_at, status)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`INSERT INTO files (id, device_id, user_id, category, filename, relative_path, content, encoding, content_hash, size_bytes, synced_at, status)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(device_id, category, relative_path, filename) DO UPDATE SET
 			   content = excluded.content,
+			   encoding = excluded.encoding,
 			   content_hash = excluded.content_hash,
 			   size_bytes = excluded.size_bytes,
 			   synced_at = excluded.synced_at,
 			   status = excluded.status`,
-			id, deviceID, "", input.Category, input.Filename, input.RelativePath, input.Content, hash, int64(len(input.Content)), timeText(now), "synced",
+			id, deviceID, "", input.Category, input.Filename, input.RelativePath, input.Content, input.Encoding, hash, size, timeText(now), "synced",
 		)
 		if err != nil {
 			rejected = append(rejected, PreferenceRejection{Filename: input.Filename, Reason: err.Error()})
@@ -976,8 +1009,9 @@ func (s *Store) SavePreferenceBatch(deviceID string, inputs []PreferenceInput) (
 			Filename:     input.Filename,
 			RelativePath: input.RelativePath,
 			Content:      input.Content,
+			Encoding:     input.Encoding,
 			ContentHash:  hash,
-			SizeBytes:    int64(len(input.Content)),
+			SizeBytes:    size,
 			SyncedAt:     now,
 			Status:       "synced",
 		})
@@ -1292,6 +1326,28 @@ func validatePreferenceInput(input PreferenceInput) error {
 	if strings.Contains(input.RelativePath, "..") || strings.HasPrefix(input.RelativePath, "/") {
 		return errPathTraversal
 	}
+	if input.Encoding != "" && input.Encoding != "base64" {
+		return fmt.Errorf("unsupported content encoding: %s", input.Encoding)
+	}
+	if input.Encoding == "base64" {
+		if input.Category != "saves" {
+			return errors.New("base64 encoding is only valid for saves")
+		}
+		if len(input.Content) > base64.StdEncoding.EncodedLen(maxFileBytes) {
+			return errFileTooLarge
+		}
+		decoded, err := base64.StdEncoding.DecodeString(input.Content)
+		if err != nil {
+			return errBinaryContent
+		}
+		if len(decoded) == 0 {
+			return errors.New("empty content")
+		}
+		if len(decoded) > maxFileBytes {
+			return errFileTooLarge
+		}
+		return nil
+	}
 	if int64(len(input.Content)) > maxFileBytes {
 		return errFileTooLarge
 	}
@@ -1332,9 +1388,20 @@ func validCategoryFormat(cat string) bool {
 	return true
 }
 
-func hashContent(content string) string {
-	h := sha256.Sum256([]byte(content))
+func decodePreferenceContent(input PreferenceInput) ([]byte, error) {
+	if input.Encoding == "base64" {
+		return base64.StdEncoding.DecodeString(input.Content)
+	}
+	return []byte(input.Content), nil
+}
+
+func hashBytes(content []byte) string {
+	h := sha256.Sum256(content)
 	return hex.EncodeToString(h[:])
+}
+
+func hashContent(content string) string {
+	return hashBytes([]byte(content))
 }
 
 func containsSecret(content string) bool {
@@ -2004,16 +2071,83 @@ func (s *Store) ListPendingCommands(deviceID string) []DeviceCommand {
 	return cmds
 }
 
-// GetSaveFilesForGame returns preference files matching a prefix.
+// GetSaveFilesForGame returns only save files belonging to the requested
+// Wine prefix and game path.
 func (s *Store) GetSaveFilesForGame(deviceID, prefixID, gameName string) ([]PreferenceFile, error) {
-	return s.ListFiles(deviceID)
+	files, err := s.ListFiles(deviceID)
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]PreferenceFile, 0)
+	for _, file := range files {
+		if file.Category != "saves" || !savePathInPrefix(file.RelativePath, prefixID) || !savePathInGame(file.RelativePath, gameName) {
+			continue
+		}
+		filtered = append(filtered, file)
+	}
+	return filtered, nil
 }
 
-// QueueRestoreSaves queues a restore saves command.
+func savePathInPrefix(relativePath, prefixID string) bool {
+	parts := strings.Split(strings.Trim(filepath.ToSlash(relativePath), "/"), "/")
+	for i := 0; i+1 < len(parts); i++ {
+		if parts[i] == "wine-prefixes" && parts[i+1] == prefixID {
+			return true
+		}
+	}
+	return false
+}
+
+func savePathInGame(relativePath, gameName string) bool {
+	gameName = strings.Trim(gameName, "/")
+	if gameName == "" {
+		return true
+	}
+	pathParts := strings.Split(strings.Trim(filepath.ToSlash(relativePath), "/"), "/")
+	gameParts := strings.Split(gameName, "/")
+	for i := 0; i+len(gameParts) <= len(pathParts); i++ {
+		match := true
+		for j := range gameParts {
+			if pathParts[i+j] != gameParts[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
+// QueueRestoreSaves keeps the original command shape for callers that do not
+// attach files. The agent-facing command uses QueueRestoreSavesWithFiles.
 func (s *Store) QueueRestoreSaves(deviceID, prefixID, gameName string) (DeviceCommand, error) {
+	return s.QueueRestoreSavesWithFiles(deviceID, "", prefixID, gameName, nil)
+}
+
+// QueueRestoreSavesWithFiles queues a restore command carrying the selected
+// save contents to the target agent.
+func (s *Store) QueueRestoreSavesWithFiles(deviceID, sourceDeviceID, prefixID, gameName string, files []PreferenceFile) (DeviceCommand, error) {
+	payloadFiles := make([]RestoreSaveFile, 0, len(files))
+	for _, file := range files {
+		payloadFiles = append(payloadFiles, RestoreSaveFile{
+			Filename: file.Filename, RelativePath: file.RelativePath,
+			Content: file.Content, Encoding: file.Encoding,
+		})
+	}
+	payload, err := json.Marshal(RestoreSavesPayload{
+		SourceDeviceID: sourceDeviceID, PrefixID: prefixID, GameName: gameName, Files: payloadFiles,
+	})
+	if err != nil {
+		return DeviceCommand{}, err
+	}
+	if len(payload) > 16<<20 {
+		return DeviceCommand{}, errors.New("restore payload exceeds 16 MiB")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.queueCommandLocked(deviceID, "restore_saves", prefixID, gameName, "", "")
+	return s.queueCommandLocked(deviceID, "restore_saves", prefixID, gameName, "", string(payload))
 }
 
 // UpdateApps updates the apps inventory for a device.

@@ -96,6 +96,8 @@ func TestAgentInstallScriptRegistersAndVerifies(t *testing.T) {
 		"SUCCESS - LEM agent installed AND connected",
 		"could NOT reach the server",
 		"journalctl --user -u lem-agent",
+		"lem-agent-update.timer",
+		"--user-systemd",
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("install script missing %q\nscript:\n%s", want, script)

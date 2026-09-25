@@ -22,6 +22,8 @@ RUN go mod download
 COPY --from=agent-build /out/lem-agent /app/lem-agent
 COPY scripts/install.sh /app/install.sh
 COPY server/lem-agent.service /app/lem-agent.service
+COPY server/lem-agent-update.service /app/lem-agent-update.service
+COPY server/lem-agent-update.timer /app/lem-agent-update.timer
 RUN sha256sum /app/lem-agent | awk '{print $1 "  lem-agent"}' > /app/checksums.txt
 
 EXPOSE 8080

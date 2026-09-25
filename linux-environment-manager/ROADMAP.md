@@ -25,7 +25,25 @@ A próxima etapa é P1 (funcionalidade), não parte desta remediação.
 - [x] alinhar o payload do servidor ao campo `path`
 - [x] testar fontes, filtragem, symlinks, payload e retry
 
-P1.3 (saves/restore) permanece pendente.
+## P1.3 — Saves e restore (concluída)
+- [x] coletar as raízes e extras definidos pelo contrato
+- [x] aplicar extensões, exclusões, profundidade e limites por ciclo
+- [x] sincronizar texto e binários em base64 com retry
+- [x] manter estado/hashes separados de preferências
+- [x] filtrar restores por prefixo e jogo
+- [x] transportar payload seguro no comando de restore
+- [x] aplicar política local, feature flag e paths seguros no agent
+- [x] escrita atômica com rejeição de traversal e symlink
+- [x] testes de collector, encoding, chunking, persistência e restore
+
+## P1.4 — Auto-update do agent (concluída)
+- [x] comando `lem-agent update` com comparação de versão
+- [x] download por canal autenticado do servidor e verificação SHA-256
+- [x] validação da versão baixada antes da troca
+- [x] troca atômica com backup e rollback
+- [x] timer systemd de 15 minutos com opt-out `LEM_AUTO_UPDATE=0`
+
+A funcionalidade P1 está concluída. A próxima etapa é uma nova priorização.
 
 ## FASE 0 — Arquitetura e contratos
 - [x] definir o modelo de preferências por dispositivo

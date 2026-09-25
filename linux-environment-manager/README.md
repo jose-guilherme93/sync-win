@@ -198,6 +198,18 @@ The unit file is stored at:
 ~/.config/systemd/user/lem-agent.service
 ```
 
+### Agent updates
+
+New installations enable `lem-agent-update.timer` by default. It checks the server every 15 minutes, compares versions, verifies the SHA-256 checksum and the downloaded binary version, then replaces the agent atomically and restarts it. Failed health checks roll back automatically.
+
+Disable it before installation with:
+
+```bash
+sudo LEM_AUTO_UPDATE=0 bash install.sh
+```
+
+The updater is pull-based: the agent only contacts the configured LEM server. The system-wide installer uses a root systemd timer; the user installer uses `systemctl --user`.
+
 ## Documentation
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — full architectural design
