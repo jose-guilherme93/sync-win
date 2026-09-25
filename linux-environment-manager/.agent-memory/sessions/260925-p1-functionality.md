@@ -38,6 +38,7 @@ status: active
 - `git diff --check` passed after the final P1.3 documentation update.
 - Workspace config tests cover explicit discovery, symlink/traversal rejection, server configuration and agent upload persistence.
 - Live user service synchronized three real preference files and a binary save test.
+- Live workspace E2E uploaded a configured `.vscode/settings.json` as `category=workspace`, then the fixture and server row were removed.
 - Live user update timer completed successfully; a controlled 0.6.1 -> 0.6.2 upgrade and rollback path was verified.
 - Pre-existing untracked `../.agents/`, `../skills-lock.json` and `.opencode/` were not modified.
 
