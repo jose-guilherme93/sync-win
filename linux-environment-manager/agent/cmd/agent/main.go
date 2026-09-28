@@ -377,6 +377,8 @@ type telemetryStats struct {
 	UptimeSeconds       int64             `json:"uptime_seconds"`
 	LoadAverage         string            `json:"load_average,omitempty"`
 	NetworkIFaces       []networkIface    `json:"network_ifaces,omitempty"`
+	NetRxRate           float64           `json:"net_rx_rate,omitempty"`
+	NetTxRate           float64           `json:"net_tx_rate,omitempty"`
 	DiskReadBytes       uint64            `json:"disk_read_bytes,omitempty"`
 	DiskWriteBytes      uint64            `json:"disk_write_bytes,omitempty"`
 	DiskReadRate        float64           `json:"disk_read_rate,omitempty"`
@@ -566,11 +568,9 @@ func cmdDaemon(args []string) {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
-	var previousCPU, previousIdle, previousDiskRead, previousDiskWrite uint64
-	var previousNetRX, previousNetTX map[string]uint64
-	var previousAt time.Time
-	var agentImpact collectors.AgentImpact
-	var previousCPUCores []uint64
+	// previous carries every counter needed to turn cumulative kernel counters
+	// into rates and percentages on the next cycle.
+	var previous hardwareSample
 	consecutiveFailures := 0
 	// Logs are heavier to collect (journalctl), so sample them less often
 	// than hardware telemetry: roughly every 60s at the default 10s interval.
@@ -634,9 +634,8 @@ func cmdDaemon(args []string) {
 			log.Printf("command processing failed: %v", err)
 			hadError = true
 		}
-		stats, cpuTotal, idle, diskRead, diskWrite, newNetRX, newNetTX, newImpact, newCores, err := collectHardwareStats(previousCPU, previousIdle, previousDiskRead, previousDiskWrite, previousNetRX, previousNetTX, previousAt, now, agentImpact, previousCPUCores)
-		agentImpact = newImpact
-		previousCPUCores = newCores
+		stats, sample, err := collectHardwareStats(&previous, now)
+		previous = sample
 		if err == nil {
 			logCycle++
 			if logCycle >= logCollectCycles {
@@ -651,8 +650,6 @@ func cmdDaemon(args []string) {
 		} else {
 			log.Printf("telemetry sent cpu=%.1f%% memory=%d/%d power=%.1fW agent=%.1f%% os=%q", stats.CPUUsagePercent, stats.MemoryUsedBytes, stats.MemoryTotalBytes, stats.PowerWatts, stats.AgentCPUUsage, stats.OperatingSystem)
 		}
-		previousCPU, previousIdle, previousDiskRead, previousDiskWrite, previousAt = cpuTotal, idle, diskRead, diskWrite, now
-		previousNetRX, previousNetTX = newNetRX, newNetTX
 		if serialized, err := json.Marshal(state); err == nil && string(serialized) != lastStateJSON {
 			saveAgentState(state)
 			lastStateJSON = string(serialized)
@@ -1106,19 +1103,42 @@ func parseLynisReport(raw string) lynisReport {
 	return report
 }
 
+// hardwareSample is the counter snapshot carried from one telemetry cycle to the
+// next. Every rate and percentage the agent reports is a delta against this
+// state, which is why it must be threaded through the collector.
+type hardwareSample struct {
+	CPU         uint64
+	Idle        uint64
+	DiskRead    uint64
+	DiskWrite   uint64
+	NetRX       map[string]uint64
+	NetTX       map[string]uint64
+	CPUCores    []uint64
+	Processes   collectors.ProcessCPUSample
+	AgentImpact collectors.AgentImpact
+	At          time.Time
+}
+
 // collectHardwareStats collects real hardware data from /proc, /sys, and collectors.
 // Independent data sources are collected in parallel using goroutines.
-func collectHardwareStats(prevCPU, prevIdle, prevDiskRead, prevDiskWrite uint64, prevNetRX, prevNetTX map[string]uint64, prevAt, now time.Time, agentImpact collectors.AgentImpact, prevCPUCores []uint64) (telemetryStats, uint64, uint64, uint64, uint64, map[string]uint64, map[string]uint64, collectors.AgentImpact, []uint64, error) {
+// It returns the telemetry payload and the sample to feed into the next call.
+func collectHardwareStats(prev *hardwareSample, now time.Time) (telemetryStats, hardwareSample, error) {
 	var stats telemetryStats
+	next := hardwareSample{
+		At:          now,
+		NetRX:       map[string]uint64{},
+		NetTX:       map[string]uint64{},
+		AgentImpact: prev.AgentImpact,
+	}
 
 	// CPU counters must be read first (needed for delta calculation)
 	cpuTotal, idle, err := readCPUCounters()
 	if err != nil {
-		return stats, 0, 0, 0, 0, nil, nil, agentImpact, nil, fmt.Errorf("read cpu: %w", err)
+		return stats, next, fmt.Errorf("read cpu: %w", err)
 	}
-	if prevCPU > 0 && cpuTotal > prevCPU {
-		totalDelta := cpuTotal - prevCPU
-		idleDelta := idle - prevIdle
+	if prev.CPU > 0 && cpuTotal > prev.CPU {
+		totalDelta := cpuTotal - prev.CPU
+		idleDelta := idle - prev.Idle
 		if totalDelta > 0 {
 			stats.CPUUsagePercent = float64(totalDelta-idleDelta) / float64(totalDelta) * 100.0
 		}
@@ -1147,7 +1167,7 @@ func collectHardwareStats(prevCPU, prevIdle, prevDiskRead, prevDiskWrite uint64,
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		newCPUCores, corePercents = collectors.CollectCPUCores(prevCPUCores)
+		newCPUCores, corePercents = collectors.CollectCPUCores(prev.CPUCores)
 	}()
 
 	// CPU temperature
@@ -1188,7 +1208,7 @@ func collectHardwareStats(prevCPU, prevIdle, prevDiskRead, prevDiskWrite uint64,
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		newImpact = collectors.CollectAgentImpact(agentImpact)
+		newImpact = collectors.CollectAgentImpact(prev.AgentImpact)
 	}()
 
 	// Network
@@ -1230,12 +1250,18 @@ func collectHardwareStats(prevCPU, prevIdle, prevDiskRead, prevDiskWrite uint64,
 		memExpanded = collectors.CollectMemoryExpanded()
 	}()
 
-	// Top processes
+	// Top processes. CPU percentages are deltas against the previous sample, so
+	// the previous jiffies and the elapsed wall time are required.
 	var topCPU, topMem []collectors.ProcessInfo
+	var newProcSample collectors.ProcessCPUSample
+	procElapsed := now.Sub(prev.At)
+	if prev.At.IsZero() {
+		procElapsed = 0
+	}
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		topCPU, topMem = collectors.CollectTopProcesses(10, runtime.NumCPU())
+		topCPU, topMem, newProcSample = collectors.CollectTopProcesses(10, runtime.NumCPU(), prev.Processes, procElapsed)
 	}()
 
 	// System info (file reads)
@@ -1366,11 +1392,11 @@ func collectHardwareStats(prevCPU, prevIdle, prevDiskRead, prevDiskWrite uint64,
 	// Disk I/O rates
 	stats.DiskReadBytes = diskRead
 	stats.DiskWriteBytes = diskWrite
-	if prevDiskRead > 0 && diskRead > prevDiskRead {
-		elapsed := now.Sub(prevAt).Seconds()
-		if elapsed > 0 {
-			stats.DiskReadRate = float64(diskRead-prevDiskRead) / elapsed
-			stats.DiskWriteRate = float64(diskWrite-prevDiskWrite) / elapsed
+	if prev.DiskRead > 0 && diskRead > prev.DiskRead {
+		elapsed := now.Sub(prev.At).Seconds()
+		if elapsed > 0 && diskWrite > prev.DiskWrite {
+			stats.DiskReadRate = float64(diskRead-prev.DiskRead) / elapsed
+			stats.DiskWriteRate = float64(diskWrite-prev.DiskWrite) / elapsed
 		}
 	}
 
@@ -1404,26 +1430,26 @@ func collectHardwareStats(prevCPU, prevIdle, prevDiskRead, prevDiskWrite uint64,
 		})
 	}
 
-	// Compute network rates (needs previous state)
-	newNetRXFinal := map[string]uint64{}
-	newNetTXFinal := map[string]uint64{}
+	// Compute network rates (needs previous state) and the totals the dashboard
+	// renders. Totalling here rather than in the browser keeps the three
+	// frontend call sites from having to reimplement (and get wrong) the sum.
+	elapsed := now.Sub(prev.At).Seconds()
 	var netIfaces []networkIface
 	for _, iface := range interfaces {
 		rxRate := 0.0
 		txRate := 0.0
-		if prevNetRX != nil && !prevAt.IsZero() {
-			elapsed := now.Sub(prevAt).Seconds()
-			if elapsed > 0 {
-				if prev, ok := prevNetRX[iface.Name]; ok && iface.RXBytes > prev {
-					rxRate = float64(iface.RXBytes-prev) / elapsed
-				}
-				if prev, ok := prevNetTX[iface.Name]; ok && iface.TXBytes > prev {
-					txRate = float64(iface.TXBytes-prev) / elapsed
-				}
+		if prev.NetRX != nil && elapsed > 0 {
+			if before, ok := prev.NetRX[iface.Name]; ok && iface.RXBytes > before {
+				rxRate = float64(iface.RXBytes-before) / elapsed
+			}
+			if before, ok := prev.NetTX[iface.Name]; ok && iface.TXBytes > before {
+				txRate = float64(iface.TXBytes-before) / elapsed
 			}
 		}
-		newNetRXFinal[iface.Name] = iface.RXBytes
-		newNetTXFinal[iface.Name] = iface.TXBytes
+		next.NetRX[iface.Name] = iface.RXBytes
+		next.NetTX[iface.Name] = iface.TXBytes
+		stats.NetRxRate += rxRate
+		stats.NetTxRate += txRate
 		netIfaces = append(netIfaces, networkIface{
 			Name:      iface.Name,
 			RXBytes:   iface.RXBytes,
@@ -1438,7 +1464,11 @@ func collectHardwareStats(prevCPU, prevIdle, prevDiskRead, prevDiskWrite uint64,
 	}
 	stats.NetworkIFaces = netIfaces
 
-	return stats, cpuTotal, idle, diskRead, diskWrite, newNetRXFinal, newNetTXFinal, newImpact, newCPUCores, nil
+	next.CPU, next.Idle = cpuTotal, idle
+	next.DiskRead, next.DiskWrite = diskRead, diskWrite
+	next.CPUCores, next.Processes, next.AgentImpact = newCPUCores, newProcSample, newImpact
+
+	return stats, next, nil
 }
 
 // sendTelemetry sends collected hardware stats to the server.

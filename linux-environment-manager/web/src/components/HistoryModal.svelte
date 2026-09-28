@@ -12,7 +12,7 @@
     Legend
   } from 'chart.js'
   import { getCachedHistory, setCachedHistory } from '../lib/telemetry-cache'
-  import { apiFetch, serverBase } from '../lib/api'
+  import { apiFetch, apiURL, serverBase } from '../lib/api'
 
   Chart.register(LineController, LineElement, PointElement, LinearScale, CategoryScale, Filler, Tooltip, Legend)
 
@@ -69,7 +69,7 @@
       }
 
       const params = new URLSearchParams({ from, to, resolution })
-      const response = await apiFetch(`${serverBase}/api/devices/${device.id}/telemetry/history-v2?${params}`)
+      const response = await apiFetch(apiURL(`/api/devices/${device.id}/telemetry/history-v2?${params}`))
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       const data = await response.json()
       history = mapPoints(data.points || [])

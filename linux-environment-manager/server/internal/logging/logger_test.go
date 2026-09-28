@@ -25,7 +25,36 @@ func setupTestDB(t *testing.T) *sql.DB {
 		t.Fatal("apply migration:", err)
 	}
 
+	// The log store resolves owner_id from the owning device on insert, so the
+	// minimal devices table has to exist even in the isolated log test DB.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS devices (
+		id TEXT PRIMARY KEY,
+		owner_id TEXT NOT NULL DEFAULT ''
+	)`); err != nil {
+		t.Fatal("create devices stub:", err)
+	}
+
 	return db
+}
+
+func TestIsStreamingPath(t *testing.T) {
+	// The notification SSE stream stays open for as long as the client is
+	// connected, so its duration must never be reported as a slow request.
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{"/api/notifications/stream", true},
+		{"/api/notifications/stream?ticket=abc", true},
+		{"/api/notifications/inbox", false},
+		{"/api/devices/abc/telemetry", false},
+		{"/api/logs", false},
+	}
+	for _, tt := range tests {
+		if got := isStreamingPath(tt.path); got != tt.want {
+			t.Errorf("isStreamingPath(%q) = %v, want %v", tt.path, got, tt.want)
+		}
+	}
 }
 
 func TestLevelString(t *testing.T) {

@@ -70,6 +70,8 @@
       "disk_write_bytes",
       "disk_read_rate",
       "disk_write_rate",
+      "net_rx_rate",
+      "net_tx_rate",
       "uptime_seconds",
       "load_average",
       "cpu_model",
@@ -81,7 +83,33 @@
       "locale",
       "timezone",
       "agent_version"
-    ]
+    ],
+    "rate_semantics": {
+      "net_rx_rate": "Bytes per second, summed over real interfaces only. The dashboard must not re-sum network_ifaces.",
+      "net_tx_rate": "Bytes per second, summed over real interfaces only."
+    },
+    "network_interface_filter": {
+      "excluded_prefixes": [
+        "lo",
+        "veth",
+        "br-",
+        "br0",
+        "docker",
+        "virbr",
+        "vnet",
+        "cni",
+        "flannel",
+        "cali",
+        "kube-ipvs"
+      ],
+      "rationale": "Container and VM plumbing reports the same bytes on the veth pair, its bridge and docker0. Summing them inflates network totals several times over. Real NICs and deliberate tunnels (tailscale, wireguard, tun/tap) are kept.",
+      "kept_examples": ["eth0", "wlan0", "enp3s0", "tailscale0", "wg0", "tun0", "tap0"]
+    },
+    "disk_partition_dedup": {
+      "by_device": true,
+      "exempt_filesystems": ["btrfs"],
+      "rationale": "ext4 reports /home, /root, /srv and friends as separate mounts of one device, which listed the same disk several times. Btrfs subvolumes are independent mounts and are kept."
+    }
   },
   "apps_inventory": {
     "sources": ["apt", "flatpak", "pacman", "aur", "appimage"],

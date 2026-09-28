@@ -29,8 +29,10 @@ func (s *Store) WriteBatch(entries []*LogEntry) error {
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(`INSERT INTO logs (ts, level, category, event, message, device_id, user_id, request_id, correlation_id, duration_ms, status, metadata, redacted)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	// owner_id is resolved from the device so log queries can filter on a single
+	// indexed column instead of an OR over a subquery.
+	stmt, err := tx.Prepare(`INSERT INTO logs (ts, level, category, event, message, device_id, user_id, request_id, correlation_id, duration_ms, status, metadata, redacted, owner_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT d.owner_id FROM devices d WHERE d.id = ?), ?))`)
 	if err != nil {
 		return fmt.Errorf("prepare: %w", err)
 	}
@@ -56,6 +58,8 @@ func (s *Store) WriteBatch(entries []*LogEntry) error {
 			entry.Status,
 			metaJSON,
 			redacted,
+			entry.DeviceID,
+			entry.UserID,
 		); err != nil {
 			return fmt.Errorf("insert log: %w", err)
 		}
@@ -184,7 +188,7 @@ func (s *Store) GetByID(id int64) (*LogEntry, error) {
 // of the owner's devices.
 func (s *Store) GetByIDForOwner(id int64, ownerID string) (*LogEntry, error) {
 	row := s.db.QueryRow(`SELECT id, ts, level, category, event, message, device_id, user_id, request_id, correlation_id, duration_ms, status, metadata, redacted
-		FROM logs WHERE id = ? AND (user_id = ? OR device_id IN (SELECT id FROM devices WHERE owner_id = ?))`, id, ownerID, ownerID)
+		FROM logs WHERE id = ? AND owner_id = ?`, id, ownerID)
 	var entry LogEntry
 	var ts, level, category, event, metaJSON string
 	var redacted int
@@ -204,8 +208,8 @@ func (s *Store) GetByIDForOwner(id int64, ownerID string) (*LogEntry, error) {
 
 // StatsForOwner returns aggregate statistics scoped to an owner.
 func (s *Store) StatsForOwner(ownerID string) (map[string]any, error) {
-	where := "(user_id = ? OR device_id IN (SELECT id FROM devices WHERE owner_id = ?))"
-	args := []any{ownerID, ownerID}
+	where := "owner_id = ?"
+	args := []any{ownerID}
 	stats := make(map[string]any)
 	var total int
 	if err := s.db.QueryRow("SELECT COUNT(*) FROM logs WHERE "+where, args...).Scan(&total); err != nil {
@@ -417,8 +421,10 @@ func buildWhereClause(params QueryParams) (string, []any) {
 		args = append(args, "%"+params.Search+"%", "%"+params.Search+"%")
 	}
 	if params.OwnerID != "" {
-		conditions = append(conditions, "(user_id = ? OR device_id IN (SELECT id FROM devices WHERE owner_id = ?))")
-		args = append(args, params.OwnerID, params.OwnerID)
+		// Single indexed column. The previous `(user_id = ? OR device_id IN
+		// (SELECT ...))` form forced a full table scan on every log page.
+		conditions = append(conditions, "owner_id = ?")
+		args = append(args, params.OwnerID)
 	}
 
 	if len(conditions) == 0 {

@@ -3,7 +3,7 @@
   import SystemMetrics from './SystemMetrics.svelte'
   import DockerTab from './DockerTab.svelte'
   import SecurityTab from './SecurityTab.svelte'
-  import { apiFetch, serverBase } from '../lib/api'
+  import { apiFetch, apiURL, serverBase } from '../lib/api'
 
   type AppInfo = { name: string; version: string; source: string; path?: string }
 
@@ -98,7 +98,7 @@
   // tokens in URLs where they can leak through history or proxy logs.
   const attAuth = ''
 
-  const TAB_NAMES = ['system', 'files', 'apps', 'saves', 'docker', 'security', 'notes'] as const
+  const TAB_NAMES = ['system', 'files', 'apps', 'saves', 'logs', 'docker', 'security', 'notes'] as const
   type TabName = (typeof TAB_NAMES)[number]
 
   const STATUS_HINTS: Record<string, string> = {
@@ -123,6 +123,122 @@
   let files: PreferenceFile[] = []
   let apps: AppInfo[] = []
   let saves: PreferenceFile[] = []
+
+  $: telemetry = (device.hardware || {}) as Record<string, any>
+
+  // Findings are computed once per telemetry change and shown above the tabs so
+  // the operator sees problems before choosing a tab. Same thresholds the
+  // dashboard cards use, so the two never disagree.
+  type Finding = { text: string; type: 'info' | 'warn' | 'crit' }
+
+  // device is an explicit argument rather than a closure read so the reactive
+  // statement below tracks it. Closing over it meant a new last_error with
+  // unchanged telemetry left the findings stale.
+  function buildInsights(h: Record<string, any>, dev: { last_error?: string; last_seen_at?: string }): Finding[] {
+    const out: Finding[] = []
+    const memTotal = h.memory_total_bytes || 0
+    const memPct = memTotal ? ((h.memory_used_bytes || 0) / memTotal) * 100 : 0
+    const cpu = h.cpu_usage_percent || 0
+    const load1 = parseFloat((h.load_average || '').split(' ')[0] || '0')
+    const netErrors = Array.isArray(h.network_ifaces)
+      ? h.network_ifaces.reduce((acc: number, i: any) => acc + (i.rx_errors || 0) + (i.tx_errors || 0), 0)
+      : 0
+
+    if (dev.last_error) out.push({ text: `Sync error: ${dev.last_error}`, type: 'crit' })
+    if (cpu >= 90) out.push({ text: `CPU ${cpu.toFixed(0)}%`, type: 'crit' })
+    else if (cpu >= 70) out.push({ text: `CPU ${cpu.toFixed(0)}%`, type: 'warn' })
+    if (memPct >= 90) out.push({ text: `Memory ${memPct.toFixed(0)}%`, type: 'crit' })
+    else if (memPct >= 75) out.push({ text: `Memory ${memPct.toFixed(0)}%`, type: 'warn' })
+    if (h.cpu_temperature >= 85) out.push({ text: `CPU ${h.cpu_temperature}°C`, type: 'crit' })
+    else if (h.cpu_temperature >= 70) out.push({ text: `CPU ${h.cpu_temperature}°C`, type: 'warn' })
+    if (h.gpu_temperature_celsius >= 85) out.push({ text: `GPU ${h.gpu_temperature_celsius}°C`, type: 'crit' })
+    if (h.battery_percent > 0 && h.battery_percent < 15 && h.battery_status !== 'charging') {
+      out.push({ text: `Battery ${h.battery_percent.toFixed(0)}%`, type: 'crit' })
+    }
+    if (h.swap_total_bytes > 0) {
+      const swapPct = ((h.swap_used_bytes || 0) / h.swap_total_bytes) * 100
+      if (swapPct >= 50) out.push({ text: `Swap ${swapPct.toFixed(0)}%`, type: 'warn' })
+    }
+    for (const p of h.disk_partitions || []) {
+      if (p.used_percent >= 90) out.push({ text: `${p.mount} ${p.used_percent.toFixed(0)}% full`, type: 'crit' })
+      else if (p.used_percent >= 80) out.push({ text: `${p.mount} ${p.used_percent.toFixed(0)}%`, type: 'warn' })
+    }
+    if (netErrors > 0) out.push({ text: `${netErrors} network errors`, type: 'warn' })
+    // Load above the core count means runnable work is queued behind others.
+    if (load1 > 0) {
+      const cores = Array.isArray(h.cpu_core_usage) ? h.cpu_core_usage.length : 0
+      if (cores > 0 && load1 > cores) out.push({ text: `Load ${load1} over ${cores} cores`, type: 'warn' })
+    }
+    if ((h.agent_cpu_usage || 0) > 5) out.push({ text: `Agent ${h.agent_cpu_usage.toFixed(1)}% CPU`, type: 'warn' })
+    if (h.docker_info?.stopped > 0) out.push({ text: `${h.docker_info.stopped} stopped containers`, type: 'info' })
+    if (h.lynis_available === false) out.push({ text: 'Lynis not installed', type: 'info' })
+    const age = (Date.now() - Date.parse(h.collected_at || dev.last_seen_at || '')) / 1000
+    if (Number.isFinite(age) && age > 120) out.push({ text: 'Telemetry is stale', type: 'warn' })
+
+    return out
+  }
+
+  $: insights = buildInsights(telemetry, device)
+
+  // Device logs. The agent samples journald on the machine and ships the last
+  // batch with telemetry, so this reads the detail payload rather than polling
+  // anything new.
+  type DeviceLog = { timestamp: string; level: string; source: string; message: string }
+  type LogLevel = 'all' | 'error' | 'warn' | 'info'
+  let deviceLogs: DeviceLog[] = []
+  let logsLoading = false
+  let logsError = ''
+  let logFilter: LogLevel = 'all'
+
+  async function loadDeviceLogs() {
+    logsLoading = true
+    logsError = ''
+    try {
+      const response = await apiFetch(apiURL(`/api/devices/${device.id}/detail`), { headers: authHeaders })
+      if (!response.ok) throw new Error(`request failed: ${response.status}`)
+      const data = await response.json()
+      deviceLogs = Array.isArray(data?.hardware?.logs) ? data.hardware.logs : []
+    } catch (err) {
+      logsError = err instanceof Error ? err.message : 'Could not load device logs'
+    } finally {
+      logsLoading = false
+    }
+  }
+
+  $: if (activeTab === 'logs' && deviceLogs.length === 0 && !logsLoading && !logsError) {
+    void loadDeviceLogs()
+  }
+
+  $: logCounts = {
+    error: deviceLogs.filter((l) => String(l.level).toLowerCase().includes('err')).length,
+    warn: deviceLogs.filter((l) => String(l.level).toLowerCase().startsWith('warn')).length,
+    info: deviceLogs.filter((l) => String(l.level).toLowerCase().startsWith('info')).length
+  }
+
+  $: visibleLogs =
+    logFilter === 'all'
+      ? deviceLogs
+      : deviceLogs.filter((l) => {
+          const level = String(l.level).toLowerCase()
+          if (logFilter === 'error') return level.includes('err')
+          if (logFilter === 'warn') return level.startsWith('warn')
+          return level.startsWith('info')
+        })
+
+  function logTime(timestamp: string) {
+    if (!timestamp) return ''
+    const t = Date.parse(timestamp)
+    if (Number.isFinite(t)) return new Date(t).toLocaleString()
+    return timestamp.replace('T', ' ').substring(0, 19)
+  }
+
+  function levelClass(level: string) {
+    const l = String(level || '').toLowerCase()
+    if (l.includes('err') || l.includes('crit') || l.includes('fatal')) return 'log-crit'
+    if (l.startsWith('warn')) return 'log-warn'
+    if (l.startsWith('info') || l.startsWith('notice')) return 'log-info'
+    return ''
+  }
   let filesLoading = false
   let appsLoading = false
   let savesLoading = false
@@ -263,7 +379,7 @@
   async function loadFiles() {
     filesLoading = true
     try {
-      const response = await apiFetch(`${serverBase}/api/devices/${device.id}`, {
+      const response = await apiFetch(apiURL(`/api/devices/${device.id}`), {
         headers: authHeaders
       })
       if (!response.ok) throw new Error(`${response.status}`)
@@ -281,7 +397,7 @@
     appsLoading = true
     appsError = ''
     try {
-      const response = await apiFetch(`${serverBase}/api/devices/${device.id}/apps`, {
+      const response = await apiFetch(apiURL(`/api/devices/${device.id}/apps`), {
         headers: authHeaders
       })
       if (!response.ok) throw new Error(`${response.status}`)
@@ -305,7 +421,7 @@
     savesLoading = true
     savesError = ''
     try {
-      const response = await apiFetch(`${serverBase}/api/devices/${device.id}`, {
+      const response = await apiFetch(apiURL(`/api/devices/${device.id}`), {
         headers: authHeaders
       })
       if (!response.ok) throw new Error(`${response.status}`)
@@ -349,7 +465,7 @@
       return
     }
     try {
-      const response = await apiFetch(`${serverBase}/api/devices/${device.id}/apps?action=install`, {
+      const response = await apiFetch(apiURL(`/api/devices/${device.id}/apps?action=install`), {
         method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({ source: app.source, name: app.name })
       })
@@ -363,7 +479,7 @@
   async function excludeFile(file: PreferenceFile) {
     if (!window.confirm(`Exclude ${file.filename} from synchronization?`)) return
     try {
-      const response = await apiFetch(`${serverBase}/api/devices/${device.id}/files/${file.id}`, {
+      const response = await apiFetch(apiURL(`/api/devices/${device.id}/files/${file.id}`), {
         method: 'DELETE',
         headers: authHeaders
       })
@@ -378,7 +494,7 @@
   async function deleteDevice() {
     if (!window.confirm(`Remove ${device.hostname} and all synchronized data?`)) return
     try {
-      const response = await apiFetch(`${serverBase}/api/devices/${device.id}`, { method: 'DELETE', headers: authHeaders })
+      const response = await apiFetch(apiURL(`/api/devices/${device.id}`), { method: 'DELETE', headers: authHeaders })
       if (!response.ok) throw new Error(`${response.status}`)
       dispatch('removed')
       close()
@@ -477,7 +593,7 @@
   async function loadNotes() {
     notesLoading = true
     try {
-      const response = await apiFetch(`${serverBase}/api/devices/${device.id}/notes`, { headers: authHeaders })
+      const response = await apiFetch(apiURL(`/api/devices/${device.id}/notes`), { headers: authHeaders })
       if (!response.ok) throw new Error(`${response.status}`)
       notes = await response.json()
       if (!Array.isArray(notes)) notes = []
@@ -490,7 +606,7 @@
 
   async function loadAttachments() {
     try {
-      const response = await apiFetch(`${serverBase}/api/devices/${device.id}/attachments`, { headers: authHeaders })
+      const response = await apiFetch(apiURL(`/api/devices/${device.id}/attachments`), { headers: authHeaders })
       if (!response.ok) throw new Error(`${response.status}`)
       attachments = await response.json()
       if (!Array.isArray(attachments)) attachments = []
@@ -503,7 +619,7 @@
     if (!noteContent.trim() || noteSaving) return
     noteSaving = true
     try {
-      const response = await apiFetch(`${serverBase}/api/devices/${device.id}/notes`, {
+      const response = await apiFetch(apiURL(`/api/devices/${device.id}/notes`), {
         method: 'POST',
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: noteContent.trim() })
@@ -521,7 +637,7 @@
   async function updateNote(noteId: string) {
     if (!editNoteContent.trim()) return
     try {
-      const response = await apiFetch(`${serverBase}/api/devices/${device.id}/notes/${noteId}`, {
+      const response = await apiFetch(apiURL(`/api/devices/${device.id}/notes/${noteId}`), {
         method: 'PUT',
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: editNoteContent.trim() })
@@ -537,7 +653,7 @@
 
   async function deleteNote(noteId: string) {
     try {
-      const response = await apiFetch(`${serverBase}/api/devices/${device.id}/notes/${noteId}`, {
+      const response = await apiFetch(apiURL(`/api/devices/${device.id}/notes/${noteId}`), {
         method: 'DELETE',
         headers: authHeaders
       })
@@ -567,7 +683,7 @@
       if (uploadNoteContent.trim()) {
         formData.append('content', uploadNoteContent.trim())
       }
-      const response = await apiFetch(`${serverBase}/api/devices/${device.id}/attachments`, {
+      const response = await apiFetch(apiURL(`/api/devices/${device.id}/attachments`), {
         method: 'POST',
         headers: authHeaders,
         body: formData
@@ -590,7 +706,7 @@
 
   async function deleteAttachment(attId: string) {
     try {
-      const response = await apiFetch(`${serverBase}/api/devices/${device.id}/attachments/${attId}`, {
+      const response = await apiFetch(apiURL(`/api/devices/${device.id}/attachments/${attId}`), {
         method: 'DELETE',
         headers: authHeaders
       })
@@ -759,6 +875,7 @@
           </button>
         </div>
 
+        <div class="tab-panel-scroll">
         {#if activeTab === 'files'}
           <div class="panel" role="tabpanel" id="panel-files" aria-labelledby="tab-files">
             <div class="files-header">
@@ -887,6 +1004,45 @@
             {/if}
           </div>
 
+        {:else if activeTab === 'logs'}
+          <div class="panel" role="tabpanel" id="panel-logs" aria-labelledby="tab-logs">
+            <div class="panel-toolbar">
+              <div class="log-filters">
+                {#each (['all', 'error', 'warn', 'info'] as LogLevel[]) as level}
+                  <button class:active={logFilter === level} on:click={() => (logFilter = level)}>
+                    {level}
+                    {#if level !== 'all'}<span class="filter-count">{logCounts[level as Exclude<LogLevel, 'all'>]}</span>{/if}
+                  </button>
+                {/each}
+              </div>
+              <button class="inline" on:click={loadDeviceLogs} disabled={logsLoading}>
+                {logsLoading ? 'Loading...' : 'Refresh'}
+              </button>
+            </div>
+            {#if logsError}
+              <p class="error-inline">{logsError} <button class="inline" on:click={loadDeviceLogs}>Retry</button></p>
+            {:else if logsLoading && deviceLogs.length === 0}
+              <p class="muted">Loading device logs...</p>
+            {:else if deviceLogs.length === 0}
+              <p class="muted">The agent has not reported any device logs yet. It samples the system journal every few minutes.</p>
+            {:else}
+              <ul class="log-list">
+                {#each visibleLogs as log, i (i)}
+                  <li class="log-row {levelClass(log.level)}">
+                    <span class="log-time">{logTime(log.timestamp)}</span>
+                    <span class="log-level">{log.level}</span>
+                    <span class="log-src">{log.source}</span>
+                    <span class="log-msg">{log.message}</span>
+                  </li>
+                {/each}
+                {#if visibleLogs.length === 0}
+                  <li class="muted">No {logFilter} entries in this batch.</li>
+                {/if}
+              </ul>
+              <p class="muted small">Showing {visibleLogs.length} of {deviceLogs.length} entries from the last agent sample.</p>
+            {/if}
+          </div>
+
         {:else if activeTab === 'docker'}
           <div class="panel" role="tabpanel" id="panel-docker" aria-labelledby="tab-docker">
             <DockerTab
@@ -941,16 +1097,16 @@
                     {#each attachments as att (att.id)}
                       <div class="attachment-card">
                         {#if att.mime_type.startsWith('image/')}
-                          <a href={`${serverBase}/api/devices/${device.id}/attachments/${att.id}${attAuth}`} target="_blank" rel="noopener" class="attachment-preview">
-                            <img src={`${serverBase}/api/devices/${device.id}/attachments/${att.id}${attAuth}`} alt={att.filename} loading="lazy" />
+                          <a href={apiURL(`/api/devices/${device.id}/attachments/${att.id}${attAuth}`)} target="_blank" rel="noopener" class="attachment-preview">
+                            <img src={apiURL(`/api/devices/${device.id}/attachments/${att.id}${attAuth}`)} alt={att.filename} loading="lazy" />
                           </a>
                         {:else}
-                          <a href={`${serverBase}/api/devices/${device.id}/attachments/${att.id}${attAuth}`} target="_blank" rel="noopener" class="attachment-preview attachment-text">
+                          <a href={apiURL(`/api/devices/${device.id}/attachments/${att.id}${attAuth}`)} target="_blank" rel="noopener" class="attachment-preview attachment-text">
                             <span class="file-icon">📄</span>
                           </a>
                         {/if}
                         <div class="attachment-info">
-                          <a href={`${serverBase}/api/devices/${device.id}/attachments/${att.id}${attAuth}`} target="_blank" rel="noopener" class="attachment-name">{att.filename}</a>
+                          <a href={apiURL(`/api/devices/${device.id}/attachments/${att.id}${attAuth}`)} target="_blank" rel="noopener" class="attachment-name">{att.filename}</a>
                           {#if att.caption}
                             <span class="attachment-caption">{att.caption}</span>
                           {/if}
@@ -1006,6 +1162,7 @@
             <SystemMetrics {device} {authHeaders} />
           </div>
         {/if}
+        </div>
       </div>
 
       <dl class="meta-grid">
@@ -1015,6 +1172,35 @@
           <div><dt>Registered</dt><dd title={formatTime(device.created_at)}>{timeAgo(device.created_at, now)}</dd></div>
         {/if}
       </dl>
+
+      <!-- At-a-glance audit facts. An operator should be able to identify the
+           machine, judge whether it is healthy and see what is at stake without
+           visiting a single tab. -->
+      <dl class="meta-grid identity">
+        <div><dt>OS</dt><dd title={telemetry.operating_system || ''}>{telemetry.operating_system || '—'}</dd></div>
+        <div><dt>Kernel</dt><dd title={telemetry.kernel_version || ''}>{telemetry.kernel_version || '—'}</dd></div>
+        <div><dt>CPU</dt><dd class="truncate" title={telemetry.cpu_model || ''}>{telemetry.cpu_model || '—'}</dd></div>
+        {#if telemetry.desktop_environment}
+          <div><dt>Desktop</dt><dd>{telemetry.desktop_environment}</dd></div>
+        {/if}
+        <div><dt>Uptime</dt><dd>{formatDuration(telemetry.uptime_seconds || 0)}</dd></div>
+        <div><dt>Agent</dt><dd>{telemetry.agent_version || '—'}</dd></div>
+        <div><dt>Files</dt><dd>{files.length}</dd></div>
+        <div><dt>Apps</dt><dd>{apps.length}</dd></div>
+        <div><dt>Saves</dt><dd>{saves.length}</dd></div>
+        <div><dt>Docker</dt><dd>{telemetry.docker_available ? (telemetry.docker_info ? `${telemetry.docker_info.running}/${telemetry.docker_info.total} running` : 'available') : 'no'}</dd></div>
+        <div><dt>Lynis</dt><dd class:warn-value={telemetry.lynis_available === false}>{telemetry.lynis_available ? 'installed' : 'missing'}</dd></div>
+        <div><dt>Reported</dt><dd title={formatTime(telemetry.collected_at)}>{telemetry.collected_at ? timeAgo(telemetry.collected_at, now) : '—'}</dd></div>
+      </dl>
+
+      {#if insights.length > 0}
+        <div class="insight-strip" aria-label="Findings">
+          <span class="insight-strip-label">Findings</span>
+          {#each insights as insight, i (i)}
+            <span class="insight-pill insight-{insight.type}">{insight.text}</span>
+          {/each}
+        </div>
+      {/if}
 
       <footer class="danger-zone">
         <button class="inline danger" on:click={deleteDevice}>Remove device and data</button>
@@ -1048,9 +1234,11 @@
     flex-direction: column;
     gap: 0.75rem;
     padding: 1.2rem;
-    width: min(1200px, 95vw);
-    max-height: 88vh;
-    overflow-y: auto;
+    width: min(1280px, 96vw);
+    height: min(860px, 92vh);
+    /* The modal box is fixed and the panel scrolls inside it, so every tab has
+       the same height and the tab bar never scrolls out of view. */
+    overflow: hidden;
     border: 1px solid rgba(96, 165, 250, 0.3);
     border-radius: 14px;
     background: #0f172a;
@@ -1130,14 +1318,28 @@
   }
 
   .tabs-wrap {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    /* min-height:0 is required so the panel can shrink and scroll instead of
+       pushing the tab bar out of the fixed-height modal. */
+    min-height: 0;
     min-width: 0;
+  }
+
+  .tab-panel-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-right: 0.3rem;
   }
 
   .tablist {
     display: flex;
-    gap: 0.15rem;
+    flex-wrap: wrap;
+    gap: 0.2rem;
     border-bottom: 1px solid rgba(148, 163, 184, 0.16);
-    overflow-x: auto;
   }
 
   .tablist button {
@@ -1145,13 +1347,16 @@
     border: 0;
     border-bottom: 2px solid transparent;
     border-radius: 7px 7px 0 0;
-    padding: 0.45rem 0.7rem;
+    padding: 0.5rem 0.85rem;
     color: #94a3b8;
-    font-size: 0.78rem;
+    font-size: 0.8rem;
     font-weight: 600;
     white-space: nowrap;
     display: inline-flex;
     align-items: center;
+    /* Without this the flex children shrink below their content width and the
+       labels render clipped instead of the strip scrolling. */
+    flex: 0 0 auto;
   }
 
   .tablist button:hover {
@@ -1176,6 +1381,64 @@
     background: rgba(59, 130, 246, 0.16);
     color: #93c5fd;
     font-size: 0.64rem;
+  }
+
+  .meta-grid.identity dt {
+    color: #64748b;
+  }
+
+  .meta-grid dd.truncate {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .meta-grid dd.warn-value {
+    color: #fbbf24;
+  }
+
+  .insight-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.5rem 0.6rem;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 8px;
+    background: rgba(2, 6, 23, 0.35);
+  }
+
+  .insight-strip-label {
+    color: #64748b;
+    font-size: 0.62rem;
+    font-weight: 600;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+
+  .insight-pill {
+    padding: 0.1rem 0.45rem;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    font-size: 0.68rem;
+  }
+
+  .insight-pill.info {
+    color: #93c5fd;
+    border-color: rgba(96, 165, 250, 0.35);
+    background: rgba(59, 130, 246, 0.12);
+  }
+
+  .insight-pill.warn {
+    color: #fcd34d;
+    border-color: rgba(251, 191, 36, 0.35);
+    background: rgba(251, 191, 36, 0.12);
+  }
+
+  .insight-pill.crit {
+    color: #fca5a5;
+    border-color: rgba(248, 113, 113, 0.4);
+    background: rgba(248, 113, 113, 0.14);
   }
 
   .panel {
@@ -1207,12 +1470,115 @@
     font-size: 0.72rem;
   }
 
-  .file-list {
+  /* Each list scrolls on its own so a long inventory does not push the rest of
+     the panel around, and so the tab content height stays stable. */
+  .file-list,
+  .app-list,
+  .saves-groups,
+  .notes-list,
+  .file-list,
+  .app-list,
+  .saves-groups,
+  .notes-list,
+  .log-list {
     list-style: none;
     padding: 0;
     margin: 0;
     display: grid;
+    align-content: start;
     gap: 0.4rem;
+    max-height: min(52vh, 480px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-right: 0.35rem;
+  }
+
+  .panel-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+
+  .log-filters {
+    display: flex;
+    gap: 0.2rem;
+  }
+
+  .log-filters button {
+    background: rgba(148, 163, 184, 0.1);
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 6px;
+    padding: 0.25rem 0.55rem;
+    color: #94a3b8;
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+
+  .log-filters button.active {
+    background: rgba(59, 130, 246, 0.2);
+    border-color: rgba(96, 165, 250, 0.5);
+    color: #e2e8f0;
+  }
+
+  .filter-count {
+    margin-left: 0.3rem;
+    color: #64748b;
+    font-size: 0.7rem;
+  }
+
+  .log-row {
+    display: grid;
+    grid-template-columns: 11.5rem 4.5rem 7rem 1fr;
+    gap: 0.5rem;
+    align-items: baseline;
+    padding: 0.35rem 0.5rem;
+    border-left: 3px solid transparent;
+    border-radius: 0 6px 6px 0;
+    background: rgba(2, 6, 23, 0.45);
+    font-size: 0.8rem;
+  }
+
+  .log-row.log-crit {
+    border-left-color: #f87171;
+  }
+
+  .log-row.log-warn {
+    border-left-color: #fbbf24;
+  }
+
+  .log-row.log-info {
+    border-left-color: #3b82f6;
+  }
+
+  .log-time {
+    color: #64748b;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .log-level {
+    color: #cbd5e1;
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+
+  .log-src {
+    color: #94a3b8;
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-size: 0.74rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .log-msg {
+    color: #e2e8f0;
+    overflow-wrap: anywhere;
+  }
+
+  .muted.small {
+    font-size: 0.76rem;
   }
 
   .file-list li {

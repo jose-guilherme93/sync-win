@@ -108,11 +108,31 @@ O agent valida tamanho, encoding e paths relativos, rejeita traversal/symlinks, 
 
 Campos enviados (todos opcionais no display, mas parte do contrato):
 
-`cpu_usage_percent, memory_used_bytes, memory_total_bytes, disk_read_bytes, disk_write_bytes, disk_read_rate, disk_write_rate, uptime_seconds, load_average, cpu_model, kernel_version, operating_system, power_watts, architecture, desktop_environment, locale, timezone, agent_version`
+`cpu_usage_percent, memory_used_bytes, memory_total_bytes, disk_read_bytes, disk_write_bytes, disk_read_rate, disk_write_rate, net_rx_rate, net_tx_rate, uptime_seconds, load_average, cpu_model, kernel_version, operating_system, power_watts, architecture, desktop_environment, locale, timezone, agent_version`
 
 Campos adicionais coletados: `battery_percent`, `battery_status`, `network_ifaces[]` (inclui `rx_errors`/`tx_errors`), `disk_partitions[]`, `swap_used_bytes`/`swap_total_bytes`, `cpu_core_usage[]`, `top_cpu_processes[]`/`top_mem_processes[]`, `docker_available`/`docker_containers[]`, `lynis_available` e `logs[]`. `power_watts` é a potência instantânea real (watts), não a porcentagem da bateria.
 
-Fontes: `/proc/stat`, `/proc/meminfo`, `/proc/diskstats`, `/proc/uptime`, `/proc/loadavg`, `/proc/cpuinfo`, `/proc/net/dev`, `/sys/class/power_supply/*/power_now`, `/etc/os-release`, `$XDG_CURRENT_DESKTOP`, `$LANG`, `/etc/timezone`. `logs[]` é amostrado a cada 6 ciclos (~60 s) via `journalctl`. Intervalo padrão: 10 s.
+### Taxas de rede são agregadas pelo agente
+
+`net_rx_rate` e `net_tx_rate` são bytes por segundo **somados pelo agente somente sobre interfaces reais**. O dashboard deve consumir esses campos e **nunca somar `network_ifaces[]` por conta própria**: o pathname ignora o loopback, o que faria a mesma contagem aparecer também no dashboard.
+
+### Filtro de interfaces de rede
+
+`/proc/net/dev` lista toda a tubulação de containers e VMs, e o mesmo byte é contabilizado no par `veth`, na sua bridge e no `docker0`. Em um host com 14 containers isso inflava o total em ordens de grandeza. O collector descarta:
+
+`lo`, `veth*`, `br-*`, `br0`, `docker*`, `virbr*`, `vnet*`, `cni*`, `flannel*`, `cali*`, `kube-ipvs*`
+
+Interfaces reais e túneis deliberados são mantidos: `eth0`, `wlan0`, `enp3s0`, `tailscale0`, `wg0`, `tun0`, `tap0`.
+
+### Porcentagem de CPU de processos é um delta
+
+`top_cpu_processes[].cpu_percent` e `top_mem_processes[].cpu_percent` são a **porcentagem consumida na janela entre dois ciclos**, calculada como delta de jiffies (`utime + stime`) dividido pelo tempo decorrido e pelo número de CPUs lógicas, com limite de 0 a 100. Não são o total acumulado desde o início do processo. O primeiro ciclo e PIDs recém-surgidos reportam `0` porque não há delta a apurar. `top_mem_processes[]` carrega a mesma porcentagem normalizada, não um contador bruto de jiffies.
+
+### Partições de disco são reportadas uma vez por device
+
+Em ext4 o sistema reporta `/home`, `/root`, `/srv` e outros diretórios como mounts separados do mesmo device, o que listava o mesmo disco várias vezes. O collector deduplica por device, mantendo o mount mais raso. Subvolumes **btrfs** são a exceção e permanecem, pois cada um é um mount independente com uso próprio.
+
+Fontes: `/proc/stat`, `/proc/meminfo`, `/proc/diskstats`, `/proc/uptime`, `/proc/loadavg`, `/proc/cpuinfo`, `/proc/net/dev`, `/proc/mounts` + `statfs`, `/proc/<pid>/stat`, `/proc/<pid>/status`, `/sys/class/power_supply/*/power_now`, `/etc/os-release`, `$XDG_CURRENT_DESKTOP`, `$LANG`, `/etc/timezone`. `logs[]` é amostrado a cada 6 ciclos (~60 s) via `journalctl`. Intervalo padrão: 10 s.
 
 ## Inventário de apps (`POST /api/devices/{id}/apps`)
 

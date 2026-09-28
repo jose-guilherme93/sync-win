@@ -1,6 +1,9 @@
 package logging
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // Level represents the severity of a log event.
 type Level int
@@ -271,4 +274,13 @@ func isNoisePath(path string) bool {
 		}
 	}
 	return false
+}
+
+// isStreamingPath returns true for long-lived streaming endpoints. These stay
+// open for as long as the client is connected, so their duration says nothing
+// about server performance. Timing the notification SSE stream produced a
+// permanent http_slow_request entry with a duration in the millions of
+// milliseconds, which buried the genuine slow requests.
+func isStreamingPath(path string) bool {
+	return strings.HasPrefix(path, "/api/notifications/stream")
 }

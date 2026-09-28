@@ -20,22 +20,14 @@ function pointFromHardware(hw: Record<string, any>, timestamp: string): ChartPoi
   const memTotal = hw.memory_total_bytes || 1
   const memPct = hw.memory_used_bytes ? (hw.memory_used_bytes / memTotal) * 100 : 0
 
-  let netRx = 0
-  let netTx = 0
-  if (Array.isArray(hw.network_ifaces)) {
-    for (const iface of hw.network_ifaces) {
-      if (iface.name === 'lo') continue
-      netRx += iface.rx_rate || 0
-      netTx += iface.tx_rate || 0
-    }
-  }
-
   return {
     timestamp,
     cpu: hw.cpu_usage_percent || 0,
     memory: memPct,
-    netRx,
-    netTx,
+    // The agent totals the real interfaces. Summing network_ifaces here would
+    // reintroduce the container double counting the agent already filters out.
+    netRx: hw.net_rx_rate || 0,
+    netTx: hw.net_tx_rate || 0,
     temp: hw.cpu_temperature || null
   }
 }

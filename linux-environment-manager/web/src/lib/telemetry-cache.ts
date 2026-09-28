@@ -2,6 +2,14 @@ const DB_NAME = 'lem-telemetry'
 const DB_VERSION = 1
 const STORE_NAME = 'history'
 
+// The cache key includes the exact from/to window, so every range the user
+// tries creates a new entry. Without pruning, IndexedDB grows forever. Entries
+// are kept for a day and the store is capped so a long-lived dashboard cannot
+// accumulate unbounded history.
+const MAX_ENTRY_AGE_MS = 24 * 60 * 60 * 1000
+const MAX_ENTRIES = 300
+const PRUNE_INTERVAL_MS = 5 * 60 * 1000
+
 interface CacheEntry {
   key: string
   device_id: string
@@ -9,6 +17,7 @@ interface CacheEntry {
   from: string
   to: string
   points: any[]
+  bytes: number
   fetched_at: number
 }
 
@@ -33,6 +42,72 @@ function openDB(): Promise<IDBDatabase> {
 
 function makeKey(deviceID: string, resolution: string, from: string, to: string): string {
   return `${deviceID}:${resolution}:${from}:${to}`
+}
+
+// estimateBytes measures what an entry actually costs. The old code reported
+// count * 1024, a made-up number that had no relationship to the real payload.
+function estimateBytes(points: any[]): number {
+  try {
+    return new Blob([JSON.stringify(points)]).size
+  } catch {
+    return 0
+  }
+}
+
+let lastPrune = 0
+
+// prune removes expired entries and, when the store is over the cap, the oldest
+// ones beyond it. Runs at most once per PRUNE_INTERVAL_MS.
+function schedulePrune(db: IDBDatabase) {
+  if (Date.now() - lastPrune < PRUNE_INTERVAL_MS) return
+  lastPrune = Date.now()
+  void pruneStore(db)
+}
+
+function pruneStore(db: IDBDatabase): Promise<void> {
+  return new Promise((resolve) => {
+    let tx: IDBTransaction
+    try {
+      tx = db.transaction(STORE_NAME, 'readwrite')
+    } catch {
+      resolve()
+      return
+    }
+    const store = tx.objectStore(STORE_NAME)
+    const cutoff = Date.now() - MAX_ENTRY_AGE_MS
+    const survivors: { key: string; fetchedAt: number }[] = []
+
+    const req = store.openCursor()
+    req.onsuccess = () => {
+      const cursor = req.result
+      if (!cursor) {
+        // The cursor walks in key order, which starts with the device id, so it
+        // is not age order. Trim the oldest by fetched_at when over the cap.
+        if (survivors.length > MAX_ENTRIES) {
+          survivors.sort((a, b) => a.fetchedAt - b.fetchedAt)
+          for (const stale of survivors.slice(0, survivors.length - MAX_ENTRIES)) {
+            try {
+              store.delete(stale.key)
+            } catch {
+              // entry already removed
+            }
+          }
+        }
+        return
+      }
+      const entry = cursor.value as CacheEntry
+      if (entry.fetched_at < cutoff) {
+        cursor.delete()
+      } else {
+        survivors.push({ key: entry.key, fetchedAt: entry.fetched_at })
+      }
+      cursor.continue()
+    }
+    req.onerror = () => resolve()
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => resolve()
+    tx.onabort = () => resolve()
+  })
 }
 
 export async function getCachedHistory(
@@ -80,6 +155,7 @@ export async function setCachedHistory(
       from,
       to,
       points,
+      bytes: estimateBytes(points),
       fetched_at: Date.now()
     }
     await new Promise<void>((resolve) => {
@@ -87,7 +163,9 @@ export async function setCachedHistory(
       tx.objectStore(STORE_NAME).put(entry)
       tx.oncomplete = () => resolve()
       tx.onerror = () => resolve()
+      tx.onabort = () => resolve()
     })
+    schedulePrune(db)
   } catch {
     // Cache errors are non-fatal
   }
@@ -120,15 +198,29 @@ export async function clearCache(deviceID?: string): Promise<void> {
   }
 }
 
+// getCacheStats reports the real serialised size of what is stored. The
+// previous count * 1024 was a fabricated figure with no relation to the payload.
 export async function getCacheStats(): Promise<{ count: number; sizeEstimate: number }> {
   try {
     const db = await openDB()
     return await new Promise((resolve) => {
       const tx = db.transaction(STORE_NAME, 'readonly')
       const store = tx.objectStore(STORE_NAME)
-      const req = store.count()
-      req.onsuccess = () => resolve({ count: req.result, sizeEstimate: req.result * 1024 })
-      req.onerror = () => resolve({ count: 0, sizeEstimate: 0 })
+      let count = 0
+      let bytes = 0
+      const req = store.openCursor()
+      req.onsuccess = () => {
+        const cursor = req.result
+        if (!cursor) {
+          resolve({ count, sizeEstimate: bytes })
+          return
+        }
+        const entry = cursor.value as CacheEntry
+        count++
+        bytes += entry.bytes || estimateBytes(entry.points)
+        cursor.continue()
+      }
+      req.onerror = () => resolve({ count, sizeEstimate: bytes })
     })
   } catch {
     return { count: 0, sizeEstimate: 0 }

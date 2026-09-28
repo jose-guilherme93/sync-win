@@ -29,7 +29,10 @@ services:
       LEM_ENABLE_LEGACY_INSTALL: "${LEM_ENABLE_LEGACY_INSTALL:-false}"
       LEM_ENABLE_REMOTE_MUTATIONS: "${LEM_ENABLE_REMOTE_MUTATIONS:-false}"
       LEM_ENABLE_DOCKER_MUTATIONS: "${LEM_ENABLE_DOCKER_MUTATIONS:-false}"
-      LEM_CORS_ALLOWED_ORIGIN: "http://localhost:${WEB_PORT:-5173}"
+      # Comma-separated allowlist. The Vite dev server is reachable as both
+      # localhost and 127.0.0.1, which the browser treats as distinct origins;
+      # listing one of them made the other fail CORS on login.
+      LEM_CORS_ALLOWED_ORIGIN: "http://localhost:${WEB_PORT:-5173},http://127.0.0.1:${WEB_PORT:-5173}"
       LEM_HTTPS: "false"
       LEM_DATA_DIR: /data
       LEM_HTTP_ADDR: ":8080"
@@ -55,8 +58,13 @@ services:
     ports:
       - "${WEB_PORT:-5173}:5173"
     environment:
-      # Point the Vite dev server at the dev API port so a non-default
-      # DEV_HTTP_PORT keeps working.
+      # The browser talks to the API through the Vite proxy, so it uses
+      # same-origin relative URLs and no CORS preflight is involved.
+      # VITE_PROXY_TARGET is where the proxy inside this container forwards to,
+      # which is the compose service address, not a host port.
+      VITE_PROXY_TARGET: "http://server:8080"
+      # Still used by the install command shown in the dashboard, which has to
+      # point the agent at an address reachable from outside the browser.
       VITE_API_BASE: "http://localhost:${DEV_HTTP_PORT:-8088}"
     volumes:
       - ./web:/app

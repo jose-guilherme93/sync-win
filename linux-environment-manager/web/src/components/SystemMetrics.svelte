@@ -12,7 +12,7 @@
     Legend
   } from 'chart.js'
   import { setHistoryFromAPI, addTelemetryPoint, deviceHistoryStore, type ChartPoint } from '../lib/telemetry-store'
-  import { apiFetch, serverBase } from '../lib/api'
+  import { apiFetch, apiURL, serverBase } from '../lib/api'
 
   Chart.register(LineController, LineElement, PointElement, LinearScale, CategoryScale, Filler, Tooltip, Legend)
 
@@ -287,22 +287,14 @@
     const memTotal = hw.memory_total_bytes || 1
     const memPct = hw.memory_used_bytes ? (hw.memory_used_bytes / memTotal) * 100 : 0
 
-    let netRx = 0
-    let netTx = 0
-    if (hw.network_ifaces && Array.isArray(hw.network_ifaces)) {
-      for (const iface of hw.network_ifaces) {
-        if (iface.name === 'lo') continue
-        netRx += (iface.rx_rate != null ? iface.rx_rate : 0)
-        netTx += (iface.tx_rate != null ? iface.tx_rate : 0)
-      }
-    }
-
     return {
       timestamp: '',
       cpu: hw.cpu_usage_percent || 0,
       memory: memPct,
-      netRx,
-      netTx,
+      // The agent totals the real interfaces; summing them again here would
+      // reintroduce the container double counting it filters out.
+      netRx: hw.net_rx_rate || 0,
+      netTx: hw.net_tx_rate || 0,
       temp: hw.cpu_temperature || null
     }
   }
@@ -310,7 +302,7 @@
   async function loadInitialHistory() {
     loadingHistory = true
     try {
-      const response = await apiFetch(`${serverBase}/api/devices/${device.id}/telemetry/history?limit=${MAX_POINTS}`, {
+      const response = await apiFetch(apiURL(`/api/devices/${device.id}/telemetry/history?limit=${MAX_POINTS}`), {
         headers: authHeaders
       })
       if (!response.ok) throw new Error(`${response.status}`)
@@ -365,7 +357,7 @@
   async function refreshLogs() {
     loadingLogs = true
     try {
-      const response = await apiFetch(`${serverBase}/api/devices/${device.id}/detail`, {
+      const response = await apiFetch(apiURL(`/api/devices/${device.id}/detail`), {
         headers: authHeaders
       })
       if (!response.ok) throw new Error(`${response.status}`)
@@ -687,43 +679,6 @@
             <li class="insight-{insight.type}">{insight.text}</li>
           {/each}
         </ul>
-      </section>
-    {/if}
-
-    {@const activeLogs = localLogs || hw.logs || []}
-    {@const filteredLogs = logFilter === 'all' ? activeLogs : activeLogs.filter(l => l.level === logFilter)}
-    {#if activeLogs.length > 0}
-      <section class="section-block">
-        <div class="logs-header">
-          <h3>Device Logs</h3>
-          <div class="logs-controls">
-            <div class="log-filters">
-              {#each ['all', 'error', 'warn', 'info'] as level}
-                <button class="log-filter-btn" class:active={logFilter === level} on:click={() => logFilter = level}>
-                  {level}{#if level !== 'all'}<span class="filter-count">{activeLogs.filter(l => l.level === level).length}</span>{/if}
-                </button>
-              {/each}
-            </div>
-            <button class="log-refresh-btn" on:click={refreshLogs} disabled={loadingLogs}>
-              {loadingLogs ? '...' : '↻'}
-            </button>
-          </div>
-        </div>
-        <div class="logs-wrap">
-          {#each filteredLogs as log}
-            <div class="log-entry log-{log.level}">
-              <span class="log-time">{log.timestamp.split('T')[1]?.substring(0,8) || log.timestamp}</span>
-              <span class="log-src">{log.source}</span>
-              <span class="log-msg">{log.message}</span>
-            </div>
-          {/each}
-          {#if filteredLogs.length === 0}
-            <div class="logs-empty">No {logFilter !== 'all' ? logFilter : ''} logs found</div>
-          {/if}
-        </div>
-        <div class="logs-footer">
-          <span>{filteredLogs.length} of {activeLogs.length} entries</span>
-        </div>
       </section>
     {/if}
   {:else}

@@ -3,6 +3,7 @@ package collectors
 import (
 	"bufio"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -25,7 +26,11 @@ func CollectDiskPartitions() []DiskPartition {
 	}
 
 	var partitions []DiskPartition
-	seen := map[string]bool{}
+	seenMount := map[string]bool{}
+	seenDevice := map[string]bool{}
+	// Btrfs subvolumes are independent mounts with their own usage, so they are
+	// exempt from the one-entry-per-device dedup below.
+	btrfsDevices := map[string]bool{}
 
 	scanner := bufio.NewScanner(mountsFile)
 	for scanner.Scan() {
@@ -42,13 +47,16 @@ func CollectDiskPartitions() []DiskPartition {
 			continue
 		}
 		// Skip duplicates (same mount point)
-		if seen[mount] {
+		if seenMount[mount] {
 			continue
 		}
-		seen[mount] = true
+		seenMount[mount] = true
 		// Skip loop/ram devices
 		if strings.HasPrefix(device, "/dev/loop") || strings.HasPrefix(device, "/dev/ram") {
 			continue
+		}
+		if fsType == "btrfs" {
+			btrfsDevices[device] = true
 		}
 
 		var stat syscall.Statfs_t
@@ -74,18 +82,33 @@ func CollectDiskPartitions() []DiskPartition {
 		})
 	}
 
-	// Sort by mount depth (shorter paths first, e.g. / before /home)
-	for i := 0; i < len(partitions); i++ {
-		for j := i + 1; j < len(partitions); j++ {
-			if strings.Count(partitions[i].Mount, "/") > strings.Count(partitions[j].Mount, "/") ||
-				(strings.Count(partitions[i].Mount, "/") == strings.Count(partitions[j].Mount, "/") &&
-					len(partitions[i].Mount) > len(partitions[j].Mount)) {
-				partitions[i], partitions[j] = partitions[j], partitions[i]
-			}
+	// Sort by mount depth (shorter paths first, e.g. / before /home) so that when
+	// one device is mounted at several points the entry that survives dedup is
+	// the most representative one.
+	sort.Slice(partitions, func(i, j int) bool {
+		mi, mj := partitions[i].Mount, partitions[j].Mount
+		di, dj := strings.Count(mi, "/"), strings.Count(mj, "/")
+		if di != dj {
+			return di < dj
 		}
+		return len(mi) < len(mj)
+	})
+
+	// One entry per filesystem. On ext4 a system reports /home, /root, /srv and
+	// friends as separate mounts of the same device, which made the dashboard
+	// list the same disk six times.
+	deduped := make([]DiskPartition, 0, len(partitions))
+	for _, p := range partitions {
+		if !btrfsDevices[p.Device] {
+			if seenDevice[p.Device] {
+				continue
+			}
+			seenDevice[p.Device] = true
+		}
+		deduped = append(deduped, p)
 	}
 
-	return partitions
+	return deduped
 }
 
 // FormatDiskBytes formats bytes to human-readable string.

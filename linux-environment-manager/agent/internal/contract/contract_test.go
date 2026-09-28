@@ -48,6 +48,43 @@ func TestLoadEmbeddedContract(t *testing.T) {
 	if c.Resilience.HTTPTimeoutSeconds <= 0 || c.BackoffMax() <= time.Second {
 		t.Fatal("resilience settings incomplete")
 	}
+	// Network rates are aggregated by the agent. If the dashboard ever sums
+	// network_ifaces again it reintroduces the container double counting the
+	// filter below exists to prevent.
+	for _, field := range []string{"net_rx_rate", "net_tx_rate"} {
+		if !containsField(c.Telemetry.Fields, field) {
+			t.Errorf("telemetry.fields must declare %q", field)
+		}
+		if c.Telemetry.RateSemantics[field] == "" {
+			t.Errorf("telemetry.rate_semantics must document %q", field)
+		}
+	}
+	if len(c.Telemetry.NetworkInterfaceFilter.ExcludedPrefixes) == 0 {
+		t.Fatal("telemetry.network_interface_filter.excluded_prefixes required")
+	}
+	for _, prefix := range []string{"lo", "veth", "br-", "docker"} {
+		if !containsField(c.Telemetry.NetworkInterfaceFilter.ExcludedPrefixes, prefix) {
+			t.Errorf("interface filter must exclude %q", prefix)
+		}
+	}
+	if !containsField(c.Telemetry.NetworkInterfaceFilter.KeptExamples, "eth0") {
+		t.Error("interface filter must document that real NICs are kept")
+	}
+	if !c.Telemetry.DiskPartitionDedup.ByDevice {
+		t.Error("telemetry.disk_partition_dedup.by_device must be true")
+	}
+	if !containsField(c.Telemetry.DiskPartitionDedup.ExemptFilesystems, "btrfs") {
+		t.Error("btrfs subvolumes must be exempt from the per-device dedup")
+	}
+}
+
+func containsField(list []string, want string) bool {
+	for _, item := range list {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestExpandPath(t *testing.T) {

@@ -413,7 +413,7 @@ func (g *gzipResponseWriter) Flush() {
 
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		setCORSHeaders(w)
+		setCORSHeaders(w, r)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -423,11 +423,6 @@ func corsMiddleware(next http.Handler) http.Handler {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -436,11 +431,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAgentVersion(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -465,11 +455,6 @@ func readAgentVersion() string {
 }
 
 func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -492,11 +477,6 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -558,7 +538,6 @@ func (s *Server) writeAuth(w http.ResponseWriter, r *http.Request, user store.Us
 // handleAuthMe validates an existing session so the dashboard can restore a
 // login on page load without trusting stale localStorage state.
 func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -582,11 +561,6 @@ func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAuthUpdateEmail(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -609,11 +583,6 @@ func (s *Server) handleAuthUpdateEmail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAuthUpdatePassword(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -636,7 +605,6 @@ func (s *Server) handleAuthUpdatePassword(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -656,7 +624,6 @@ func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSyncConfig(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
 	ownerID, ok := s.requireSession(w, r)
 	if !ok {
 		return
@@ -701,7 +668,6 @@ func (s *Server) handleSyncConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeviceSyncConfig(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -759,11 +725,6 @@ func scheme(r *http.Request) string {
 }
 
 func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	switch r.Method {
 	case http.MethodGet:
 		ownerID, ok := s.requireSession(w, r)
@@ -804,11 +765,6 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeviceDetail(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/devices/")
 	parts := strings.Split(path, "/")
 	if len(parts) == 2 && parts[1] == "telemetry" {
@@ -1080,11 +1036,6 @@ func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request, deviceID
 }
 
 func (s *Server) handleCommandStatus(w http.ResponseWriter, r *http.Request, deviceID, commandID string) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -1154,10 +1105,6 @@ func (s *Server) handleCommandResult(w http.ResponseWriter, r *http.Request, dev
 }
 
 func (s *Server) handleRestoreSaves(w http.ResponseWriter, r *http.Request, deviceID string) {
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -1267,10 +1214,6 @@ func (s *Server) validDeviceTokenValue(deviceID, token string) bool {
 }
 
 func (s *Server) handleTelemetry(w http.ResponseWriter, r *http.Request, deviceID string) {
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -1430,11 +1373,6 @@ func (s *Server) handleTelemetryHistoryV2(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleRetention(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	ownerID := s.ownerID(r)
 	if ownerID == "" {
 		s.writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
@@ -1474,11 +1412,6 @@ func (s *Server) handleRetention(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteDeviceTelemetry(w http.ResponseWriter, r *http.Request, deviceID string) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if r.Method != http.MethodDelete {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -1501,11 +1434,6 @@ func (s *Server) handleDeleteDeviceTelemetry(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) handleDeleteLogs(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if r.Method != http.MethodDelete {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -1552,10 +1480,6 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request, deviceI
 }
 
 func (s *Server) handleSync(w http.ResponseWriter, r *http.Request, deviceID string) {
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -1589,10 +1513,6 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request, deviceID str
 }
 
 func (s *Server) handleDeviceFiles(w http.ResponseWriter, r *http.Request, deviceID string) {
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -1610,19 +1530,52 @@ func (s *Server) handleDeviceFiles(w http.ResponseWriter, r *http.Request, devic
 	_ = json.NewEncoder(w).Encode(files)
 }
 
-func setCORSHeaders(w http.ResponseWriter) {
-	origin := strings.TrimSpace(os.Getenv("LEM_CORS_ALLOWED_ORIGIN"))
-	if strings.Contains(origin, "*") {
-		origin = ""
+// allowedOrigins parses LEM_CORS_ALLOWED_ORIGIN into an allowlist. The variable
+// accepts a comma-separated list because a dashboard is routinely reached under
+// more than one name (localhost, 127.0.0.1, a LAN address) and a single fixed
+// value only ever matched one of them, which the browser reports as a CORS
+// error. Wildcards and malformed entries are dropped: reflecting an arbitrary
+// origin alongside Allow-Credentials would let any site ride the session.
+func allowedOrigins() map[string]bool {
+	raw := strings.TrimSpace(os.Getenv("LEM_CORS_ALLOWED_ORIGIN"))
+	if raw == "" || strings.Contains(raw, "*") {
+		return nil
 	}
-	if origin != "" {
-		if parsed, err := neturl.Parse(origin); err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
-			origin = ""
+	allowed := map[string]bool{}
+	for _, part := range strings.Split(raw, ",") {
+		origin := strings.TrimSpace(part)
+		if origin == "" {
+			continue
 		}
+		parsed, err := neturl.Parse(origin)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
+			parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" ||
+			parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
+			continue
+		}
+		allowed[origin] = true
 	}
-	if origin != "" {
-		w.Header().Set("Access-Control-Allow-Origin", origin)
-		w.Header().Set("Access-Control-Allow-Credentials", "true")
+	if len(allowed) == 0 {
+		return nil
+	}
+	return allowed
+}
+
+// setCORSHeaders answers with the origin the request actually came from, but
+// only when that origin is on the allowlist. With an empty allowlist (the
+// production default) the dashboard is served from the same origin and no CORS
+// header is emitted at all.
+func setCORSHeaders(w http.ResponseWriter, r *http.Request) {
+	allowed := allowedOrigins()
+	if len(allowed) > 0 {
+		origin := ""
+		if r != nil {
+			origin = strings.TrimSpace(r.Header.Get("Origin"))
+		}
+		if allowed[origin] {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+		}
 		w.Header().Add("Vary", "Origin")
 	}
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
@@ -1634,7 +1587,6 @@ func (s *Server) handleAgentDownload(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	setCORSHeaders(w)
 	binaryPath := os.Getenv("LEM_AGENT_BINARY")
 	if binaryPath == "" {
 		binaryPath = "/app/lem-agent"
@@ -1662,7 +1614,6 @@ func (s *Server) handleAgentInstallScript(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	setCORSHeaders(w)
 	userID := r.URL.Query().Get("user")
 	if userID == "" {
 		userID = "$(whoami)"
@@ -1799,11 +1750,6 @@ fi
 type enrollTokenRequest struct{}
 
 func (s *Server) handleEnrollToken(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -1827,11 +1773,6 @@ func (s *Server) handleEnrollToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleInstallScript(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -1875,11 +1816,6 @@ type enrollRequest struct {
 }
 
 func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -1930,22 +1866,12 @@ type reconnectResponse struct {
 }
 
 func (s *Server) handleReconnect(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	// A hardware fingerprint is observable metadata, not an authenticator.
 	// Recovery therefore always requires a fresh, single-use enrollment token.
 	s.writeError(w, http.StatusGone, errors.New("fingerprint reconnect is permanently disabled; enroll again"))
 }
 
 func (s *Server) handleChecksums(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -1967,7 +1893,6 @@ exit 1
 `
 
 func (s *Server) writeError(w http.ResponseWriter, status int, err error) {
-	setCORSHeaders(w)
 	message := err.Error()
 	if status >= http.StatusInternalServerError {
 		message = "internal server error"
@@ -1982,11 +1907,6 @@ func (s *Server) writeError(w http.ResponseWriter, status int, err error) {
 // =============================================================================
 
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -2031,11 +1951,6 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogByID(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -2073,11 +1988,6 @@ func (s *Server) handleLogByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogStats(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -2098,11 +2008,6 @@ func (s *Server) handleLogStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -2136,11 +2041,6 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleErrors(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -2178,11 +2078,6 @@ func (s *Server) handleErrors(w http.ResponseWriter, r *http.Request) {
 // ──────────────────────────────────────────────────────────────────────────────
 
 func (s *Server) handleDeviceNotes(w http.ResponseWriter, r *http.Request, deviceID string) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	device, err := s.store.GetDevice(deviceID)
 	if err != nil {
 		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
@@ -2222,11 +2117,6 @@ func (s *Server) handleDeviceNotes(w http.ResponseWriter, r *http.Request, devic
 }
 
 func (s *Server) handleDeviceNoteByID(w http.ResponseWriter, r *http.Request, deviceID, noteID string) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	device, err := s.store.GetDevice(deviceID)
 	if err != nil {
 		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
@@ -2267,11 +2157,6 @@ func (s *Server) handleDeviceNoteByID(w http.ResponseWriter, r *http.Request, de
 const maxAttachmentSize = 8 << 20 // 8 MB
 
 func (s *Server) handleDeviceAttachments(w http.ResponseWriter, r *http.Request, deviceID string) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	device, err := s.store.GetDevice(deviceID)
 	if err != nil {
 		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
@@ -2334,11 +2219,6 @@ func (s *Server) handleDeviceAttachments(w http.ResponseWriter, r *http.Request,
 }
 
 func (s *Server) handleDeviceAttachmentByID(w http.ResponseWriter, r *http.Request, deviceID, attID string) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	ownerID, ok := s.requireSession(w, r)
 	if !ok {
 		return
@@ -2456,11 +2336,6 @@ type notificationConfigResponse struct {
 }
 
 func (s *Server) handleNotificationConfig(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	ownerID := s.ownerID(r)
 	if ownerID == "" {
 		s.writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
@@ -2546,11 +2421,6 @@ func (s *Server) handleNotificationConfig(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleNotificationProviders(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -2575,11 +2445,6 @@ type notificationTestRequest struct {
 }
 
 func (s *Server) handleNotificationTest(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -2641,11 +2506,6 @@ func (s *Server) handleNotificationTest(w http.ResponseWriter, r *http.Request) 
 // POST /api/notifications/telegram/detect-chat — auto-detect the user's chat_id
 // by calling the Telegram getUpdates API with the provided bot_token.
 func (s *Server) handleTelegramDetectChat(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -2686,11 +2546,6 @@ func (s *Server) handleTelegramDetectChat(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleNotificationInbox(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -2716,11 +2571,6 @@ func (s *Server) handleNotificationInbox(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleNotificationInboxRead(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -2744,7 +2594,6 @@ func (s *Server) handleNotificationInboxRead(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) handleNotificationStreamToken(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -2767,11 +2616,6 @@ func (s *Server) handleNotificationStreamToken(w http.ResponseWriter, r *http.Re
 
 // handleNotificationStream is an SSE endpoint that streams notification events in real-time.
 func (s *Server) handleNotificationStream(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 
 	ownerID := s.ownerID(r)
 	ticket := strings.TrimSpace(r.URL.Query().Get("ticket"))

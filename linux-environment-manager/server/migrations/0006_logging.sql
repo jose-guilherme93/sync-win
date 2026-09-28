@@ -15,7 +15,10 @@ CREATE TABLE IF NOT EXISTS logs (
     duration_ms   INTEGER NOT NULL DEFAULT 0,
     status        INTEGER NOT NULL DEFAULT 0,
     metadata      TEXT NOT NULL DEFAULT '{}',
-    redacted      INTEGER NOT NULL DEFAULT 0
+    redacted      INTEGER NOT NULL DEFAULT 0,
+    -- Materialised on write from the owning device so owner-scoped log queries
+    -- filter one indexed column instead of an OR over a devices subquery.
+    owner_id      TEXT NOT NULL DEFAULT ''
 );
 
 -- Primary query index: time-based lookups (most common)
@@ -41,6 +44,9 @@ CREATE INDEX IF NOT EXISTS idx_logs_level_ts ON logs(level, ts);
 
 -- Composite index for device + level queries
 CREATE INDEX IF NOT EXISTS idx_logs_device_level ON logs(device_id, level, ts);
+
+-- Owner-scoped listing (the dashboard log viewer pages through this)
+CREATE INDEX IF NOT EXISTS idx_logs_owner_ts ON logs(owner_id, ts);
 
 -- HTTP access aggregation table (periodic flush from memory)
 CREATE TABLE IF NOT EXISTS http_access (

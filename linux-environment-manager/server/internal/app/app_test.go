@@ -509,12 +509,14 @@ func TestFingerprintReconnectDisabledByDefault(t *testing.T) {
 }
 
 func TestSecurityHeadersAndCORS(t *testing.T) {
+	// The dashboard is served from the same origin in production, so an empty
+	// allowlist must emit no CORS origin at all.
 	t.Setenv("LEM_CORS_ALLOWED_ORIGIN", "")
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
 
 	securityHeadersMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		setCORSHeaders(w)
+		setCORSHeaders(w, r)
 		w.WriteHeader(http.StatusOK)
 	})).ServeHTTP(rec, req)
 
@@ -527,15 +529,50 @@ func TestSecurityHeadersAndCORS(t *testing.T) {
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
 		t.Fatalf("unexpected default CORS origin %q", got)
 	}
+}
 
+// A dashboard reachable under several names must get a matching header for each
+// of them. The previous implementation always answered with a single fixed
+// origin, so opening the same dev server through 127.0.0.1 instead of localhost
+// produced a mismatch the browser reports as a CORS error.
+func TestCORSEchoesTheRequestOriginFromAllowlist(t *testing.T) {
+	t.Setenv("LEM_CORS_ALLOWED_ORIGIN", "http://localhost:5173, http://127.0.0.1:5173")
+
+	for _, origin := range []string{"http://localhost:5173", "http://127.0.0.1:5173"} {
+		req := httptest.NewRequest(http.MethodGet, "/health", nil)
+		req.Header.Set("Origin", origin)
+		rec := httptest.NewRecorder()
+		setCORSHeaders(rec, req)
+		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != origin {
+			t.Errorf("origin %q: got %q", origin, got)
+		}
+		if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+			t.Errorf("origin %q: credentials = %q", origin, got)
+		}
+	}
+}
+
+// Echoing an origin that is not allowlisted would let any site send credentialed
+// requests against the session cookie, so the header must be omitted entirely.
+func TestCORSRejectsUnlistedOrigin(t *testing.T) {
 	t.Setenv("LEM_CORS_ALLOWED_ORIGIN", "http://localhost:5173")
-	rec = httptest.NewRecorder()
-	securityHeadersMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		setCORSHeaders(w)
-		w.WriteHeader(http.StatusOK)
-	})).ServeHTTP(rec, req)
-	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
-		t.Fatalf("configured CORS origin = %q", got)
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req.Header.Set("Origin", "https://evil.example.com")
+	rec := httptest.NewRecorder()
+	setCORSHeaders(rec, req)
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("unlisted origin was echoed: %q", got)
+	}
+}
+
+// A wildcard cannot be combined with credentials, so it is rejected outright
+// rather than silently reflected.
+func TestCORSRejectsWildcardAndMalformedEntries(t *testing.T) {
+	for _, value := range []string{"*", "http://localhost:5173, *", "not-a-url", "ftp://localhost:5173", "http://user:pw@localhost:5173"} {
+		t.Setenv("LEM_CORS_ALLOWED_ORIGIN", value)
+		if allowed := allowedOrigins(); len(allowed) != 0 {
+			t.Errorf("%q produced allowlist %v, want empty", value, allowed)
+		}
 	}
 }
 

@@ -1261,6 +1261,14 @@ button.secondary {
   color: #64748b;
 }
 
+/* In complex mode the sparkline carries the numbers, so the count row only
+   keeps the inventory chips. */
+.device-list .device-summary.compact {
+  margin-top: 0.35rem;
+  padding-top: 0.3rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+}
+
 .card-insights {
   display: flex;
   flex-direction: row;

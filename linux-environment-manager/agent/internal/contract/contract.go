@@ -47,8 +47,19 @@ type Contract struct {
 		} `json:"workspace"`
 	} `json:"collection"`
 	Telemetry struct {
-		IntervalSecondsDefault int      `json:"interval_seconds_default"`
-		Fields                 []string `json:"fields"`
+		IntervalSecondsDefault int               `json:"interval_seconds_default"`
+		Fields                 []string          `json:"fields"`
+		RateSemantics          map[string]string `json:"rate_semantics"`
+		NetworkInterfaceFilter struct {
+			ExcludedPrefixes []string `json:"excluded_prefixes"`
+			Rationale        string   `json:"rationale"`
+			KeptExamples     []string `json:"kept_examples"`
+		} `json:"network_interface_filter"`
+		DiskPartitionDedup struct {
+			ByDevice          bool     `json:"by_device"`
+			ExemptFilesystems []string `json:"exempt_filesystems"`
+			Rationale         string   `json:"rationale"`
+		} `json:"disk_partition_dedup"`
 	} `json:"telemetry"`
 	AppsInventory struct {
 		Sources                []string `json:"sources"`

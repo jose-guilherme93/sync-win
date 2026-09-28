@@ -108,6 +108,14 @@ func (rl *requestLogger) logEvent(status int, duration time.Duration) {
 
 	durationMs := duration.Milliseconds()
 
+	// A long-lived stream is not a slow request. The notification SSE endpoint
+	// stays open for hours by design, so timing it produced a permanent
+	// http_slow_request entry with a duration in the millions of milliseconds
+	// that buried the genuine ones.
+	if isStreamingPath(rl.path) {
+		return
+	}
+
 	// Determine level and event based on status
 	switch {
 	case status >= 500:

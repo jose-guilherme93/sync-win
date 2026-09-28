@@ -6,7 +6,7 @@
   import NotificationsModal from './components/NotificationsModal.svelte'
   import NotificationToast from './components/NotificationToast.svelte'
   import { addTelemetryPoint } from './lib/telemetry-store'
-  import { apiFetch, serverBase } from './lib/api'
+  import { apiFetch, apiURL, serverBase } from './lib/api'
 
   type Device = {
     id: string
@@ -56,6 +56,8 @@
     memory_cached_bytes?: number
     disk_partitions?: { mount: string; device: string; total_bytes: number; used_bytes: number; free_bytes: number; used_percent: number }[]
     network_ifaces?: { name: string; rx_bytes: number; tx_bytes: number; rx_rate?: number; tx_rate?: number; rx_packets: number; tx_packets: number; rx_errors: number; tx_errors: number }[]
+    net_rx_rate?: number
+    net_tx_rate?: number
     cpu_temperature?: number
     gpu_temperature_celsius?: number
     battery_percent?: number
@@ -96,6 +98,9 @@
   const POLL_MS = 10000
   const MAX_POLL_MS = 60000
   const PANEL_REFRESH_MS = 60000
+  // The device list is polled every 10s but written to localStorage far less
+  // often: it only speeds up the first paint, so a stale copy is harmless.
+  const CACHE_WRITE_MS = 60000
 
   const TAB_NAMES = ['files', 'apps', 'saves', 'system'] as const
   type TabName = (typeof TAB_NAMES)[number]
@@ -282,7 +287,7 @@
     authReady = true
 
     try {
-      const response = await apiFetch(`${serverBase}/api/auth/me`, {
+      const response = await apiFetch(apiURL(`/api/auth/me`), {
         headers: storedToken ? { Authorization: `Bearer ${storedToken}` } : {}
       })
       if (myVersion !== authVersion) return
@@ -322,7 +327,7 @@
     if (notifSSE || notifConnecting) return
     notifConnecting = true
     try {
-      const response = await apiFetch(`${serverBase}/api/notifications/stream-token`, {
+      const response = await apiFetch(apiURL(`/api/notifications/stream-token`), {
         method: 'POST',
         headers: ownerHeaders,
         credentials: 'include'
@@ -330,7 +335,7 @@
       if (!response.ok) throw new Error(`stream ticket failed: ${response.status}`)
       const payload = await response.json()
       if (!payload.ticket) throw new Error('stream ticket missing')
-      notifSSE = new EventSource(`${serverBase}/api/notifications/stream?ticket=${encodeURIComponent(payload.ticket)}`, { withCredentials: true })
+      notifSSE = new EventSource(apiURL(`/api/notifications/stream?ticket=${encodeURIComponent(payload.ticket)}`), { withCredentials: true })
       notifSSE.onmessage = (ev) => {
         try {
           const event = JSON.parse(ev.data)
@@ -363,7 +368,7 @@
   }
 
   function loadCachedDevices() {
-    const raw = localStorage.getItem(`lem-devices-${ownerIdentity}`)
+    const raw = cacheRead(`lem-devices-${ownerIdentity}`)
     if (raw) {
       try {
         const cached = JSON.parse(raw)
@@ -388,7 +393,7 @@
     devicesLoading = true
     try {
       if (showLoading && devices.length === 0) loading = true
-      const response = await apiFetch(`${serverBase}/api/devices`, { headers: ownerHeaders })
+      const response = await apiFetch(apiURL(`/api/devices`), { headers: ownerHeaders })
       if (!response.ok) throw new Error(`request failed: ${response.status}`)
       const payload = await response.json()
       if (!Array.isArray(payload)) throw new Error('invalid devices response')
@@ -401,8 +406,13 @@
             addTelemetryPoint(dev.id, dev.hardware)
           }
         }
-        localStorage.setItem(`lem-devices-${ownerIdentity}`, serialized)
-        lastCacheWrite = Date.now()
+        // A full localStorage write is synchronous and blocks the main thread.
+        // A quota failure here used to land in the catch below and surface as
+        // "reconnecting", making a storage problem look like a network outage.
+        if (Date.now() - lastCacheWrite > CACHE_WRITE_MS) {
+          lastCacheWrite = Date.now()
+          cacheWrite(`lem-devices-${ownerIdentity}`, serialized)
+        }
         if (selectedDeviceId && Date.now() - lastPanelLoad > PANEL_REFRESH_MS) {
           selectPanels(selectedDeviceId)
           ensureApps(selectedDeviceId)
@@ -459,18 +469,43 @@
     }
   }
 
+  // localStorage writes are synchronous and can throw on quota or when storage
+  // is blocked. A cache write must never be mistaken for a failed fetch, so it
+  // is isolated from the request path and never rejects.
+  function cacheWrite(key: string, value: string) {
+    try {
+      localStorage.setItem(key, value)
+      return true
+    } catch {
+      try {
+        localStorage.removeItem(key)
+      } catch {
+        // Storage unavailable; the dashboard still works from live data.
+      }
+      return false
+    }
+  }
+
+  function cacheRead(key: string): string | null {
+    try {
+      return localStorage.getItem(key)
+    } catch {
+      return null
+    }
+  }
+
   async function loadFiles(deviceId: string) {
     try {
-      const response = await apiFetch(`${serverBase}/api/devices/${deviceId}`, { headers: ownerHeaders })
+      const response = await apiFetch(apiURL(`/api/devices/${deviceId}`), { headers: ownerHeaders })
       if (!response.ok) throw new Error(`file request failed: ${response.status}`)
       const payload = await response.json()
       if (!Array.isArray(payload)) throw new Error('invalid files response')
       filesByDevice = { ...filesByDevice, [deviceId]: payload }
       // Cache to localStorage for instant access on next visit
-      localStorage.setItem(`lem-files-${deviceId}`, JSON.stringify(payload))
+      cacheWrite(`lem-files-${deviceId}`, JSON.stringify(payload))
     } catch (err) {
       // Fallback to cache on error
-      const cached = localStorage.getItem(`lem-files-${deviceId}`)
+      const cached = cacheRead(`lem-files-${deviceId}`)
       if (cached) {
         try { filesByDevice = { ...filesByDevice, [deviceId]: JSON.parse(cached) } } catch { /* ignore */ }
       } else {
@@ -485,17 +520,17 @@
     appsLoading = { ...appsLoading, [deviceId]: true }
     appsError = { ...appsError, [deviceId]: '' }
     try {
-      const response = await apiFetch(`${serverBase}/api/devices/${deviceId}/apps`, { headers: ownerHeaders })
+      const response = await apiFetch(apiURL(`/api/devices/${deviceId}/apps`), { headers: ownerHeaders })
       if (!response.ok) throw new Error(`app request failed: ${response.status}`)
       const payload = await response.json()
       if (!Array.isArray(payload)) throw new Error('invalid app inventory response')
       appsByDevice = { ...appsByDevice, [deviceId]: payload }
       appsLoadedAt = { ...appsLoadedAt, [deviceId]: Date.now() }
-      localStorage.setItem(`lem-apps-${deviceId}`, JSON.stringify(payload))
+      cacheWrite(`lem-apps-${deviceId}`, JSON.stringify(payload))
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Could not load app inventory'
       appsError = { ...appsError, [deviceId]: message }
-      const cached = localStorage.getItem(`lem-apps-${deviceId}`)
+      const cached = cacheRead(`lem-apps-${deviceId}`)
       if (!appsByDevice[deviceId] && cached) {
         try { appsByDevice = { ...appsByDevice, [deviceId]: JSON.parse(cached) } } catch { /* ignore invalid cache */ }
       }
@@ -511,7 +546,7 @@
       // Use cached device files if available, otherwise fetch
       let files = filesByDevice[deviceId]
       if (!files) {
-        const response = await apiFetch(`${serverBase}/api/devices/${deviceId}`, { headers: ownerHeaders })
+        const response = await apiFetch(apiURL(`/api/devices/${deviceId}`), { headers: ownerHeaders })
         if (!response.ok) throw new Error(`saves request failed: ${response.status}`)
         files = await response.json()
         if (!Array.isArray(files)) throw new Error('invalid device files response')
@@ -535,7 +570,7 @@
   async function loadSyncConfig() {
     settingsLoading = true
     try {
-      const response = await apiFetch(`${serverBase}/api/sync-config`, { headers: ownerHeaders })
+      const response = await apiFetch(apiURL(`/api/sync-config`), { headers: ownerHeaders })
       if (!response.ok) throw new Error(`config request failed: ${response.status}`)
       const payload = await response.json()
       extraDirs = Array.isArray(payload.extra_dirs) ? payload.extra_dirs : []
@@ -550,7 +585,7 @@
   async function saveSyncConfig() {
     settingsLoading = true
     try {
-      const response = await apiFetch(`${serverBase}/api/sync-config`, {
+      const response = await apiFetch(apiURL(`/api/sync-config`), {
         method: 'PUT',
         headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({ extra_dirs: extraDirs, workspace_dirs: workspaceDirs })
@@ -614,7 +649,7 @@
   async function pollNotifications() {
     if (!signedIn) return
     try {
-      const res = await apiFetch(`${serverBase}/api/notifications/inbox?since=${lastNotifId}`, { headers: ownerHeaders })
+      const res = await apiFetch(apiURL(`/api/notifications/inbox?since=${lastNotifId}`), { headers: ownerHeaders })
       if (!res.ok) return
       const events = await res.json()
       if (Array.isArray(events) && events.length > 0) {
@@ -628,7 +663,7 @@
 
   function dismissNotif(id: number) {
     notifEvents = notifEvents.filter((e) => e.id !== id)
-    void apiFetch(`${serverBase}/api/notifications/inbox/read`, {
+    void apiFetch(apiURL(`/api/notifications/inbox/read`), {
       method: 'POST',
       headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({ ids: [id] }),
@@ -639,7 +674,7 @@
     const ids = notifEvents.map((e) => e.id)
     notifEvents = []
     if (ids.length > 0) {
-      void apiFetch(`${serverBase}/api/notifications/inbox/read`, {
+      void apiFetch(apiURL(`/api/notifications/inbox/read`), {
         method: 'POST',
         headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids }),
@@ -667,7 +702,7 @@
   async function loadDeviceDetail(deviceId: string) {
     if (!deviceId) return
     try {
-      const response = await apiFetch(`${serverBase}/api/devices/${deviceId}/detail`, { headers: ownerHeaders })
+      const response = await apiFetch(apiURL(`/api/devices/${deviceId}/detail`), { headers: ownerHeaders })
       if (!response.ok) return
       const payload = await response.json()
       if (!payload || typeof payload !== 'object' || Array.isArray(payload) || !payload.id) return
@@ -719,7 +754,7 @@
     enrollmentLoading = true
     enrollmentError = ''
     try {
-      const res = await apiFetch(`${serverBase}/api/agent/enroll-token`, {
+      const res = await apiFetch(apiURL(`/api/agent/enroll-token`), {
         method: 'POST',
         headers: ownerHeaders,
       })
@@ -755,7 +790,7 @@
     restoringState = { ...restoringState, [key]: true }
     restoreModalOpen = false
     try {
-      const response = await apiFetch(`${serverBase}/api/devices/${restoreSourceDevice.id}/restore-saves`, {
+      const response = await apiFetch(apiURL(`/api/devices/${restoreSourceDevice.id}/restore-saves`), {
         method: 'POST',
         headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -811,7 +846,7 @@
       return
     }
     try {
-      const response = await apiFetch(`${serverBase}/api/devices/${deviceId}/apps?action=install`, {
+      const response = await apiFetch(apiURL(`/api/devices/${deviceId}/apps?action=install`), {
         method: 'POST', headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({ source: app.source, name: app.name })
       })
@@ -825,7 +860,7 @@
   async function excludeFile(deviceId: string, file: PreferenceFile) {
     if (!window.confirm(`Exclude ${file.filename} from synchronization?`)) return
     try {
-      const response = await apiFetch(`${serverBase}/api/devices/${deviceId}/files/${file.id}`, {
+      const response = await apiFetch(apiURL(`/api/devices/${deviceId}/files/${file.id}`), {
         method: 'DELETE', headers: ownerHeaders
       })
       if (!response.ok) throw new Error(`request failed: ${response.status}`)
@@ -839,7 +874,7 @@
   async function deleteDevice(device: Device) {
     if (!window.confirm(`Remove ${device.hostname} and all synchronized data?`)) return
     try {
-      const response = await apiFetch(`${serverBase}/api/devices/${device.id}`, { method: 'DELETE', headers: ownerHeaders })
+      const response = await apiFetch(apiURL(`/api/devices/${device.id}`), { method: 'DELETE', headers: ownerHeaders })
       if (!response.ok) throw new Error(`request failed: ${response.status}`)
       devices = devices.filter((item) => item.id !== device.id)
       delete filesByDevice[device.id]
@@ -853,7 +888,7 @@
   async function submitAuth() {
     try {
       authError = ''
-      const response = await apiFetch(`${serverBase}/api/auth/${authMode}`, {
+      const response = await apiFetch(apiURL(`/api/auth/${authMode}`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
@@ -882,7 +917,7 @@
   }
 
   function signOut() {
-    void apiFetch(`${serverBase}/api/auth/logout`, { method: 'POST', headers: ownerHeaders }).catch(() => {})
+    void apiFetch(apiURL(`/api/auth/logout`), { method: 'POST', headers: ownerHeaders }).catch(() => {})
     clearAccountStorage()
     disconnectNotifSSE()
     authToken = ''
@@ -917,7 +952,7 @@
     profileSaving = true
     profileError = ''
     try {
-      const response = await apiFetch(`${serverBase}/api/auth/update-email`, {
+      const response = await apiFetch(apiURL(`/api/auth/update-email`), {
         method: 'POST',
         headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: profileEmail })
@@ -940,7 +975,7 @@
     profileSaving = true
     profileError = ''
     try {
-      const response = await apiFetch(`${serverBase}/api/auth/update-password`, {
+      const response = await apiFetch(apiURL(`/api/auth/update-password`), {
         method: 'POST',
         headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({ current_password: profileCurrentPassword, new_password: profileNewPassword })
@@ -986,7 +1021,7 @@
 
   async function loadRetention() {
     try {
-      const response = await apiFetch(`${serverBase}/api/retention`, { headers: ownerHeaders })
+      const response = await apiFetch(apiURL(`/api/retention`), { headers: ownerHeaders })
       if (!response.ok) throw new Error(`${response.status}`)
       const data = await response.json()
       retentionRawHours = data.raw_hours ?? 2
@@ -1003,7 +1038,7 @@
     retentionSaving = true
     retentionError = ''
     try {
-      const response = await apiFetch(`${serverBase}/api/retention`, {
+      const response = await apiFetch(apiURL(`/api/retention`), {
         method: 'PUT',
         headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1034,7 +1069,7 @@
       const endpoint = logsTab === 'audit' ? '/api/audit' : logsTab === 'errors' ? '/api/errors' : '/api/logs'
       const params = new URLSearchParams({ limit: '50', offset: String(logsOffset) })
       if (logsFilter) params.set('search', logsFilter)
-      const response = await apiFetch(`${serverBase}${endpoint}?${params}`, { headers: ownerHeaders })
+      const response = await apiFetch(`${apiURL(endpoint)}?${params}`, { headers: ownerHeaders })
       if (!response.ok) throw new Error(`request failed: ${response.status}`)
       const payload = await response.json()
       const entries = payload.entries || payload
@@ -1045,6 +1080,33 @@
       notify(err instanceof Error ? err.message : 'Could not load logs', 'error')
     } finally {
       logsLoading = false
+    }
+  }
+
+  // Every keystroke used to fire a request, and each one ran an unindexed
+  // LIKE scan plus a COUNT(*) over the whole logs table on the server. Wait for
+  // a pause in typing instead.
+  const LOG_SEARCH_DEBOUNCE_MS = 350
+  let logsSearchTimer: ReturnType<typeof setTimeout> | null = null
+
+  function onLogsFilterInput() {
+    if (logsSearchTimer) clearTimeout(logsSearchTimer)
+    logsSearchTimer = setTimeout(() => {
+      logsSearchTimer = null
+      void loadLogs(true)
+    }, LOG_SEARCH_DEBOUNCE_MS)
+  }
+
+  // Metadata is serialised once per row and reused for both the visible text and
+  // the tooltip. The previous template called JSON.stringify twice per row on
+  // every render.
+  function formatLogMetadata(metadata: unknown): string {
+    if (metadata == null) return ''
+    if (typeof metadata === 'string') return metadata
+    try {
+      return JSON.stringify(metadata)
+    } catch {
+      return ''
     }
   }
 
@@ -1361,6 +1423,7 @@
       window.clearTimeout(pollTimer)
       window.clearTimeout(toastTimer)
       window.clearInterval(clock)
+      if (logsSearchTimer) clearTimeout(logsSearchTimer)
       document.removeEventListener('visibilitychange', onVisibility)
       document.removeEventListener('click', handleClickOutside)
       disconnectNotifSSE()
@@ -1598,13 +1661,16 @@
 
             {#if metricsMode === 'complex'}
               <Sparkline {device} />
+              <div class="device-summary compact">
+                <div class="stat"><strong>{device.preference_count || 0}</strong><span>files</span></div>
+                <div class="stat"><strong>{device.app_count || 0}</strong><span>pkgs</span></div>
+                {#if (device.saves_count || 0) > 0}
+                  <div class="stat saves-badge" title="Game saves"><strong>{device.saves_count}</strong><span>saves</span></div>
+                {/if}
+              </div>
             {:else}
+              <SimpleMetrics {device} />
               <div class="device-summary">
-                <div class="stat"><strong>{cpu.toFixed(0)}%</strong><span>CPU</span></div>
-                <div class="stat"><strong>{memPct.toFixed(0)}%</strong><span>RAM</span></div>
-                <div class="stat"><strong>{formatBytes(device.hardware?.memory_used_bytes || 0)}</strong><span>{formatBytes(device.hardware?.memory_total_bytes || 0)}</span></div>
-                <div class="stat"><strong>{(device.hardware?.power_watts || 0).toFixed(1)}W</strong><span>power</span></div>
-                <div class="stat"><strong>{formatDuration(device.hardware?.uptime_seconds || 0)}</strong><span>uptime</span></div>
                 <div class="stat"><strong>{device.preference_count || 0}</strong><span>files</span></div>
                 <div class="stat"><strong>{device.app_count || 0}</strong><span>pkgs</span></div>
                 {#if (device.saves_count || 0) > 0}
@@ -1857,7 +1923,7 @@
         <button class:active={logsTab === 'errors'} on:click={() => switchLogsTab('errors')}>Errors</button>
       </div>
       <div class="logs-filters">
-        <input class="search-input" type="search" bind:value={logsFilter} placeholder="Search logs..." on:input={() => void loadLogs(true)} />
+        <input class="search-input" type="search" bind:value={logsFilter} placeholder="Search logs..." on:input={onLogsFilterInput} />
       </div>
       {#if logsLoading && logsEntries.length === 0}
         <div class="logs-loading">Loading...</div>
@@ -1865,7 +1931,9 @@
         <div class="logs-empty">No logs found</div>
       {:else}
         <div class="logs-list">
-          {#each logsEntries as entry}
+          <!-- Keyed so appending a page does not re-render every existing row. -->
+          {#each logsEntries as entry (entry.id ?? `${entry.timestamp}-${entry.event}`)}
+            {@const meta = formatLogMetadata(entry.metadata)}
             <div class="log-entry">
               <span class="log-ts">{formatLogTime(entry.timestamp)}</span>
               <span class="log-level level-{(entry.level || '').toLowerCase()}">{entry.level}</span>
@@ -1873,8 +1941,8 @@
               <span class="log-event">{entry.event}</span>
               {#if entry.device_id}<span class="log-device">{entry.device_id}</span>{/if}
               {#if entry.message}<span class="log-message">{entry.message}</span>{/if}
-              {#if entry.metadata && Object.keys(entry.metadata).length > 0}
-                <span class="log-meta" title={JSON.stringify(entry.metadata, null, 2)}>{JSON.stringify(entry.metadata)}</span>
+              {#if meta}
+                <span class="log-meta" title={meta}>{meta}</span>
               {/if}
             </div>
           {/each}

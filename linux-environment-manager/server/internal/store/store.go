@@ -122,13 +122,25 @@ type HardwareSummary struct {
 	UptimeSeconds      int64           `json:"uptime_seconds"`
 	LoadAverage        string          `json:"load_average"`
 	NetworkIFaces      []NetworkIface  `json:"network_ifaces,omitempty"`
+	NetRxRate          float64         `json:"net_rx_rate"`
+	NetTxRate          float64         `json:"net_tx_rate"`
 	DiskReadRate       float64         `json:"disk_read_rate"`
 	DiskWriteRate      float64         `json:"disk_write_rate"`
 	DiskPartitions     []DiskPartition `json:"disk_partitions,omitempty"`
 	SwapUsedBytes      uint64          `json:"swap_used_bytes"`
 	SwapTotalBytes     uint64          `json:"swap_total_bytes"`
-	LynisAvailable     bool            `json:"lynis_available"`
-	CollectedAt        string          `json:"collected_at"`
+	MemoryBuffersBytes uint64          `json:"memory_buffers_bytes"`
+	MemoryCachedBytes  uint64          `json:"memory_cached_bytes"`
+	// Per-core usage is a small list of floats and the dashboard renders it as
+	// one bar per core, so it belongs on the card. Top processes and the Docker
+	// container list stay out of the list payload on purpose: they are kilobytes
+	// each and the device modal already loads them on demand.
+	CPUCoreUsage    []float64   `json:"cpu_core_usage,omitempty"`
+	GPUTemperature  float64     `json:"gpu_temperature_celsius"`
+	DockerAvailable bool        `json:"docker_available"`
+	DockerInfo      *DockerInfo `json:"docker_info,omitempty"`
+	LynisAvailable  bool        `json:"lynis_available"`
+	CollectedAt     string      `json:"collected_at"`
 }
 
 type HardwareStats struct {
@@ -154,6 +166,8 @@ type HardwareStats struct {
 	UptimeSeconds       int64             `json:"uptime_seconds"`
 	LoadAverage         string            `json:"load_average"`
 	NetworkIFaces       []NetworkIface    `json:"network_ifaces,omitempty"`
+	NetRxRate           float64           `json:"net_rx_rate"`
+	NetTxRate           float64           `json:"net_tx_rate"`
 	DiskReadBytes       uint64            `json:"disk_read_bytes"`
 	DiskWriteBytes      uint64            `json:"disk_write_bytes"`
 	DiskReadRate        float64           `json:"disk_read_rate"`
@@ -336,6 +350,7 @@ func NewStore(root string) (*Store, error) {
 	s.migrateAddFingerprintColumn()
 	s.migrateHashDeviceTokens()
 	s.migrateAddSecurityAuditsTable()
+	s.migrateAddLogsOwnerColumn()
 	if err := migrateLegacyJSON(db, root); err != nil {
 		return nil, fmt.Errorf("migrate legacy: %w", err)
 	}
@@ -356,6 +371,27 @@ func (s *Store) migrateAddFileEncodingColumn() {
 	if count == 0 {
 		_, _ = s.db.Exec("ALTER TABLE files ADD COLUMN encoding TEXT NOT NULL DEFAULT ''")
 	}
+}
+
+// migrateAddLogsOwnerColumn materialises the log owner on the row itself.
+// Scoping a log query used to be `(user_id = ? OR device_id IN (SELECT id FROM
+// devices WHERE owner_id = ?))`, and that OR with a subquery defeats every
+// index on the table, so each page of the log viewer scanned the whole table.
+// A plain owner_id column keeps the filter indexable.
+func (s *Store) migrateAddLogsOwnerColumn() {
+	var count int
+	s.db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('logs') WHERE name='owner_id'").Scan(&count)
+	if count == 0 {
+		if _, err := s.db.Exec("ALTER TABLE logs ADD COLUMN owner_id TEXT NOT NULL DEFAULT ''"); err != nil {
+			return
+		}
+	}
+	// Backfill from the device that produced each entry, falling back to the
+	// user for entries that are not device-scoped.
+	_, _ = s.db.Exec(`UPDATE logs SET owner_id = COALESCE(
+		(SELECT d.owner_id FROM devices d WHERE d.id = logs.device_id), logs.user_id)
+		WHERE owner_id = ''`)
+	s.db.Exec("CREATE INDEX IF NOT EXISTS idx_logs_owner_ts ON logs(owner_id, ts)")
 }
 
 func (s *Store) migrateAddStatusColumn() {
@@ -598,7 +634,8 @@ func (s *Store) initSchema() error {
 		duration_ms    INTEGER NOT NULL DEFAULT 0,
 		status         INTEGER NOT NULL DEFAULT 0,
 		metadata       TEXT NOT NULL DEFAULT '{}',
-		redacted       INTEGER NOT NULL DEFAULT 0
+		redacted       INTEGER NOT NULL DEFAULT 0,
+		owner_id       TEXT NOT NULL DEFAULT ''
 	);
 	CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs(ts);
 	CREATE INDEX IF NOT EXISTS idx_logs_level ON logs(level);
@@ -608,6 +645,10 @@ func (s *Store) initSchema() error {
 	CREATE INDEX IF NOT EXISTS idx_logs_event ON logs(event);
 	CREATE INDEX IF NOT EXISTS idx_logs_level_ts ON logs(level, ts);
 	CREATE INDEX IF NOT EXISTS idx_logs_device_level ON logs(device_id, level, ts);
+	-- idx_logs_owner_ts is deliberately NOT created here. On an existing
+	-- database the CREATE TABLE above is a no-op, so owner_id does not exist
+	-- yet and indexing it fails before the migration can add the column. The
+	-- index is created in migrateAddLogsOwnerColumn instead.
 	CREATE TABLE IF NOT EXISTS http_access (
 		id              INTEGER PRIMARY KEY AUTOINCREMENT,
 		method          TEXT NOT NULL,
