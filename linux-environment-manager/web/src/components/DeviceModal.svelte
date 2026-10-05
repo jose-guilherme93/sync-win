@@ -187,6 +187,7 @@
   type LogLevel = 'all' | 'error' | 'warn' | 'info'
   let deviceLogs: DeviceLog[] = []
   let logsLoading = false
+  let logsLoaded = false
   let logsError = ''
   let logFilter: LogLevel = 'all'
 
@@ -198,15 +199,12 @@
       if (!response.ok) throw new Error(`request failed: ${response.status}`)
       const data = await response.json()
       deviceLogs = Array.isArray(data?.hardware?.logs) ? data.hardware.logs : []
+      logsLoaded = true
     } catch (err) {
       logsError = err instanceof Error ? err.message : 'Could not load device logs'
     } finally {
       logsLoading = false
     }
-  }
-
-  $: if (activeTab === 'logs' && deviceLogs.length === 0 && !logsLoading && !logsError) {
-    void loadDeviceLogs()
   }
 
   $: logCounts = {
@@ -366,6 +364,7 @@
       void loadNotes()
       void loadAttachments()
     }
+    if (tab === 'logs' && !logsLoaded) void loadDeviceLogs()
   }
 
   function tabKeydown(event: KeyboardEvent) {

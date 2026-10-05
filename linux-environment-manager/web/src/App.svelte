@@ -218,11 +218,16 @@
   $: installServerIsLocal = /^(https?:\/\/)?(localhost|127\.0\.0\.1|::1|\[::1\])(:\d+)?(\/|$)/.test(normalizedInstallServer)
   let enrollmentToken = ''
   let enrollmentLoading = false
+  let enrollmentAttempted = false
   let enrollmentError = ''
   $: installCommand = signedIn && enrollmentToken
     ? `curl -fsSL "${normalizedInstallServer}/install/${enrollmentToken}" -o /tmp/lem-install.sh && sudo bash /tmp/lem-install.sh`
     : ''
-  $: if (installOpen && signedIn && !enrollmentToken && !enrollmentLoading) {
+  // Fetch the enrollment token once per open. The `enrollmentAttempted` guard
+  // is essential: without it a failed request leaves loading=false and token
+  // empty, and this reactive statement would refire forever (request storm).
+  $: if (installOpen && signedIn && !enrollmentToken && !enrollmentLoading && !enrollmentAttempted) {
+    enrollmentAttempted = true
     requestEnrollmentToken()
   }
 
@@ -303,6 +308,7 @@
         void loadDevices(false)
       } else if (response.status === 401) {
         clearAccountStorage()
+        disconnectNotifSSE()
         authToken = ''
         ownerIdentity = ''
         accountEmail = ''
@@ -322,9 +328,10 @@
 
   let notifSSE: EventSource | null = null
   let notifConnecting = false
+  let notifRetryTimer = 0
 
   async function connectNotifSSE() {
-    if (notifSSE || notifConnecting) return
+    if (notifSSE || notifConnecting || !signedIn) return
     notifConnecting = true
     try {
       const response = await apiFetch(apiURL(`/api/notifications/stream-token`), {
@@ -347,20 +354,24 @@
       notifSSE.onerror = () => {
         notifSSE?.close()
         notifSSE = null
-        setTimeout(() => {
-          if (!notifSSE) void connectNotifSSE()
-        }, 5000)
+        scheduleNotifReconnect()
       }
     } catch {
-      setTimeout(() => {
-        if (!notifSSE) void connectNotifSSE()
-      }, 5000)
+      scheduleNotifReconnect()
     } finally {
       notifConnecting = false
     }
   }
 
+  function scheduleNotifReconnect() {
+    window.clearTimeout(notifRetryTimer)
+    notifRetryTimer = window.setTimeout(() => {
+      if (signedIn) void connectNotifSSE()
+    }, 5000)
+  }
+
   function disconnectNotifSSE() {
+    window.clearTimeout(notifRetryTimer)
     if (notifSSE) {
       notifSSE.close()
       notifSSE = null
@@ -433,6 +444,12 @@
   }
 
   async function pollTick() {
+    // While signed out, keep the timer alive but issue no requests so a stale
+    // session (logout or expiry) does not poll the API unauthenticated.
+    if (!signedIn) {
+      schedulePoll(POLL_MS)
+      return
+    }
     if (document.hidden) {
       liveState = 'paused'
       schedulePoll(POLL_MS)
@@ -744,13 +761,17 @@
   function toggleInstall() {
     installOpen = !installOpen
     localStorage.setItem('lem-install-open', installOpen ? '1' : '0')
-    if (installOpen && !enrollmentToken && signedIn) {
-      requestEnrollmentToken()
+    if (installOpen) {
+      enrollmentAttempted = false
+      if (!enrollmentToken && signedIn) {
+        requestEnrollmentToken()
+      }
     }
   }
 
   async function requestEnrollmentToken() {
     if (!signedIn || enrollmentLoading) return
+    enrollmentAttempted = true
     enrollmentLoading = true
     enrollmentError = ''
     try {
@@ -773,6 +794,7 @@
 
   function refreshInstallToken() {
     enrollmentToken = ''
+    enrollmentAttempted = false
     requestEnrollmentToken()
   }
 
@@ -1118,6 +1140,7 @@
   function openAddDevice() {
     addDeviceOpen = true
     if (signedIn && !enrollmentToken) {
+      enrollmentAttempted = false
       requestEnrollmentToken()
     }
   }
