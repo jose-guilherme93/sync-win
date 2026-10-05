@@ -804,6 +804,7 @@
         <div class="tablist" role="tablist" aria-label={`${device.hostname} details`}>
           <button
             role="tab"
+            id="tab-system"
             class:active={activeTab === 'system'}
             aria-selected={activeTab === 'system'}
             tabindex={activeTab === 'system' ? 0 : -1}
@@ -814,6 +815,7 @@
           </button>
           <button
             role="tab"
+            id="tab-files"
             class:active={activeTab === 'files'}
             aria-selected={activeTab === 'files'}
             tabindex={activeTab === 'files' ? 0 : -1}
@@ -824,6 +826,7 @@
           </button>
           <button
             role="tab"
+            id="tab-apps"
             class:active={activeTab === 'apps'}
             aria-selected={activeTab === 'apps'}
             tabindex={activeTab === 'apps' ? 0 : -1}
@@ -834,6 +837,7 @@
           </button>
           <button
             role="tab"
+            id="tab-saves"
             class:active={activeTab === 'saves'}
             aria-selected={activeTab === 'saves'}
             tabindex={activeTab === 'saves' ? 0 : -1}
@@ -844,6 +848,7 @@
           </button>
           <button
             role="tab"
+            id="tab-docker"
             class:active={activeTab === 'docker'}
             aria-selected={activeTab === 'docker'}
             tabindex={activeTab === 'docker' ? 0 : -1}
@@ -854,6 +859,7 @@
           </button>
           <button
             role="tab"
+            id="tab-security"
             class:active={activeTab === 'security'}
             aria-selected={activeTab === 'security'}
             tabindex={activeTab === 'security' ? 0 : -1}
@@ -864,6 +870,7 @@
           </button>
           <button
             role="tab"
+            id="tab-notes"
             class:active={activeTab === 'notes'}
             aria-selected={activeTab === 'notes'}
             tabindex={activeTab === 'notes' ? 0 : -1}

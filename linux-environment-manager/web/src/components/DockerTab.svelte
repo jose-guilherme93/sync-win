@@ -507,7 +507,19 @@
           </div>
         {:else}
           {#each filteredContainers as container (container.id)}
-            <div class="container-row" class:selected={selectedContainer?.id === container.id} on:click={() => selectContainer(container)}>
+            <div
+              class="container-row"
+              class:selected={selectedContainer?.id === container.id}
+              role="button"
+              tabindex="0"
+              on:click={() => selectContainer(container)}
+              on:keydown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  selectContainer(container)
+                }
+              }}
+            >
               <div class="container-main">
                 <span class="state-dot" style="background: {stateColor(container.state)}"></span>
                 <div class="container-info">
