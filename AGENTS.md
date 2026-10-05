@@ -77,12 +77,10 @@ sync-win/
 │   │   ├── components/
 │   │   │   ├── shell/              # Sidebar, Topbar, DeviceList (app chrome)
 │   │   │   ├── ui/                 # Icon, StatusDot, GaugeCard, StatCard, Skeleton, ConfirmDialog…
-│   │   │   ├── screens/            # Home (fleet), DeviceOverview
+│   │   │   ├── screens/            # Home, DeviceOverview, Alerts, Reports, Storage, Processes, Packages, Services, RemoteActions, DeviceSettings
 │   │   │   ├── DeviceModal.svelte  # Device detail tabs; variant="page" renders inline
 │   │   │   ├── DockerTab.svelte    # Docker container management
-│   │   │   ├── Sparkline.svelte       # Lightweight canvas sparklines for device cards
 │   │   │   ├── SystemMetrics.svelte    # Detailed hardware telemetry
-│   │   │   ├── SimpleMetrics.svelte    # Device summary cards
 │   │   │   ├── NotificationsModal.svelte  # Notification settings and inbox
 │   │   │   └── NotificationToast.svelte   # Toast notifications
 │   │   └── lib/
@@ -90,6 +88,7 @@ sync-win/
 │   │       ├── router.ts           # Navigation store + NAV_GROUPS
 │   │       ├── types.ts            # Shared Device / HardwareStats shapes
 │   │       ├── insights.ts         # Alert thresholds (single source)
+│   │       ├── flags.ts            # VITE_MOCK_* switches for screens without an API
 │   │       ├── format.ts           # Timestamp/byte/severity helpers (guards the Go zero time)
 │   │       ├── telemetry-store.ts  # Telemetry state management
 │   │       └── telemetry-cache.ts  # 60s TTL cache

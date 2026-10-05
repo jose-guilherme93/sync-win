@@ -68,16 +68,19 @@ Key UI components:
 - `components/ui/`: reusable primitives (Icon, StatusDot, SeverityBadge, GaugeCard, StatCard, MiniSparkline, EmptyState, Skeleton, ConfirmDialog)
 - `components/screens/Home.svelte`: fleet KPI row, device table with sparklines, recent-alerts feed
 - `components/screens/DeviceOverview.svelte`: gauges, per-core load, storage/network cards, history chart
+- `components/screens/Alerts.svelte`, `Reports.svelte`: fleet-wide findings and inventory reports
+- `components/screens/Storage.svelte`, `Processes.svelte`, `Packages.svelte`, `Services.svelte`: per-device hardware and system views
+- `components/screens/RemoteActions.svelte`, `DeviceSettings.svelte`: confirmed remote actions with an audit trail, and device identity/removal
 - `DeviceModal.svelte`: device detail; still owns the Files / Packages / Saves / Notes / Docker / Security tabs, and can render inline via `variant="page"` rather than as a popup
 - `DockerTab.svelte`: container management (list, start/stop/restart/kill/remove, exec, compose editor, prune)
 - `SecurityTab.svelte`: Lynis security audit runner, hardening index gauge, warnings/suggestions, history
-- `Sparkline.svelte`: lightweight canvas CPU/memory/network sparklines for device cards (no Chart.js)
-- `SimpleMetrics.svelte`: device summary cards with save badges
 - `SystemMetrics.svelte`: detailed hardware telemetry display and history charts
 - `NotificationsModal.svelte`: notification provider settings and inbox
 - `NotificationToast.svelte`: real-time toast notifications via SSE
 
-**Status:** the shell, Home and Device Overview are implemented. Storage, Containers, Security, Alerts, Reports, Remote Actions, Device Settings, Processes, Services and Packages are not yet dedicated screens — those sidebar entries currently resolve to `DeviceModal` tabs. Note that `svelte-check` does not reliably catch malformed Svelte block structure in this repo; `vite build` is the trustworthy gate for template changes.
+**Status:** the shell and every fleet and device screen are implemented. Four screens render honest "not collected yet" states for the parts whose API does not exist: `Services` (systemd units, open ports), `RemoteActions` (reboot / update-packages / restart-agent command types), the pending-updates half of `Packages`, and the SMART half of `Storage`. Those are marked in the UI with the missing endpoint, and `lib/flags.ts` (`VITE_MOCK_*`) can swap in labelled sample data for layout review. `cpu`, `memory`, `network` and `sensors` currently all resolve to the same `DeviceOverview`; `containers`, `logs` and `security` still resolve to `DeviceModal` tabs.
+
+Note that `svelte-check` does not reliably catch malformed Svelte block structure in this repo; `vite build` is the trustworthy gate for template changes.
 
 ## Responsibilities
 
