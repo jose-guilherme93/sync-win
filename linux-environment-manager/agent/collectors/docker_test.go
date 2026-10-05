@@ -2,6 +2,9 @@ package collectors
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -300,5 +303,60 @@ func TestDockerExecStartEmptyID(t *testing.T) {
 	_, err := DockerExecStart("")
 	if err == nil {
 		t.Error("expected error for empty exec ID")
+	}
+}
+
+func withComposeRoot(t *testing.T, root string) {
+	t.Helper()
+	orig := composeRoots
+	composeRoots = []string{root}
+	t.Cleanup(func() { composeRoots = orig })
+}
+
+func TestComposeWriteRejectsSymlinkTarget(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	withComposeRoot(t, dir)
+
+	target := filepath.Join(dir, "docker-compose.yml")
+	if err := os.Symlink(filepath.Join(outside, "docker-compose.yml"), target); err != nil {
+		t.Skipf("symlinks unsupported here: %v", err)
+	}
+	if err := DockerComposeWrite(target, "services: {}\n"); err == nil {
+		t.Fatal("symlink compose target was accepted")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "docker-compose.yml")); err == nil {
+		t.Fatal("write escaped the approved root through a symlink")
+	}
+}
+
+func TestComposeWriteWritesAtomically(t *testing.T) {
+	dir := t.TempDir()
+	withComposeRoot(t, dir)
+
+	target := filepath.Join(dir, "docker-compose.yml")
+	if err := DockerComposeWrite(target, "services:\n  web: {}\n"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(target)
+	if err != nil || string(data) != "services:\n  web: {}\n" {
+		t.Fatalf("written content = %q err=%v", data, err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".lem-compose-") {
+			t.Fatalf("temporary file left behind: %s", entry.Name())
+		}
+	}
+}
+
+func TestComposeWriteRejectsNonComposeFilename(t *testing.T) {
+	dir := t.TempDir()
+	withComposeRoot(t, dir)
+	if err := DockerComposeWrite(filepath.Join(dir, "notes.txt"), "x"); err == nil {
+		t.Fatal("non-compose filename was accepted")
 	}
 }

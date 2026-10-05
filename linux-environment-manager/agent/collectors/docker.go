@@ -653,6 +653,16 @@ func validateComposePath(path string, forWrite bool) error {
 			return fmt.Errorf("resolve compose parent: %w", err)
 		}
 		resolved = filepath.Join(resolved, filepath.Base(clean))
+		// The final component must not be an existing symlink or directory:
+		// writing through it would escape the approved roots.
+		if info, err := os.Lstat(clean); err == nil {
+			if info.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("compose target is a symlink")
+			}
+			if info.IsDir() {
+				return fmt.Errorf("compose target is a directory")
+			}
+		}
 	} else {
 		var err error
 		resolved, err = filepath.EvalSymlinks(clean)
@@ -668,7 +678,7 @@ func validateComposePath(path string, forWrite bool) error {
 
 // DockerComposeFiles scans only operator-approved compose roots.
 func DockerComposeFiles() ([]DockerComposeFile, error) {
-	searchPaths := []string{"/home", "/opt", "/srv", "/var/lib/lem"}
+	searchPaths := append([]string(nil), composeRoots...)
 	composeNames := []string{
 		"docker-compose.yml",
 		"docker-compose.yaml",
@@ -749,8 +759,34 @@ func DockerComposeWrite(path, content string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+	// Re-validate after creating the parent: MkdirAll may have followed a link,
+	// and the write itself must never follow a symlink.
+	if err := validateComposePath(path, true); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".lem-compose-*")
+	if err != nil {
+		return fmt.Errorf("create temp compose file: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return fmt.Errorf("set compose file permissions: %w", err)
+	}
+	if _, err := tmp.WriteString(content); err != nil {
+		tmp.Close()
 		return fmt.Errorf("write compose file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("sync compose file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close compose file: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("replace compose file: %w", err)
 	}
 	return nil
 }
