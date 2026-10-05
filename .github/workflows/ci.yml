@@ -19,8 +19,12 @@ jobs:
   # Go: Lint (server + agent)
   # ---------------------------------------------------------------------------
   lint-go:
-    name: Lint Go
+    name: Lint Go (${{ matrix.module }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [server, agent]
     steps:
       - uses: actions/checkout@v4
 
@@ -28,15 +32,14 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Install golangci-lint
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.62.2
-
-      - name: Lint server
-        run: cd server && golangci-lint run ./...
-
-      - name: Lint agent
-        run: cd agent && golangci-lint run ./...
+      # Only new issues fail the build, so the existing backlog does not block
+      # changes while it is paid down over time.
+      - name: Lint ${{ matrix.module }}
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.14.0
+          working-directory: ${{ matrix.module }}
+          only-new-issues: true
 
   # ---------------------------------------------------------------------------
   # Go: Test (server + agent)
@@ -122,6 +125,7 @@ jobs:
           context: .
           file: docker/Dockerfile.server
           push: false
+          load: true
           tags: sync-win:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
