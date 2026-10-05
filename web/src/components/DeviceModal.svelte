@@ -4,6 +4,7 @@
   import DockerTab from './DockerTab.svelte'
   import SecurityTab from './SecurityTab.svelte'
   import { apiFetch, apiURL, serverBase } from '../lib/api'
+  import { formatRelative } from '../lib/format'
 
   type AppInfo = { name: string; version: string; source: string; path?: string }
 
@@ -92,6 +93,12 @@
   export let open = false
   export let authHeaders: Record<string, string> = {}
   export let initialFiles: PreferenceFile[] = []
+  // 'modal' is the legacy overlay. 'page' renders the same content inline as
+  // the main panel area, which is how the redesigned shell shows a device
+  // without opening a popup. The only structural difference is the wrapper.
+  export let variant: 'modal' | 'page' = 'modal'
+  // Two-way so the shell can drive which tab a sidebar section maps onto.
+  export let activeTabName: string | null = null
 
   const dispatch = createEventDispatcher()
   // Attachment previews use the HttpOnly session cookie; do not put bearer
@@ -120,6 +127,11 @@
   const PANEL_TTL_MS = 60000
 
   let activeTab: TabName = 'system'
+  // A sidebar section can force a tab (e.g. "Containers" -> docker). Kept in
+  // sync rather than replacing activeTab so the in-page tablist still works.
+  $: if (activeTabName && TAB_NAMES.includes(activeTabName as TabName) && activeTab !== activeTabName) {
+    activeTab = activeTabName as TabName
+  }
   let files: PreferenceFile[] = []
   let apps: AppInfo[] = []
   let saves: PreferenceFile[] = []
@@ -286,17 +298,8 @@
     return 'online'
   }
 
-  function timeAgo(value: string | number | null | undefined, nowTs: number) {
-    if (!value) return 'never'
-    const t = typeof value === 'number' ? value : Date.parse(value)
-    if (!Number.isFinite(t)) return 'never'
-    const diff = Math.max(0, Math.floor((nowTs - t) / 1000))
-    if (diff < 10) return 'just now'
-    if (diff < 60) return `${diff}s ago`
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
-    return `${Math.floor(diff / 86400)}d ago`
-  }
+  // Delegates to lib/format so a null or Go zero timestamp renders "never".
+  const timeAgo = formatRelative
 
   function formatTime(value: string | undefined | null) {
     if (!value) return ''
@@ -754,17 +757,17 @@
   })
 </script>
 
-{#if open}
+{#if open || variant === 'page'}
   <div
-    class="modal-backdrop"
-    role="presentation"
-    on:click={close}
-    on:keydown={handleBackdropKeydown}
+    class={variant === 'page' ? 'device-page' : 'modal-backdrop'}
+    role={variant === 'page' ? undefined : 'presentation'}
+    on:click={variant === 'page' ? undefined : close}
+    on:keydown={variant === 'page' ? undefined : handleBackdropKeydown}
   >
     <div
-      class="device-modal"
-      role="dialog"
-      aria-modal="true"
+      class={variant === 'page' ? 'device-page-inner' : 'device-modal'}
+      role={variant === 'page' ? undefined : 'dialog'}
+      aria-modal={variant === 'page' ? undefined : 'true'}
       aria-labelledby="device-modal-title"
       tabindex="-1"
       on:click|stopPropagation
@@ -784,7 +787,9 @@
           <span class={`badge ${statusColor(computedStatus(device))}`} title={STATUS_HINTS[computedStatus(device)] || 'Unknown status'}>
             <i class="dot"></i>{computedStatus(device)}
           </span>
-          <button class="secondary" on:click={close}>Close</button>
+          {#if variant === 'modal'}
+            <button class="secondary" on:click={close}>Close</button>
+          {/if}
         </div>
       </div>
 
@@ -1235,6 +1240,23 @@
 {/if}
 
 <style>
+  /* Page mode: same content, but it fills the shell's main area instead of
+     floating over the dashboard. Split out from .device-modal so the modal
+     variant keeps its fixed height while this one grows with the viewport. */
+  .device-page {
+    width: 100%;
+    min-height: 100%;
+  }
+
+  .device-page-inner {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    width: 100%;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+
   .device-modal {
     display: flex;
     flex-direction: column;

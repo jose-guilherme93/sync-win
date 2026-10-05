@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, onDestroy, tick } from 'svelte'
   import DeviceModal from './components/DeviceModal.svelte'
   import SimpleMetrics from './components/SimpleMetrics.svelte'
   import Sparkline from './components/Sparkline.svelte'
@@ -7,6 +7,10 @@
   import NotificationToast from './components/NotificationToast.svelte'
   import { addTelemetryPoint, resetTelemetry } from './lib/telemetry-store'
   import { apiFetch, apiURL, serverBase } from './lib/api'
+  import { formatRelative, formatAbsolute } from './lib/format'
+  import Sidebar from './components/shell/Sidebar.svelte'
+  import Topbar from './components/shell/Topbar.svelte'
+  import { nav, type Section } from './lib/router'
 
   type Device = {
     id: string
@@ -95,7 +99,9 @@
   // locally on the Docker host.
   const localAccess = /^(localhost|127\.0\.0\.1|::1|\[::1\])$/.test(window.location.hostname)
   let installServer = serverBase
-  const POLL_MS = 10000
+  // Poll interval is user-selectable in the topbar, so it is mutable rather
+  // than a constant. The backoff ceiling still applies when the server errors.
+  let POLL_MS = 10000
   const MAX_POLL_MS = 60000
   const PANEL_REFRESH_MS = 60000
   // The device list is polled every 10s but written to localStorage far less
@@ -160,6 +166,49 @@
   let metricsMode: MetricsMode = (localStorage.getItem('sync-win-metrics-mode') as MetricsMode) || 'simple'
   let deviceModalOpen = false
   let deviceDetails: Record<string, Device> = {}
+
+  // Shell navigation. The sidebar writes into this store and the main area
+  // reacts; nothing is rendered as a popup any more.
+  let navState = { section: 'home' as Section, deviceId: null as string | null }
+  const unsubNav = nav.subscribe((value) => {
+    navState = value
+    if (value.deviceId && value.deviceId !== selectedDeviceId) {
+      selectedDeviceId = value.deviceId
+      void loadDeviceDetail(value.deviceId)
+      selectPanels(value.deviceId)
+    }
+  })
+  onDestroy(unsubNav)
+
+  let sidebarCollapsed = localStorage.getItem('sync-win-sidebar-collapsed') === '1'
+  let mobileNavOpen = false
+
+  function toggleSidebar() {
+    sidebarCollapsed = !sidebarCollapsed
+    localStorage.setItem('sync-win-sidebar-collapsed', sidebarCollapsed ? '1' : '0')
+  }
+
+  function navigateTo(section: Section) {
+    nav.setSection(section)
+    mobileNavOpen = false
+  }
+
+  // Device-scoped sidebar sections map onto the tabs the device page already
+  // renders, so the two navigations cannot disagree.
+  $: deviceTabForSection = ({
+    overview: 'system',
+    cpu: 'system',
+    memory: 'system',
+    storage: 'system',
+    network: 'system',
+    sensors: 'system',
+    containers: 'docker',
+    packages: 'apps',
+    logs: 'logs',
+    security: 'security'
+  } as Record<string, string>)[navState.section] || null
+
+  $: isDeviceSection = Boolean(navState.deviceId) && navState.section !== 'home' && navState.section !== 'devices' && navState.section !== 'alerts' && navState.section !== 'findings' && navState.section !== 'reports'
   // The modal prefers the full detail payload (logs, processes, Docker state)
   // and falls back to the lightweight list entry while it loads.
   $: modalDevice = selectedDeviceId
@@ -731,12 +780,12 @@
     localStorage.setItem('sync-win-notif-sound', s)
   }
 
+  // Selecting a device navigates the shell to its overview. No popup: the same
+  // gesture used to open a modal, but the panel now owns the whole main area.
   function selectDevice(deviceId: string) {
     if (!deviceId) return
-    selectedDeviceId = deviceId
-    deviceModalOpen = true
-    void loadDeviceDetail(deviceId)
-    selectPanels(deviceId)
+    nav.selectDevice(deviceId)
+    mobileNavOpen = false
   }
 
   async function loadDeviceDetail(deviceId: string) {
@@ -755,6 +804,46 @@
   function closeDeviceModal() {
     deviceModalOpen = false
     selectedDeviceId = ''
+  }
+
+  // Topbar refresh selector. The poller reschedules itself each cycle, so
+  // setting the interval and kicking it once makes the change take effect
+  // immediately instead of after the current (possibly 60s) wait.
+  function setRefreshMs(ms: number) {
+    POLL_MS = ms
+    if (pollTimer) window.clearTimeout(pollTimer)
+    schedulePoll(ms)
+  }
+
+  // Global search (Ctrl+K). Until a dedicated command palette exists, this
+  // focuses the fleet search field so the shortcut still does something useful.
+  function openGlobalSearch() {
+    nav.setSection('home')
+    tick().then(() => {
+      const el = document.querySelector<HTMLInputElement>('.panel-inner .search-input, .content .search-input')
+      el?.focus()
+    })
+  }
+
+  const SECTION_TITLES: Record<string, string> = {
+    home: 'Fleet',
+    devices: 'Devices',
+    alerts: 'Alerts',
+    findings: 'Findings',
+    reports: 'Reports'
+  }
+
+  function sectionTitleFor(section: Section): string {
+    return SECTION_TITLES[section] || 'Fleet'
+  }
+
+  // A device can disappear while it is selected (deleted, or filtered out).
+  // Drop the selection so the shell falls back to the fleet instead of
+  // rendering a page for a device that no longer exists.
+  function handleDeviceRemoved(deviceId: string) {
+    devices = devices.filter((d) => d.id !== deviceId)
+    delete filesByDevice[deviceId]
+    if (navState.deviceId === deviceId) nav.clearDevice()
   }
 
   function setMetricsMode(mode: MetricsMode) {
@@ -1361,23 +1450,10 @@
     return 'online'
   }
 
-  function timeAgo(value: string | number | null | undefined, nowTs: number) {
-    if (!value) return 'never'
-    const t = typeof value === 'number' ? value : Date.parse(value)
-    if (!Number.isFinite(t)) return 'never'
-    const diff = Math.max(0, Math.floor((nowTs - t) / 1000))
-    if (diff < 10) return 'just now'
-    if (diff < 60) return `${diff}s ago`
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
-    return `${Math.floor(diff / 86400)}d ago`
-  }
-
-  function formatTime(value: string | undefined | null) {
-    if (!value) return ''
-    const parsed = new Date(value)
-    return Number.isNaN(parsed.getTime()) ? '' : parsed.toLocaleString()
-  }
+  // Both delegate to lib/format so the Go zero time collapses to "never"
+  // instead of reporting an age of ~739893 days.
+  const timeAgo = formatRelative
+  const formatTime = formatAbsolute
 
   function formatBytes(value: number) {
     if (!Number.isFinite(value) || value <= 0) return '0 B'
@@ -1504,7 +1580,7 @@
 
 <svelte:window on:keydown={handleWindowKeydown} />
 
-<div class="page">
+<div class="page" class:full={signedIn}>
   {#if !authReady}
     <div class="auth-gate">
       <div class="auth-card">
@@ -1537,27 +1613,44 @@
       </div>
     </div>
   {:else}
-  <header class="header">
-    <div class="header-left">
-      <span class="logo">SyncWin</span>
-      <span class="header-subtitle">SyncWin</span>
+  <div class="app-shell">
+    {#if mobileNavOpen}
+      <div class="nav-scrim" role="presentation" on:click={() => (mobileNavOpen = false)}></div>
+    {/if}
+    <div class="sidebar-wrap" class:open={mobileNavOpen}>
+      <Sidebar
+        {devices}
+        selectedId={navState.deviceId}
+        activeSection={navState.section}
+        collapsed={sidebarCollapsed}
+        onSelectDevice={selectDevice}
+        onNavigate={navigateTo}
+        onAddDevice={openAddDevice}
+        onToggleCollapse={toggleSidebar}
+      />
     </div>
-    <div class="header-right">
-      <div class="live-pill {liveState}" title={liveState === 'paused' ? 'Updates pause while this tab is hidden' : `Polling every ${POLL_MS / 1000}s`} role="status">
-        <i class="dot"></i>
-        <span>{liveState === 'live' ? 'Live' : liveState === 'paused' ? 'Paused' : 'Reconnecting'}</span>
-        <small>{lastUpdated ? timeAgo(lastUpdated, now) : '—'}</small>
-      </div>
-      <button class="ghost" on:click={() => loadDevices(true)} disabled={devicesLoading}>Refresh</button>
-      <div class="bell-wrapper">
-        <button class="bell-btn" on:click|stopPropagation={toggleBell} title="Notifications">
-          🔔
-          {#if notifEvents.length > 0}<span class="bell-badge">{notifEvents.length}</span>{/if}
-        </button>
-        {#if bellOpen}
-          <!-- svelte-ignore a11y-click-events-have-key-events -->
-          <!-- svelte-ignore a11y-no-static-element-interactions -->
-          <div class="bell-dropdown" on:click|stopPropagation>
+    <div class="main-col">
+      <Topbar
+        device={isDeviceSection ? modalDevice : null}
+        sectionTitle={sectionTitleFor(navState.section)}
+        refreshMs={POLL_MS}
+        onRefreshChange={setRefreshMs}
+        onManualRefresh={() => loadDevices(true)}
+        onOpenSearch={openGlobalSearch}
+        onOpenNotifications={toggleBell}
+        onOpenUserMenu={toggleUserMenu}
+        accountInitial={accountEmail.charAt(0).toUpperCase()}
+        unreadCount={notifEvents.length}
+        onOpenMobileNav={() => (mobileNavOpen = true)}
+      />
+
+      <!-- Popovers for the topbar buttons. They live here rather than inside
+           Topbar because they need App-level state (notifications, profile
+           forms). The wrapper classes are what handleClickOutside watches, so
+           clicking away closes them. -->
+      {#if bellOpen}
+        <div class="shell-popover bell-wrapper" on:click|stopPropagation>
+          <div class="bell-dropdown">
             <div class="bell-header">
               <span class="bell-title">Notifications</span>
               {#if notifEvents.length > 0}
@@ -1587,16 +1680,12 @@
               </div>
             {/if}
           </div>
-        {/if}
-      </div>
-      <div class="user-menu-wrapper">
-        <button class="avatar-btn" on:click|stopPropagation={toggleUserMenu} title={accountEmail}>
-          {accountEmail.charAt(0).toUpperCase()}
-        </button>
-        {#if userMenuOpen}
-          <!-- svelte-ignore a11y-click-events-have-key-events -->
-          <!-- svelte-ignore a11y-no-static-element-interactions -->
-          <div class="user-dropdown" on:click|stopPropagation>
+        </div>
+      {/if}
+
+      {#if userMenuOpen}
+        <div class="shell-popover user-menu-wrapper" on:click|stopPropagation>
+          <div class="user-dropdown">
             <div class="dropdown-header">
               <div class="avatar-large">{accountEmail.charAt(0).toUpperCase()}</div>
               <div>
@@ -1646,14 +1735,26 @@
               Sign out
             </button>
           </div>
+        </div>
+      {/if}
+      <main class="content">
+        {#if isDeviceSection && modalDevice}
+          <DeviceModal
+            device={modalDevice}
+            open={true}
+            variant="page"
+            activeTabName={deviceTabForSection}
+            authHeaders={ownerHeaders}
+            initialFiles={filesByDevice[modalDevice.id] || []}
+            on:close={() => nav.clearDevice()}
+            on:removed={() => handleDeviceRemoved(modalDevice.id)}
+            on:restore={(event) => restoreGameSaves(event.detail.deviceId, event.detail.prefixId, event.detail.gameName)}
+          />
+        {:else}
+        <div class="panel-inner">
+        {#if toastMessage}
+          <div class="toast {toastKind}" role="status">{toastMessage}</div>
         {/if}
-      </div>
-    </div>
-  </header>
-
-  {#if toastMessage}
-    <div class="toast {toastKind}" role="status">{toastMessage}</div>
-  {/if}
 
   <section class="kpis" aria-label="Fleet summary">
     <button class="kpi" class:selected={statusFilter === 'all'} aria-pressed={statusFilter === 'all'} on:click={() => setStatusFilter('all')}>
@@ -1781,6 +1882,11 @@
       </div>
     </div>
   {/if}
+        </div>
+        {/if}
+      </main>
+    </div>
+  </div>
   {/if}
 </div>
 
@@ -1919,17 +2025,6 @@
       </div>
     </div>
   </div>
-{/if}
-
-{#if deviceModalOpen && modalDevice}
-  <DeviceModal
-    device={modalDevice}
-    open={deviceModalOpen}
-    on:close={closeDeviceModal}
-    on:restore={(event) => restoreGameSaves(event.detail.deviceId, event.detail.prefixId, event.detail.gameName)}
-    authHeaders={ownerHeaders}
-    initialFiles={filesByDevice[modalDevice.id] || []}
-  />
 {/if}
 
 {#if addDeviceOpen}
