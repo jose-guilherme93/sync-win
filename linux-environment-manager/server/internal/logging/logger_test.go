@@ -2,8 +2,10 @@ package logging
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -458,4 +460,50 @@ func containsSubstr(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// TestLoggerRequestIDsAreNotCrossAttributed verifies that when many goroutines
+// log concurrently with distinct request ids, every persisted entry keeps its
+// own ids. Before the fix the ids lived on the shared Logger and could be
+// attributed to the wrong request (and racy). Run with -race.
+func TestLoggerRequestIDsAreNotCrossAttributed(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	store := NewStore(db)
+	cfg := DefaultConfig()
+	cfg.Level = LevelInfo
+	cfg.ConsoleLevel = LevelFatal
+	cfg.BatchSize = 5000
+	cfg.FlushInterval = time.Millisecond
+	cfg.QueueSize = 100000
+	logger := New(cfg, store)
+
+	const n = 200
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			id := fmt.Sprintf("req-%d", i)
+			// Unique event per call: the deduplicator keys on level/category/
+			// event/device and would otherwise collapse identical events.
+			logger.log(LevelInfo, CatHTTP, Event("http_request_"+id), id, nil, id, id)
+		}(i)
+	}
+	wg.Wait()
+	logger.Stop()
+
+	result, err := store.Query(QueryParams{Limit: 500})
+	if err != nil {
+		t.Fatal("query logs:", err)
+	}
+	if result.Total != n {
+		t.Fatalf("expected %d entries, got %d", n, result.Total)
+	}
+	for _, e := range result.Entries {
+		if e.RequestID != e.Message || e.CorrelationID != e.Message {
+			t.Fatalf("request context cross-attributed: message=%q request=%q correlation=%q", e.Message, e.RequestID, e.CorrelationID)
+		}
+	}
 }

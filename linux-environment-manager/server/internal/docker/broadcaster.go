@@ -66,7 +66,10 @@ func (b *Broadcaster) Unsubscribe(deviceID string, ch chan []byte) {
 	for i, c := range clients {
 		if c == ch {
 			b.clients[deviceID] = append(clients[:i], clients[i+1:]...)
-			close(ch)
+			// The channel is intentionally NOT closed. Broadcast copies the
+			// subscriber slice under RLock and sends after releasing it; closing
+			// here would race that send into a panic. Consumers exit on their
+			// request context.
 			break
 		}
 	}

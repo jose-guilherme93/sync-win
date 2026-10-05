@@ -353,7 +353,12 @@ func (b *NotifBroadcaster) Unsubscribe(ownerID string, ch chan NotifEvent) {
 	for i, c := range clients {
 		if c == ch {
 			b.clients[ownerID] = append(clients[:i], clients[i+1:]...)
-			close(ch)
+			// The channel is intentionally NOT closed. Broadcast snapshots the
+			// subscriber list under RLock and sends after releasing it, so a
+			// concurrent Unsubscribe that closed the channel would turn a send
+			// into a panic ("send on closed channel") in callers that have no
+			// recoverer (the status watcher goroutine). Consumers exit on their
+			// request context, not on channel closure.
 			break
 		}
 	}

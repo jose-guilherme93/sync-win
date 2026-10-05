@@ -63,6 +63,7 @@ help: ## Show this help
 	@printf "  $(G)%-16s$(N) %s\n" "docker-build" "Build the production Docker image"
 	@printf "\n$(C)Quality$(N)\n"
 	@printf "  $(G)%-16s$(N) %s\n" "test"       "Run server, agent and web tests"
+	@printf "  $(G)%-16s$(N) %s\n" "test-race"  "Run Go tests with the race detector"
 	@printf "  $(G)%-16s$(N) %s\n" "lint"       "Run Go and web linters"
 	@printf "  $(G)%-16s$(N) %s\n" "fmt"        "Format Go sources"
 	@printf "\n$(C)Utilities$(N)\n"
@@ -186,6 +187,11 @@ test-agent: ## Run agent tests
 .PHONY: test-web
 test-web: ## Run web type-check
 	cd web && npm run check
+
+.PHONY: test-race
+test-race: ## Run Go tests for server and agent with the race detector
+	cd server && go test -race ./...
+	cd agent && go test -race ./...
 
 .PHONY: lint
 lint: ## Run Go and web linters

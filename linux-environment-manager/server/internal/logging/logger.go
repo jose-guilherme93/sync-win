@@ -35,14 +35,12 @@ func DefaultConfig() Config {
 
 // Logger is the core logging engine.
 type Logger struct {
-	config      Config
-	store       *Store
-	dedup       *deduplicator
-	queue       chan *LogEntry
-	wg          sync.WaitGroup
-	stopCh      chan struct{}
-	requestID   string
-	correlation string
+	config Config
+	store  *Store
+	dedup  *deduplicator
+	queue  chan *LogEntry
+	wg     sync.WaitGroup
+	stopCh chan struct{}
 }
 
 // New creates a new Logger. Call Stop() to flush and close.
@@ -83,21 +81,18 @@ func (l *Logger) Stop() {
 	l.flushQueue()
 }
 
-// SetRequestContext sets request_id and correlation_id for the current goroutine.
-// For HTTP middleware, use WithRequestContext instead.
-func (l *Logger) SetRequestContext(requestID, correlationID string) {
-	l.requestID = requestID
-	l.correlation = correlationID
-}
-
-// ClearRequestContext clears the request context.
-func (l *Logger) ClearRequestContext() {
-	l.requestID = ""
-	l.correlation = ""
-}
-
-// Log logs a structured event.
+// Log logs a structured event without request context.
 func (l *Logger) Log(level Level, category Category, event Event, msg string, metadata map[string]any) {
+	l.log(level, category, event, msg, metadata, "", "")
+}
+
+// log writes a structured event carrying explicit request identifiers.
+//
+// The identifiers are passed per call instead of being stored on the shared
+// Logger: one Logger serves every concurrent HTTP request, so mutable
+// per-request fields would race and attribute request ids to the wrong
+// entries (and to unrelated background logs).
+func (l *Logger) log(level Level, category Category, event Event, msg string, metadata map[string]any, requestID, correlationID string) {
 	if level < l.config.Level && level != LevelAudit {
 		return
 	}
@@ -114,8 +109,8 @@ func (l *Logger) Log(level Level, category Category, event Event, msg string, me
 		Category:      category,
 		Event:         event,
 		Message:       msg,
-		RequestID:     l.requestID,
-		CorrelationID: l.correlation,
+		RequestID:     requestID,
+		CorrelationID: correlationID,
 		Metadata:      metadata,
 		Redacted:      redacted,
 	}

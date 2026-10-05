@@ -55,10 +55,6 @@ func HTTPMiddleware(logger *Logger, next http.Handler) http.Handler {
 			remoteAddr:    r.RemoteAddr,
 		}
 
-		// Set context for downstream handlers
-		logger.SetRequestContext(requestID, correlationID)
-		defer logger.ClearRequestContext()
-
 		// Skip noise paths for detailed logging
 		skipDetailed := isNoisePath(r.URL.Path) || r.Method == "OPTIONS"
 
@@ -152,7 +148,7 @@ func (rl *requestLogger) logEvent(status int, duration time.Duration) {
 		category = CatAuth
 	}
 
-	rl.logger.Log(level, category, event, "", meta)
+	rl.logger.log(level, category, event, "", meta, rl.requestID, rl.correlationID)
 }
 
 // responseWriter wraps http.ResponseWriter to capture status code.
