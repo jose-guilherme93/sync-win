@@ -413,6 +413,22 @@ func TestPreferencePathsHonorsExtraAllowlist(t *testing.T) {
 	}
 }
 
+func TestClampDockerLogTail(t *testing.T) {
+	max := lemContract.DockerLogsMaxTail()
+	if max <= 0 {
+		t.Fatal("contract must define a positive docker logs max tail")
+	}
+	if got := clampDockerLogTail(max + 1000); got != max {
+		t.Fatalf("clamp = %d, want %d", got, max)
+	}
+	if got := clampDockerLogTail(50); got != 50 {
+		t.Fatalf("clamp(50) = %d, want 50", got)
+	}
+	if got := clampDockerLogTail(0); got != 200 {
+		t.Fatalf("clamp(0) = %d, want 200", got)
+	}
+}
+
 func TestPreferencePathsHonorsExcludeList(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

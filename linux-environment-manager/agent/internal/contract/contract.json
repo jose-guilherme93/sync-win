@@ -134,6 +134,7 @@
     ],
     "timeout_seconds_default": 900,
     "output_cap_bytes": 65536,
+    "docker_logs_max_tail": 2000,
     "policy_path": "~/.config/lem/policy.json",
     "policy_defaults": {
       "allow_install_app": false,

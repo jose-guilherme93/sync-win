@@ -122,6 +122,7 @@ func TestDurationHelpers(t *testing.T) {
 			SupportedTypes        []string `json:"supported_types"`
 			TimeoutSecondsDefault int      `json:"timeout_seconds_default"`
 			OutputCapBytes        int64    `json:"output_cap_bytes"`
+			DockerLogsMaxTail     int      `json:"docker_logs_max_tail"`
 			PolicyPath            string   `json:"policy_path"`
 			PolicyDefaults        struct {
 				AllowInstallApp       bool `json:"allow_install_app"`

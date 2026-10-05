@@ -74,6 +74,7 @@ type Contract struct {
 		SupportedTypes        []string `json:"supported_types"`
 		TimeoutSecondsDefault int      `json:"timeout_seconds_default"`
 		OutputCapBytes        int64    `json:"output_cap_bytes"`
+		DockerLogsMaxTail     int      `json:"docker_logs_max_tail"`
 		PolicyPath            string   `json:"policy_path"`
 		PolicyDefaults        struct {
 			AllowInstallApp       bool `json:"allow_install_app"`
@@ -114,6 +115,14 @@ func (c *Contract) SaveUploadFileBytes() int64 {
 		limit = c.ServerLimitsMirrored.MaxSaveBytesServer
 	}
 	return limit
+}
+
+// DockerLogsMaxTail caps how many container log lines a logs request may fetch.
+func (c *Contract) DockerLogsMaxTail() int {
+	if c.Commands.DockerLogsMaxTail > 0 {
+		return c.Commands.DockerLogsMaxTail
+	}
+	return 2000
 }
 
 // Load parses the embedded contract. It never fails in practice; a broken

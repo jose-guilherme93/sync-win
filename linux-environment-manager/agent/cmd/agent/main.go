@@ -241,6 +241,7 @@ func executeDockerRequest(req dockerRequest) dockerResult {
 				tail = n
 			}
 		}
+		tail = clampDockerLogTail(tail)
 		logs, err := collectors.DockerContainerLogs(req.Target, tail)
 		if err != nil {
 			return dockerResult{"failed", err.Error()}
@@ -1878,6 +1879,18 @@ func runCommandWithLimits(name string, args []string, timeout time.Duration) (st
 		return output, fmt.Errorf("command timed out after %s", timeout)
 	}
 	return output, err
+}
+
+// clampDockerLogTail bounds how many container log lines a logs request can
+// fetch, so a compromised server cannot make Docker stream a huge tail.
+func clampDockerLogTail(tail int) int {
+	if tail <= 0 {
+		return 200
+	}
+	if max := lemContract.DockerLogsMaxTail(); max > 0 && tail > max {
+		return max
+	}
+	return tail
 }
 
 // exclusionsPath returns the path to the excluded files list.
