@@ -7,30 +7,30 @@ import (
 
 // dedupEntry tracks repeated occurrences of the same event.
 type dedupEntry struct {
-	FirstSeen  time.Time
-	LastSeen   time.Time
-	Count      int
-	Level      Level
-	Category   Category
-	Event      Event
-	DeviceID   string
-	Message    string
+	FirstSeen time.Time
+	LastSeen  time.Time
+	Count     int
+	Level     Level
+	Category  Category
+	Event     Event
+	DeviceID  string
+	Message   string
 }
 
 // deduplicator prevents log storms by tracking repeated events.
 type deduplicator struct {
-	mu       sync.Mutex
-	entries   map[string]*dedupEntry
-	maxAge   time.Duration
-	maxSize  int
-	flushFn  func(*dedupEntry)
-	stopCh   chan struct{}
+	mu      sync.Mutex
+	entries map[string]*dedupEntry
+	maxAge  time.Duration
+	maxSize int
+	flushFn func(*dedupEntry)
+	stopCh  chan struct{}
 }
 
 // newDeduplicator creates a deduplicator that flushes aggregated entries periodically.
 func newDeduplicator(maxAge time.Duration, maxSize int, flushFn func(*dedupEntry)) *deduplicator {
 	d := &deduplicator{
-		entries:  make(map[string]*dedupEntry),
+		entries: make(map[string]*dedupEntry),
 		maxAge:  maxAge,
 		maxSize: maxSize,
 		flushFn: flushFn,

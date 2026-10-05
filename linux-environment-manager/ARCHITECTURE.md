@@ -62,8 +62,7 @@ Key UI components:
 - `SecurityTab.svelte`: Lynis security audit runner, hardening index gauge, warnings/suggestions, history
 - `Sparkline.svelte`: lightweight canvas CPU/memory/network sparklines for device cards (no Chart.js)
 - `SimpleMetrics.svelte`: device summary cards with save badges
-- `SystemMetrics.svelte`: detailed hardware telemetry display
-- `HistoryModal.svelte`: telemetry history with time period selection
+- `SystemMetrics.svelte`: detailed hardware telemetry display and history charts
 - `NotificationsModal.svelte`: notification provider settings and inbox
 - `NotificationToast.svelte`: real-time toast notifications via SSE
 
@@ -152,7 +151,7 @@ The current project intentionally does not include:
 ## Technological decisions
 
 - Go for server and agent: small runtime, good tooling, fast binaries.
-- SQLite for persistence: low operational overhead (pure-Go driver via modernc.org/sqlite, WAL journal mode, embedded schema migrations, automatic import of legacy `lem-store.json` on first start).
+- SQLite for persistence: low operational overhead (pure-Go driver via modernc.org/sqlite, WAL journal mode, schema applied idempotently by `store.initSchema`, automatic import of legacy `lem-store.json` on first start).
 - Docker and Docker Compose for the server runtime.
 - Svelte 5 + TypeScript 6 + Vite 8 + Chart.js 4 for the dashboard: lightweight UI.
 - Small text files and base64-encoded saves as the main persistence model.

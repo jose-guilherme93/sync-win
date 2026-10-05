@@ -3,7 +3,6 @@ package logging
 import (
 	"database/sql"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -11,6 +10,30 @@ import (
 
 	_ "modernc.org/sqlite"
 )
+
+// logsTableDDL is the isolated schema the logging package needs. The full
+// server schema is defined by store.initSchema (the single source of truth).
+const logsTableDDL = `
+CREATE TABLE IF NOT EXISTS logs (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts             TEXT NOT NULL,
+    level          TEXT NOT NULL,
+    category       TEXT NOT NULL,
+    event          TEXT NOT NULL,
+    message        TEXT NOT NULL DEFAULT '',
+    device_id      TEXT NOT NULL DEFAULT '',
+    user_id        TEXT NOT NULL DEFAULT '',
+    request_id     TEXT NOT NULL DEFAULT '',
+    correlation_id TEXT NOT NULL DEFAULT '',
+    duration_ms    INTEGER NOT NULL DEFAULT 0,
+    status         INTEGER NOT NULL DEFAULT 0,
+    metadata       TEXT NOT NULL DEFAULT '{}',
+    redacted       INTEGER NOT NULL DEFAULT 0,
+    owner_id       TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs(ts);
+CREATE INDEX IF NOT EXISTS idx_logs_owner_ts ON logs(owner_id, ts);
+`
 
 func setupTestDB(t *testing.T) *sql.DB {
 	t.Helper()
@@ -21,10 +44,8 @@ func setupTestDB(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 
-	// Apply migration
-	migration, _ := os.ReadFile("../../migrations/0006_logging.sql")
-	if _, err := db.Exec(string(migration)); err != nil {
-		t.Fatal("apply migration:", err)
+	if _, err := db.Exec(logsTableDDL); err != nil {
+		t.Fatal("create logs table:", err)
 	}
 
 	// The log store resolves owner_id from the owning device on insert, so the

@@ -350,7 +350,7 @@ Fields:
 ## Storage
 
 - all state lives in SQLite at `/data/lem.db` (WAL journal mode, foreign keys on, 5 s busy timeout)
-- the schema is embedded in the server binary from `server/migrations/*.sql` (12 migrations) and applied idempotently on startup
+- the schema is defined by `store.initSchema` in the server binary and applied idempotently on startup (there is no separate migrations runner)
 - deployments upgrading from the JSON store are migrated automatically: `lem-store.json` is imported once and renamed to `lem-store.json.migrated`
 - preference file contents are mirrored to `/data/<device>/<category>/<filename>` for easy inspection; SQLite remains the source of truth
 

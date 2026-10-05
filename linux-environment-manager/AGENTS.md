@@ -12,7 +12,7 @@ The project is built around three main components:
 
 1. Server
    - Dockerized
-   - Go + REST API with persistent SQLite state under /data (WAL journal mode, embedded schema migrations)
+   - Go + REST API with persistent SQLite state under /data (WAL journal mode, schema applied idempotently by `store.initSchema`)
    - stores small preference files and sync metadata
    - serves the web dashboard from the same origin (no CORS)
    - proxies Docker management commands to agents via command queue
@@ -46,6 +46,7 @@ The project is built around three main components:
 linux-environment-manager/
 ├── server/
 │   ├── cmd/server/main.go          # Entry point
+│   ├── cmd/agentsign/main.go       # Ed25519 keygen/signing for agent updates
 │   ├── internal/
 │   │   ├── app/app.go              # All HTTP handlers and routes (~2,750 lines)
 │   │   ├── store/                  # SQLite CRUD, aggregation, schema (initSchema)
@@ -53,7 +54,6 @@ linux-environment-manager/
 │   │   ├── notify/                 # Notification providers (Telegram, webhook, inbox)
 │   │   ├── crypto/                 # AES-GCM encryption for provider configs
 │   │   └── docker/                 # Docker command queue and broadcaster
-│   ├── migrations/                 # Historical SQL files (schema is applied by store.initSchema)
 │   └── lem-agent.service           # Systemd unit template
 ├── agent/
 │   ├── cmd/agent/main.go           # Entry point (CLI daemon mode)
@@ -78,7 +78,6 @@ linux-environment-manager/
 │   │   │   ├── Sparkline.svelte       # Lightweight canvas sparklines for device cards
 │   │   │   ├── SystemMetrics.svelte    # Detailed hardware telemetry
 │   │   │   ├── SimpleMetrics.svelte    # Device summary cards
-│   │   │   ├── HistoryModal.svelte     # Telemetry history
 │   │   │   ├── NotificationsModal.svelte  # Notification settings and inbox
 │   │   │   └── NotificationToast.svelte   # Toast notifications
 │   │   └── lib/

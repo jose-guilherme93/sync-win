@@ -9,29 +9,29 @@ import (
 
 // Aggregation thresholds: how many raw points to buffer before aggregating.
 const (
-	rawPer1m = 6   // 6 × 10s = 60s → 1-minute aggregate
-	rawPer5m = 30  // 30 × 1m = 30m → 5-minute aggregate (but we use 1m points)
-	rawPer1h = 12  // 12 × 5m = 60m → 1-hour aggregate
+	rawPer1m = 6  // 6 × 10s = 60s → 1-minute aggregate
+	rawPer5m = 30 // 30 × 1m = 30m → 5-minute aggregate (but we use 1m points)
+	rawPer1h = 12 // 12 × 5m = 60m → 1-hour aggregate
 )
 
 // TelemetryDownsampled is a single aggregated telemetry record.
 type TelemetryDownsampled struct {
-	ID           int64   `json:"id,omitempty"`
-	DeviceID     string  `json:"device_id"`
-	Timestamp    string  `json:"timestamp"`
-	Resolution   string  `json:"resolution"`
-	CPUAvg       float64 `json:"cpu_avg"`
-	CPUMin       float64 `json:"cpu_min"`
-	CPUMax       float64 `json:"cpu_max"`
-	MemAvg       float64 `json:"mem_avg"`
-	MemMin       float64 `json:"mem_min"`
-	MemMax       float64 `json:"mem_max"`
-	NetRXAvg     float64 `json:"net_rx_avg"`
-	NetTXAvg     float64 `json:"net_tx_avg"`
-	TempAvg      float64 `json:"temp_avg"`
-	TempMax      float64 `json:"temp_max"`
-	PowerAvg     float64 `json:"power_avg"`
-	SampleCount  int     `json:"sample_count"`
+	ID          int64   `json:"id,omitempty"`
+	DeviceID    string  `json:"device_id"`
+	Timestamp   string  `json:"timestamp"`
+	Resolution  string  `json:"resolution"`
+	CPUAvg      float64 `json:"cpu_avg"`
+	CPUMin      float64 `json:"cpu_min"`
+	CPUMax      float64 `json:"cpu_max"`
+	MemAvg      float64 `json:"mem_avg"`
+	MemMin      float64 `json:"mem_min"`
+	MemMax      float64 `json:"mem_max"`
+	NetRXAvg    float64 `json:"net_rx_avg"`
+	NetTXAvg    float64 `json:"net_tx_avg"`
+	TempAvg     float64 `json:"temp_avg"`
+	TempMax     float64 `json:"temp_max"`
+	PowerAvg    float64 `json:"power_avg"`
+	SampleCount int     `json:"sample_count"`
 }
 
 // rawSample holds a parsed raw telemetry point for aggregation.
@@ -47,11 +47,11 @@ type rawSample struct {
 
 // DeviceAggState tracks aggregation counters per device.
 type DeviceAggState struct {
-	mu       sync.Mutex
-	rawBuf   []rawSample // buffer for raw → 1m aggregation
-	count1m  int         // count of 1m points buffered → 5m
-	buf5m    []TelemetryDownsampled
-	count5h  int         // count of 5m points buffered → 1h
+	mu      sync.Mutex
+	rawBuf  []rawSample // buffer for raw → 1m aggregation
+	count1m int         // count of 1m points buffered → 5m
+	buf5m   []TelemetryDownsampled
+	count5h int // count of 5m points buffered → 1h
 }
 
 // Aggregator manages per-device aggregation state.
@@ -174,18 +174,28 @@ func aggregateRaw(samples []rawSample) TelemetryDownsampled {
 
 	for _, s := range samples {
 		cpuSum += s.CPU
-		if s.CPU < cpuMin { cpuMin = s.CPU }
-		if s.CPU > cpuMax { cpuMax = s.CPU }
+		if s.CPU < cpuMin {
+			cpuMin = s.CPU
+		}
+		if s.CPU > cpuMax {
+			cpuMax = s.CPU
+		}
 
 		memSum += s.MemPct
-		if s.MemPct < memMin { memMin = s.MemPct }
-		if s.MemPct > memMax { memMax = s.MemPct }
+		if s.MemPct < memMin {
+			memMin = s.MemPct
+		}
+		if s.MemPct > memMax {
+			memMax = s.MemPct
+		}
 
 		netRXSum += s.NetRX
 		netTXSum += s.NetTX
 
 		tempSum += s.Temp
-		if s.Temp > tempMax { tempMax = s.Temp }
+		if s.Temp > tempMax {
+			tempMax = s.Temp
+		}
 
 		powerSum += s.Power
 	}
@@ -227,18 +237,28 @@ func aggregateDownsampled(records []TelemetryDownsampled) TelemetryDownsampled {
 
 	for _, r := range records {
 		cpuAvgSum += r.CPUAvg
-		if r.CPUMin < cpuMin { cpuMin = r.CPUMin }
-		if r.CPUMax > cpuMax { cpuMax = r.CPUMax }
+		if r.CPUMin < cpuMin {
+			cpuMin = r.CPUMin
+		}
+		if r.CPUMax > cpuMax {
+			cpuMax = r.CPUMax
+		}
 
 		memAvgSum += r.MemAvg
-		if r.MemMin < memMin { memMin = r.MemMin }
-		if r.MemMax > memMax { memMax = r.MemMax }
+		if r.MemMin < memMin {
+			memMin = r.MemMin
+		}
+		if r.MemMax > memMax {
+			memMax = r.MemMax
+		}
 
 		netRXSum += r.NetRXAvg
 		netTXSum += r.NetTXAvg
 
 		tempAvgSum += r.TempAvg
-		if r.TempMax > tempMax { tempMax = r.TempMax }
+		if r.TempMax > tempMax {
+			tempMax = r.TempMax
+		}
 
 		powerSum += r.PowerAvg
 		totalSamples += r.SampleCount

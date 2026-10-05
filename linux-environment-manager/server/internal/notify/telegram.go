@@ -149,7 +149,7 @@ func DetectChatID(ctx context.Context, client *http.Client, botToken string) (st
 	}
 
 	var result struct {
-		OK          bool `json:"ok"`
+		OK          bool   `json:"ok"`
 		Description string `json:"description"`
 		Result      []struct {
 			Message *struct {

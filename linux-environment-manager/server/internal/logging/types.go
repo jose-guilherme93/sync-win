@@ -89,19 +89,19 @@ type Event string
 
 // System events
 const (
-	EventAppStarted    Event = "application_started"
-	EventAppShutdown   Event = "application_shutdown"
-	EventAppError      Event = "application_error"
-	EventDBError       Event = "database_error"
-	EventDBMigration   Event = "database_migration"
+	EventAppStarted     Event = "application_started"
+	EventAppShutdown    Event = "application_shutdown"
+	EventAppError       Event = "application_error"
+	EventDBError        Event = "database_error"
+	EventDBMigration    Event = "database_migration"
 	EventServiceRestart Event = "service_restart"
 )
 
 // Auth events
 const (
-	EventAuthSuccess    Event = "authentication_success"
-	EventAuthFailed     Event = "authentication_failed"
-	EventAuthDeny       Event = "authorization_denied"
+	EventAuthSuccess Event = "authentication_success"
+	EventAuthFailed  Event = "authentication_failed"
+	EventAuthDeny    Event = "authorization_denied"
 )
 
 // Device events
@@ -161,20 +161,20 @@ const (
 
 // LogEntry is a single structured log record.
 type LogEntry struct {
-	ID            int64             `json:"id,omitempty"`
-	Timestamp     time.Time         `json:"timestamp"`
-	Level         Level             `json:"level"`
-	Category      Category          `json:"category"`
-	Event         Event             `json:"event"`
-	Message       string            `json:"message,omitempty"`
-	DeviceID      string            `json:"device_id,omitempty"`
-	UserID        string            `json:"user_id,omitempty"`
-	RequestID     string            `json:"request_id,omitempty"`
-	CorrelationID string            `json:"correlation_id,omitempty"`
-	DurationMs    int64             `json:"duration_ms,omitempty"`
-	Status        int               `json:"status,omitempty"`
-	Metadata      map[string]any    `json:"metadata,omitempty"`
-	Redacted      bool              `json:"redacted,omitempty"`
+	ID            int64          `json:"id,omitempty"`
+	Timestamp     time.Time      `json:"timestamp"`
+	Level         Level          `json:"level"`
+	Category      Category       `json:"category"`
+	Event         Event          `json:"event"`
+	Message       string         `json:"message,omitempty"`
+	DeviceID      string         `json:"device_id,omitempty"`
+	UserID        string         `json:"user_id,omitempty"`
+	RequestID     string         `json:"request_id,omitempty"`
+	CorrelationID string         `json:"correlation_id,omitempty"`
+	DurationMs    int64          `json:"duration_ms,omitempty"`
+	Status        int            `json:"status,omitempty"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
+	Redacted      bool           `json:"redacted,omitempty"`
 }
 
 // HTTPAccessEntry is an aggregated HTTP access record.
@@ -192,11 +192,11 @@ type HTTPAccessEntry struct {
 
 // MetricsEntry is an application metric.
 type MetricsEntry struct {
-	ID     int64              `json:"id"`
-	Name   string             `json:"name"`
-	Value  float64            `json:"value"`
-	Timestamp time.Time       `json:"timestamp"`
-	Labels map[string]string  `json:"labels,omitempty"`
+	ID        int64             `json:"id"`
+	Name      string            `json:"name"`
+	Value     float64           `json:"value"`
+	Timestamp time.Time         `json:"timestamp"`
+	Labels    map[string]string `json:"labels,omitempty"`
 }
 
 // shouldPersist determines if a log entry should be written to SQLite.

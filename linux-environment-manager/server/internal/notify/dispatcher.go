@@ -33,15 +33,14 @@ type Dispatcher struct {
 	lastSent map[string]time.Time // throttle key: "type\x00deviceID"
 
 	// status watcher state
-	watchMu   sync.Mutex
-	known     map[string]string // deviceID -> last observed status
-	armed     bool              // false until the first sweep completed
-	onFire    func(eventID int64)
+	watchMu sync.Mutex
+	known   map[string]string // deviceID -> last observed status
+	armed   bool              // false until the first sweep completed
+	onFire  func(eventID int64)
 
 	// SSE broadcaster for real-time notification push to browsers
 	notifBroadcaster *NotifBroadcaster
 }
-
 
 // NewDispatcher builds a dispatcher. A nil logger disables failure logging.
 func NewDispatcher(st *store.Store, log *logging.Logger) *Dispatcher {
@@ -82,12 +81,12 @@ func (d *Dispatcher) Emit(ownerID string, e Event) {
 	}
 	e.Message = FormatMessage(e)
 	if d.throttled(e) {
-	if d.log != nil {
-		d.log.Info(logging.CatDevice, logging.EventNotifyThrottle,
-			"notify emit: throttled",
-			map[string]any{"notify_type": string(e.Type), "device_id": e.DeviceID, "owner_id": ownerID},
-		)
-	}
+		if d.log != nil {
+			d.log.Info(logging.CatDevice, logging.EventNotifyThrottle,
+				"notify emit: throttled",
+				map[string]any{"notify_type": string(e.Type), "device_id": e.DeviceID, "owner_id": ownerID},
+			)
+		}
 		return
 	}
 	id, err := d.store.InsertNotificationEvent(ownerID, string(e.Type), e.DeviceID, e.Hostname, e.Message)
@@ -109,12 +108,12 @@ func (d *Dispatcher) Emit(ownerID string, e Event) {
 	}
 	// Broadcast to SSE subscribers for real-time push
 	d.notifBroadcaster.Broadcast(ownerID, NotifEvent{
-		ID:         id,
-		Type:       string(e.Type),
-		DeviceID:   e.DeviceID,
-		Hostname:   e.Hostname,
-		Message:    e.Message,
-		CreatedAt:  e.OccurredAt,
+		ID:        id,
+		Type:      string(e.Type),
+		DeviceID:  e.DeviceID,
+		Hostname:  e.Hostname,
+		Message:   e.Message,
+		CreatedAt: e.OccurredAt,
 	})
 	go d.deliver(ownerID, e)
 }

@@ -244,7 +244,7 @@ A funcionalidade P1 está concluída. A próxima etapa é uma nova priorização
 - [x] Hardware fingerprint collection for device identification
 - [x] Real-time telemetry sparklines (Sparkline.svelte, canvas, no Chart.js)
 - [x] Detailed system metrics view (SystemMetrics.svelte)
-- [x] Telemetry history with time period selection (HistoryModal.svelte)
+- [x] Telemetry history with time period selection (dashboard charts)
 - [x] Telemetry data caching with 60s TTL
 - [x] Downsampled aggregation (1m/5m/1h) for long-term history
 - [x] Retention settings per owner
