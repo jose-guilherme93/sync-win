@@ -1,75 +1,27 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, onDestroy, tick } from 'svelte'
   import DeviceModal from './components/DeviceModal.svelte'
-  import SimpleMetrics from './components/SimpleMetrics.svelte'
-  import Sparkline from './components/Sparkline.svelte'
   import NotificationsModal from './components/NotificationsModal.svelte'
   import NotificationToast from './components/NotificationToast.svelte'
   import { addTelemetryPoint, resetTelemetry } from './lib/telemetry-store'
   import { apiFetch, apiURL, serverBase } from './lib/api'
+  import { formatRelative, formatAbsolute } from './lib/format'
+  import Sidebar from './components/shell/Sidebar.svelte'
+  import Topbar from './components/shell/Topbar.svelte'
+  import Home from './components/screens/Home.svelte'
+  import DeviceOverview from './components/screens/DeviceOverview.svelte'
+  import Alerts from './components/screens/Alerts.svelte'
+  import Reports from './components/screens/Reports.svelte'
+  import Storage from './components/screens/Storage.svelte'
+  import Processes from './components/screens/Processes.svelte'
+  import Packages from './components/screens/Packages.svelte'
+  import Services from './components/screens/Services.svelte'
+  import RemoteActions from './components/screens/RemoteActions.svelte'
+  import DeviceSettings from './components/screens/DeviceSettings.svelte'
+  import { nav, type Section } from './lib/router'
+  import type { AppInfo, Device, HardwareStats } from './lib/types'
+  import { generateInsights } from './lib/insights'
 
-  type Device = {
-    id: string
-    hostname: string
-    user_id: string
-    status: string
-    last_seen_at: string
-    last_sync_at: string
-    created_at?: string
-    hardware?: HardwareStats
-    apps?: AppInfo[]
-    app_count: number
-    preference_count: number
-    saves_count: number
-    saves_size_bytes: number
-    saves_last_synced_at?: string
-    last_error?: string
-    last_error_at?: string
-  }
-
-  type AppInfo = { name: string; version: string; source: string; path?: string }
-
-  type HardwareStats = {
-    cpu_usage_percent: number
-    memory_used_bytes: number
-    memory_total_bytes: number
-    disk_read_bytes: number
-    disk_write_bytes: number
-    disk_read_rate: number
-    disk_write_rate: number
-    uptime_seconds: number
-    load_average: string
-    cpu_model: string
-    kernel_version: string
-    operating_system: string
-    power_watts: number
-    architecture?: string
-    desktop_environment?: string
-    locale?: string
-    timezone?: string
-    agent_version?: string
-    collected_at: string
-    cpu_core_usage?: number[]
-    swap_used_bytes?: number
-    swap_total_bytes?: number
-    memory_buffers_bytes?: number
-    memory_cached_bytes?: number
-    disk_partitions?: { mount: string; device: string; total_bytes: number; used_bytes: number; free_bytes: number; used_percent: number }[]
-    network_ifaces?: { name: string; rx_bytes: number; tx_bytes: number; rx_rate?: number; tx_rate?: number; rx_packets: number; tx_packets: number; rx_errors: number; tx_errors: number }[]
-    net_rx_rate?: number
-    net_tx_rate?: number
-    cpu_temperature?: number
-    gpu_temperature_celsius?: number
-    battery_percent?: number
-    battery_status?: string
-    top_cpu_processes?: { pid: number; name: string; cpu_percent: number; mem_rss_bytes: number }[]
-    top_mem_processes?: { pid: number; name: string; cpu_percent: number; mem_rss_bytes: number }[]
-    agent_cpu_usage?: number
-    agent_memory_bytes?: number
-    docker_available?: boolean
-    docker_containers?: any[]
-    docker_info?: any
-  }
 
   type PreferenceFile = {
     id: string
@@ -86,7 +38,6 @@
     status: string
   }
 
-  type StatusFilter = 'all' | 'online' | 'degraded' | 'errors'
   type LiveState = 'live' | 'paused' | 'reconnecting'
 
   // The address embedded in the install command. It defaults to how the
@@ -95,7 +46,9 @@
   // locally on the Docker host.
   const localAccess = /^(localhost|127\.0\.0\.1|::1|\[::1\])$/.test(window.location.hostname)
   let installServer = serverBase
-  const POLL_MS = 10000
+  // Poll interval is user-selectable in the topbar, so it is mutable rather
+  // than a constant. The backoff ceiling still applies when the server errors.
+  let POLL_MS = 10000
   const MAX_POLL_MS = 60000
   const PANEL_REFRESH_MS = 60000
   // The device list is polled every 10s but written to localStorage far less
@@ -152,14 +105,59 @@
   let selectedDeviceId = ''
   let activeTab: Record<string, TabName> = {}
   let installOpen = localStorage.getItem('sync-win-install-open') === '1'
-  let deviceQuery = ''
-  let statusFilter: StatusFilter = 'all'
   let appQuery = ''
 
-  type MetricsMode = 'simple' | 'complex'
-  let metricsMode: MetricsMode = (localStorage.getItem('sync-win-metrics-mode') as MetricsMode) || 'simple'
   let deviceModalOpen = false
   let deviceDetails: Record<string, Device> = {}
+
+  // Shell navigation. The sidebar writes into this store and the main area
+  // reacts; nothing is rendered as a popup any more.
+  let navState = { section: 'home' as Section, deviceId: null as string | null }
+  const unsubNav = nav.subscribe((value) => {
+    navState = value
+    if (value.deviceId && value.deviceId !== selectedDeviceId) {
+      selectedDeviceId = value.deviceId
+      void loadDeviceDetail(value.deviceId)
+      selectPanels(value.deviceId)
+    }
+  })
+  onDestroy(unsubNav)
+
+  let sidebarCollapsed = localStorage.getItem('sync-win-sidebar-collapsed') === '1'
+  let mobileNavOpen = false
+
+  function toggleSidebar() {
+    sidebarCollapsed = !sidebarCollapsed
+    localStorage.setItem('sync-win-sidebar-collapsed', sidebarCollapsed ? '1' : '0')
+  }
+
+  function navigateTo(section: Section) {
+    nav.setSection(section)
+    mobileNavOpen = false
+  }
+
+  // Device-scoped sidebar sections map onto the tabs the device page already
+  // renders, so the two navigations cannot disagree.
+  $: deviceTabForSection = ({
+    overview: 'system',
+    cpu: 'system',
+    memory: 'system',
+    storage: 'system',
+    network: 'system',
+    sensors: 'system',
+    containers: 'docker',
+    packages: 'apps',
+    logs: 'logs',
+    security: 'security'
+  } as Record<string, string>)[navState.section] || null
+
+  $: isDeviceSection = Boolean(navState.deviceId) && navState.section !== 'home' && navState.section !== 'devices' && navState.section !== 'alerts' && navState.section !== 'findings' && navState.section !== 'reports'
+
+  // Hardware sections render the redesigned overview cards. The remaining
+  // device sections still use DeviceModal's tabs as an interim measure until
+  // their dedicated screens exist.
+  const HARDWARE_SECTIONS = new Set(['overview', 'cpu', 'memory', 'storage', 'network', 'sensors'])
+  $: isHardwareSection = HARDWARE_SECTIONS.has(navState.section)
   // The modal prefers the full detail payload (logs, processes, Docker state)
   // and falls back to the lightweight list entry while it loads.
   $: modalDevice = selectedDeviceId
@@ -230,46 +228,6 @@
   $: if (installOpen && signedIn && !enrollmentToken && !enrollmentLoading && !enrollmentAttempted) {
     enrollmentAttempted = true
     requestEnrollmentToken()
-  }
-
-  $: kpis = devices.reduce(
-    (acc, d) => {
-      acc.total += 1
-      const status = computedStatus(d)
-      if (status === 'online') acc.online += 1
-      if (status === 'offline' || status === 'stale') acc.degraded += 1
-      if (status === 'error' || d.last_error) acc.errors += 1
-      acc.files += d.preference_count || 0
-      return acc
-    },
-    { total: 0, online: 0, degraded: 0, errors: 0, files: 0 }
-  )
-
-  $: query = deviceQuery.trim().toLowerCase()
-  $: filteredDevices = [...devices]
-    .filter((d) => {
-      const matchQuery = !query || `${d.hostname} ${d.user_id} ${d.id}`.toLowerCase().includes(query)
-      const status = computedStatus(d)
-      const matchStatus =
-        statusFilter === 'all' ||
-        (statusFilter === 'online' && status === 'online') ||
-        (statusFilter === 'degraded' && (status === 'offline' || status === 'stale')) ||
-        (statusFilter === 'errors' && (status === 'error' || !!d.last_error))
-      return matchQuery && matchStatus
-    })
-    .sort((a, b) => severity(a) - severity(b) || a.hostname.localeCompare(b.hostname))
-
-  function severity(d: Device) {
-    const status = computedStatus(d)
-    if (status === 'error' || d.last_error) return 0
-    if (status === 'offline') return 1
-    if (status === 'stale') return 2
-    if (status === 'online') return 4
-    return 3
-  }
-
-  function setStatusFilter(next: StatusFilter) {
-    statusFilter = statusFilter === next ? 'all' : next
   }
 
   // Public self-registration is disabled by default on the server. The auth
@@ -731,12 +689,12 @@
     localStorage.setItem('sync-win-notif-sound', s)
   }
 
+  // Selecting a device navigates the shell to its overview. No popup: the same
+  // gesture used to open a modal, but the panel now owns the whole main area.
   function selectDevice(deviceId: string) {
     if (!deviceId) return
-    selectedDeviceId = deviceId
-    deviceModalOpen = true
-    void loadDeviceDetail(deviceId)
-    selectPanels(deviceId)
+    nav.selectDevice(deviceId)
+    mobileNavOpen = false
   }
 
   async function loadDeviceDetail(deviceId: string) {
@@ -757,9 +715,44 @@
     selectedDeviceId = ''
   }
 
-  function setMetricsMode(mode: MetricsMode) {
-    metricsMode = mode
-    localStorage.setItem('sync-win-metrics-mode', mode)
+  // Topbar refresh selector. The poller reschedules itself each cycle, so
+  // setting the interval and kicking it once makes the change take effect
+  // immediately instead of after the current (possibly 60s) wait.
+  function setRefreshMs(ms: number) {
+    POLL_MS = ms
+    if (pollTimer) window.clearTimeout(pollTimer)
+    schedulePoll(ms)
+  }
+
+  // Global search (Ctrl+K). Until a dedicated command palette exists, this
+  // focuses the fleet search field so the shortcut still does something useful.
+  function openGlobalSearch() {
+    nav.setSection('home')
+    tick().then(() => {
+      const el = document.querySelector<HTMLInputElement>('.panel-inner .search-input, .content .search-input')
+      el?.focus()
+    })
+  }
+
+  const SECTION_TITLES: Record<string, string> = {
+    home: 'Fleet',
+    devices: 'Devices',
+    alerts: 'Alerts',
+    findings: 'Findings',
+    reports: 'Reports'
+  }
+
+  function sectionTitleFor(section: Section): string {
+    return SECTION_TITLES[section] || 'Fleet'
+  }
+
+  // A device can disappear while it is selected (deleted, or filtered out).
+  // Drop the selection so the shell falls back to the fleet instead of
+  // rendering a page for a device that no longer exists.
+  function handleDeviceRemoved(deviceId: string) {
+    devices = devices.filter((d) => d.id !== deviceId)
+    delete filesByDevice[deviceId]
+    if (navState.deviceId === deviceId) nav.clearDevice()
   }
 
   function getTab(deviceId: string): TabName {
@@ -913,6 +906,21 @@
       await loadFiles(deviceId)
     } catch (err) {
       notify(err instanceof Error ? err.message : 'Could not exclude file', 'error')
+    }
+  }
+
+  // Removal from the Settings screen. The confirmation already happened in that
+  // screen's dialog (with typed hostname), so this skips the extra
+  // window.confirm that deleteDevice() shows.
+  async function removeDeviceConfirmed(device: Device) {
+    try {
+      const response = await apiFetch(apiURL(`/api/devices/${device.id}`), { method: 'DELETE', headers: ownerHeaders })
+      if (!response.ok) throw new Error(`request failed: ${response.status}`)
+      handleDeviceRemoved(device.id)
+      nav.clearDevice()
+      notify('Device removed.')
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Could not remove device', 'error')
     }
   }
 
@@ -1343,12 +1351,6 @@
     expandedGroups = { ...expandedGroups, [key]: !expandedGroups[key] }
   }
 
-  function statusColor(status: string) {
-    if (status === 'online') return 'green'
-    if (status === 'offline' || status === 'stale') return 'orange'
-    if (status === 'error') return 'red'
-    return 'gray'
-  }
 
   // Client-side status fallback: compute status from last_seen_at
   // This ensures devices show as offline even if the server status is stale
@@ -1361,23 +1363,10 @@
     return 'online'
   }
 
-  function timeAgo(value: string | number | null | undefined, nowTs: number) {
-    if (!value) return 'never'
-    const t = typeof value === 'number' ? value : Date.parse(value)
-    if (!Number.isFinite(t)) return 'never'
-    const diff = Math.max(0, Math.floor((nowTs - t) / 1000))
-    if (diff < 10) return 'just now'
-    if (diff < 60) return `${diff}s ago`
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
-    return `${Math.floor(diff / 86400)}d ago`
-  }
-
-  function formatTime(value: string | undefined | null) {
-    if (!value) return ''
-    const parsed = new Date(value)
-    return Number.isNaN(parsed.getTime()) ? '' : parsed.toLocaleString()
-  }
+  // Both delegate to lib/format so the Go zero time collapses to "never"
+  // instead of reporting an age of ~739893 days.
+  const timeAgo = formatRelative
+  const formatTime = formatAbsolute
 
   function formatBytes(value: number) {
     if (!Number.isFinite(value) || value <= 0) return '0 B'
@@ -1413,56 +1402,6 @@
     return ''
   }
 
-  function generateInsights(h?: HardwareStats) {
-    if (!h) return []
-    const insights: { text: string; type: 'info' | 'warn' | 'crit' }[] = []
-    const cpu = h.cpu_usage_percent || 0
-    const mem = memoryPercent(h)
-    const agentCpu = h.agent_cpu_usage || 0
-
-    if (cpu > 90) insights.push({ text: `CPU ${cpu.toFixed(0)}%`, type: 'crit' })
-    else if (cpu > 70) insights.push({ text: `CPU ${cpu.toFixed(0)}%`, type: 'warn' })
-
-    if (mem > 90) insights.push({ text: `RAM ${mem.toFixed(0)}%`, type: 'crit' })
-    else if (mem > 75) insights.push({ text: `RAM ${mem.toFixed(0)}%`, type: 'warn' })
-
-    if (h.cpu_temperature && h.cpu_temperature > 85) insights.push({ text: `Temp ${h.cpu_temperature.toFixed(0)}C`, type: 'crit' })
-    else if (h.cpu_temperature && h.cpu_temperature > 70) insights.push({ text: `Temp ${h.cpu_temperature.toFixed(0)}C`, type: 'warn' })
-
-    if (h.battery_percent != null && h.battery_percent > 0 && h.battery_percent < 15 && h.battery_status !== 'charging') {
-      insights.push({ text: `Battery ${h.battery_percent.toFixed(0)}%`, type: 'crit' })
-    }
-
-    if (h.disk_partitions) {
-      for (const p of h.disk_partitions) {
-        if (p.used_percent > 90) insights.push({ text: `${p.mount} ${p.used_percent.toFixed(0)}% full`, type: 'crit' })
-        else if (p.used_percent > 80) insights.push({ text: `${p.mount} ${p.used_percent.toFixed(0)}%`, type: 'warn' })
-      }
-    }
-
-    if (h.network_ifaces) {
-      for (const iface of h.network_ifaces) {
-        if (iface.rx_errors > 0 || iface.tx_errors > 0) {
-          insights.push({ text: `Net err ${iface.name}`, type: 'warn' })
-        }
-      }
-    }
-
-    if (agentCpu > 5) insights.push({ text: `Agent ${agentCpu.toFixed(1)}%`, type: 'warn' })
-
-    if (h.kernel_version) {
-      const parts = h.kernel_version.split('.')
-      if (parts.length >= 2) {
-        const major = parseInt(parts[0])
-        const minor = parseInt(parts[1])
-        if (major < 5 || (major === 5 && minor < 15)) {
-          insights.push({ text: `Kernel ${h.kernel_version}`, type: 'warn' })
-        }
-      }
-    }
-
-    return insights
-  }
 
   function categoryChip(category: string) {
     let hash = 0
@@ -1504,7 +1443,7 @@
 
 <svelte:window on:keydown={handleWindowKeydown} />
 
-<div class="page">
+<div class="page" class:full={signedIn}>
   {#if !authReady}
     <div class="auth-gate">
       <div class="auth-card">
@@ -1537,27 +1476,46 @@
       </div>
     </div>
   {:else}
-  <header class="header">
-    <div class="header-left">
-      <span class="logo">SyncWin</span>
-      <span class="header-subtitle">SyncWin</span>
+  <div class="app-shell">
+    {#if mobileNavOpen}
+      <div class="nav-scrim" role="presentation" on:click={() => (mobileNavOpen = false)}></div>
+    {/if}
+    <div class="sidebar-wrap" class:open={mobileNavOpen}>
+      <Sidebar
+        {devices}
+        selectedId={navState.deviceId}
+        activeSection={navState.section}
+        collapsed={sidebarCollapsed}
+        onSelectDevice={selectDevice}
+        onNavigate={navigateTo}
+        onAddDevice={openAddDevice}
+        onToggleCollapse={toggleSidebar}
+      />
     </div>
-    <div class="header-right">
-      <div class="live-pill {liveState}" title={liveState === 'paused' ? 'Updates pause while this tab is hidden' : `Polling every ${POLL_MS / 1000}s`} role="status">
-        <i class="dot"></i>
-        <span>{liveState === 'live' ? 'Live' : liveState === 'paused' ? 'Paused' : 'Reconnecting'}</span>
-        <small>{lastUpdated ? timeAgo(lastUpdated, now) : '—'}</small>
-      </div>
-      <button class="ghost" on:click={() => loadDevices(true)} disabled={devicesLoading}>Refresh</button>
-      <div class="bell-wrapper">
-        <button class="bell-btn" on:click|stopPropagation={toggleBell} title="Notifications">
-          🔔
-          {#if notifEvents.length > 0}<span class="bell-badge">{notifEvents.length}</span>{/if}
-        </button>
-        {#if bellOpen}
-          <!-- svelte-ignore a11y-click-events-have-key-events -->
-          <!-- svelte-ignore a11y-no-static-element-interactions -->
-          <div class="bell-dropdown" on:click|stopPropagation>
+    <div class="main-col">
+      <Topbar
+        device={isDeviceSection ? modalDevice : null}
+        sectionTitle={sectionTitleFor(navState.section)}
+        refreshMs={POLL_MS}
+        onRefreshChange={setRefreshMs}
+        onManualRefresh={() => loadDevices(true)}
+        onOpenSearch={openGlobalSearch}
+        onOpenNotifications={toggleBell}
+        onOpenUserMenu={toggleUserMenu}
+        accountInitial={accountEmail.charAt(0).toUpperCase()}
+        unreadCount={notifEvents.length}
+        onOpenMobileNav={() => (mobileNavOpen = true)}
+      />
+
+      <!-- Popovers for the topbar buttons. They live here rather than inside
+           Topbar because they need App-level state (notifications, profile
+           forms). The wrapper classes are what handleClickOutside watches, so
+           clicking away closes them. -->
+      {#if bellOpen}
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="shell-popover bell-wrapper" role="presentation" on:click|stopPropagation on:keydown|stopPropagation>
+          <div class="bell-dropdown">
             <div class="bell-header">
               <span class="bell-title">Notifications</span>
               {#if notifEvents.length > 0}
@@ -1587,16 +1545,14 @@
               </div>
             {/if}
           </div>
-        {/if}
-      </div>
-      <div class="user-menu-wrapper">
-        <button class="avatar-btn" on:click|stopPropagation={toggleUserMenu} title={accountEmail}>
-          {accountEmail.charAt(0).toUpperCase()}
-        </button>
-        {#if userMenuOpen}
-          <!-- svelte-ignore a11y-click-events-have-key-events -->
-          <!-- svelte-ignore a11y-no-static-element-interactions -->
-          <div class="user-dropdown" on:click|stopPropagation>
+        </div>
+      {/if}
+
+      {#if userMenuOpen}
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="shell-popover user-menu-wrapper" role="presentation" on:click|stopPropagation on:keydown|stopPropagation>
+          <div class="user-dropdown">
             <div class="dropdown-header">
               <div class="avatar-large">{accountEmail.charAt(0).toUpperCase()}</div>
               <div>
@@ -1646,141 +1602,53 @@
               Sign out
             </button>
           </div>
-        {/if}
-      </div>
-    </div>
-  </header>
-
-  {#if toastMessage}
-    <div class="toast {toastKind}" role="status">{toastMessage}</div>
-  {/if}
-
-  <section class="kpis" aria-label="Fleet summary">
-    <button class="kpi" class:selected={statusFilter === 'all'} aria-pressed={statusFilter === 'all'} on:click={() => setStatusFilter('all')}>
-      <strong>{kpis.total}</strong><span>Devices</span>
-    </button>
-    <button class="kpi k-online" class:selected={statusFilter === 'online'} aria-pressed={statusFilter === 'online'} on:click={() => setStatusFilter('online')}>
-      <strong>{kpis.online}</strong><span>Online</span>
-    </button>
-    <button class="kpi k-degraded" class:selected={statusFilter === 'degraded'} aria-pressed={statusFilter === 'degraded'} on:click={() => setStatusFilter('degraded')}>
-      <strong>{kpis.degraded}</strong><span>Degraded</span>
-    </button>
-    <button class="kpi k-errors" class:selected={statusFilter === 'errors'} aria-pressed={statusFilter === 'errors'} on:click={() => setStatusFilter('errors')}>
-      <strong>{kpis.errors}</strong><span>Errors</span>
-    </button>
-    <div class="kpi static">
-      <strong>{kpis.files}</strong><span>Synced files</span>
-    </div>
-  </section>
-
-  <div class="toolbar">
-    <input class="search-input" type="search" bind:value={deviceQuery} placeholder="Search by hostname, user or ID" aria-label="Search devices" />
-    <button class="add-device-btn" on:click={openAddDevice}>+ Add Linux Device</button>
-  </div>
-
-  {#if loading}
-    <div class="grid" aria-hidden="true">
-      {#each [0, 1, 2] as i (i)}
-        <article class="card skeleton">
-          <div class="sk-line w40"></div>
-          <div class="sk-line w70"></div>
-          <div class="sk-row">
-            <div class="sk-line w90"></div>
-            <div class="sk-line w90"></div>
-          </div>
-          <div class="sk-line w70"></div>
-        </article>
-      {/each}
-    </div>
-  {:else if error}
-    <div class="error-banner" role="alert">
-      <span>{error}</span>
-      <button class="inline" on:click={() => loadDevices(true)}>Try again</button>
-    </div>
-  {:else if devices.length === 0}
-    <div class="empty">
-      <strong>No devices yet</strong>
-      <p>Run the install command above on a Linux machine. The device appears here within seconds — while it is still installing, before the agent even connects. The installer prints SUCCESS or troubleshooting steps when it finishes.</p>
-      <p>Devices are tied to your account. If you ran the command from another machine but opened this dashboard in a different browser (or incognito), sign in to the same account to see it.</p>
-    </div>
-  {:else if filteredDevices.length === 0}
-    <div class="empty">
-      <strong>No devices match</strong>
-      <p>Adjust the search or clear the status filter.</p>
-      <button class="inline" on:click={() => { deviceQuery = ''; statusFilter = 'all' }}>Clear filters</button>
-    </div>
-  {:else}
-    <div class="device-list grid">
-      {#each filteredDevices as device (device.id)}
-        {@const cpu = device.hardware?.cpu_usage_percent || 0}
-        {@const memPct = memoryPercent(device.hardware)}
-        {@const insights = generateInsights(device.hardware)}
-        {@const deviceStatus = computedStatus(device)}
-        <!-- svelte-ignore a11y-click-events-have-key-events -->
-        <!-- svelte-ignore a11y-no-static-element-interactions -->
-        <article class="card clickable" on:click={() => selectDevice(device.id)}>
-          <div class="card-left">
-            <div class="card-top">
-              <h2>{device.hostname}</h2>
-              <span class={`badge ${statusColor(deviceStatus)}`} title={STATUS_HINTS[deviceStatus] || ''}>
-                <i class="dot"></i>{deviceStatus}
-              </span>
-            </div>
-            <p class="card-user">{device.user_id}</p>
-
-            {#if metricsMode === 'complex'}
-              <Sparkline {device} />
-              <div class="device-summary compact">
-                <div class="stat"><strong>{device.preference_count || 0}</strong><span>files</span></div>
-                <div class="stat"><strong>{device.app_count || 0}</strong><span>pkgs</span></div>
-                {#if (device.saves_count || 0) > 0}
-                  <div class="stat saves-badge" title="Game saves"><strong>{device.saves_count}</strong><span>saves</span></div>
-                {/if}
-              </div>
-            {:else}
-              <SimpleMetrics {device} />
-              <div class="device-summary">
-                <div class="stat"><strong>{device.preference_count || 0}</strong><span>files</span></div>
-                <div class="stat"><strong>{device.app_count || 0}</strong><span>pkgs</span></div>
-                {#if (device.saves_count || 0) > 0}
-                  <div class="stat saves-badge" title="Game saves"><strong>{device.saves_count}</strong><span>saves</span></div>
-                {/if}
-              </div>
-            {/if}
-
-            {#if device.last_error}
-              <div class="health-alert" title={device.last_error}>
-                <strong>Sync problem · {timeAgo(device.last_error_at, now)}</strong>
-                <span>{device.last_error}</span>
-              </div>
-            {/if}
-          </div>
-          <div class="card-divider"></div>
-          {#if insights.length > 0}
-            <div class="card-insights">
-              <span class="insights-label">Insights</span>
-              {#each insights.slice(0, 6) as insight}
-                <span class="insight-chip insight-{insight.type}">{insight.text}</span>
-              {/each}
-              {#if insights.length > 6}
-                <span class="insight-more">+{insights.length - 6}</span>
-              {/if}
-            </div>
+        </div>
+      {/if}
+      <main class="content">
+        <div class="panel-inner">
+          {#if toastMessage}
+            <div class="toast {toastKind}" role="status">{toastMessage}</div>
           {/if}
-          <div class="card-open-hint">
-            <span>Open details</span>
-          </div>
-        </article>
-      {/each}
+
+          {#if isDeviceSection && modalDevice}
+            {#if navState.section === 'storage'}
+              <Storage device={modalDevice} />
+            {:else if navState.section === 'processes'}
+              <Processes device={modalDevice} />
+            {:else if navState.section === 'packages'}
+              <Packages apps={deviceDetails[modalDevice.id]?.apps || modalDevice.apps || []} />
+            {:else if navState.section === 'services'}
+              <Services />
+            {:else if navState.section === 'remote'}
+              <RemoteActions device={modalDevice} />
+            {:else if navState.section === 'settings'}
+              <DeviceSettings device={modalDevice} onRemove={removeDeviceConfirmed} />
+            {:else if isHardwareSection}
+              <DeviceOverview device={modalDevice} authHeaders={ownerHeaders} />
+            {:else}
+              <DeviceModal
+                device={modalDevice}
+                open={true}
+                variant="page"
+                activeTabName={deviceTabForSection}
+                authHeaders={ownerHeaders}
+                initialFiles={filesByDevice[modalDevice.id] || []}
+                on:close={() => nav.clearDevice()}
+                on:removed={() => handleDeviceRemoved(modalDevice.id)}
+                on:restore={(event) => restoreGameSaves(event.detail.deviceId, event.detail.prefixId, event.detail.gameName)}
+              />
+            {/if}
+          {:else if navState.section === 'alerts' || navState.section === 'findings'}
+            <Alerts {devices} onSelect={selectDevice} />
+          {:else if navState.section === 'reports'}
+            <Reports {devices} onSelect={selectDevice} />
+          {:else}
+            <Home {devices} onSelect={selectDevice} onAdd={openAddDevice} />
+          {/if}
+        </div>
+      </main>
     </div>
-    <div class="metrics-toggle-bar">
-      <span class="metrics-label">Metrics view:</span>
-      <div class="metrics-toggle">
-        <button class:active={metricsMode === 'simple'} on:click={() => setMetricsMode('simple')}>Simple</button>
-        <button class:active={metricsMode === 'complex'} on:click={() => setMetricsMode('complex')}>Complex</button>
-      </div>
-    </div>
-  {/if}
+  </div>
   {/if}
 </div>
 
@@ -1919,17 +1787,6 @@
       </div>
     </div>
   </div>
-{/if}
-
-{#if deviceModalOpen && modalDevice}
-  <DeviceModal
-    device={modalDevice}
-    open={deviceModalOpen}
-    on:close={closeDeviceModal}
-    on:restore={(event) => restoreGameSaves(event.detail.deviceId, event.detail.prefixId, event.detail.gameName)}
-    authHeaders={ownerHeaders}
-    initialFiles={filesByDevice[modalDevice.id] || []}
-  />
 {/if}
 
 {#if addDeviceOpen}

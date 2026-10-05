@@ -9,6 +9,9 @@ entries:
   - id: context/p1-functionality
     path: context/p1-functionality.md
     type: context
+  - id: context/dashboard-redesign
+    path: context/dashboard-redesign.md
+    type: context
   - id: decisions/security-hardening
     path: decisions/security-hardening.md
     type: decision
@@ -20,4 +23,7 @@ entries:
     type: session
   - id: sessions/260925-p1-functionality
     path: sessions/260925-p1-functionality.md
+    type: session
+  - id: sessions/261005-dashboard-redesign
+    path: sessions/261005-dashboard-redesign.md
     type: session

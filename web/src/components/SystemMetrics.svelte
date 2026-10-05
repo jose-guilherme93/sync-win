@@ -13,62 +13,17 @@
   } from 'chart.js'
   import { setHistoryFromAPI, addTelemetryPoint, deviceHistoryStore, type ChartPoint } from '../lib/telemetry-store'
   import { apiFetch, apiURL, serverBase } from '../lib/api'
+  import type { Device as SharedDevice, HardwareStats as SharedHardwareStats } from '../lib/types'
 
   Chart.register(LineController, LineElement, PointElement, LinearScale, CategoryScale, Filler, Tooltip, Legend)
 
-  type DiskPartition = { mount: string; device: string; total_bytes: number; used_bytes: number; free_bytes: number; used_percent: number }
-  type NetworkIFace = { name: string; rx_bytes: number; tx_bytes: number; rx_rate?: number; tx_rate?: number; rx_packets: number; tx_packets: number; rx_errors: number; tx_errors: number }
-  type ProcessInfo = { pid: number; name: string; cpu_percent: number; mem_rss_bytes: number }
   type DeviceLog = { timestamp: string; level: string; source: string; message: string }
 
-  type HardwareStats = {
-    cpu_usage_percent: number
-    memory_used_bytes: number
-    memory_total_bytes: number
-    disk_read_bytes: number
-    disk_write_bytes: number
-    disk_read_rate: number
-    disk_write_rate: number
-    uptime_seconds: number
-    load_average: string
-    cpu_model: string
-    kernel_version: string
-    operating_system: string
-    power_watts: number
-    architecture?: string
-    desktop_environment?: string
-    locale?: string
-    timezone?: string
-    agent_version?: string
-    collected_at: string
-    cpu_core_usage?: number[]
-    swap_used_bytes?: number
-    swap_total_bytes?: number
-    memory_buffers_bytes?: number
-    memory_cached_bytes?: number
-    disk_partitions?: DiskPartition[]
-    network_ifaces?: NetworkIFace[]
-    cpu_temperature?: number
-    gpu_temperature_celsius?: number
-    battery_percent?: number
-    battery_status?: string
-    top_cpu_processes?: ProcessInfo[]
-    top_mem_processes?: ProcessInfo[]
-    agent_cpu_usage?: number
-    agent_memory_bytes?: number
-    logs?: DeviceLog[]
-  }
-
-  type Device = {
-    id: string
-    hostname: string
-    user_id: string
-    status: string
-    last_seen_at: string
-    last_sync_at: string
-    hardware?: HardwareStats
-    logs?: DeviceLog[]
-  }
+  // Shapes come from lib/types so a Device passed from the shell type-checks
+  // here. This view additionally reads the raw log array the detail payload
+  // carries, which the shared Device type does not model.
+  type HardwareStats = SharedHardwareStats & { logs?: DeviceLog[] }
+  type Device = SharedDevice & { logs?: DeviceLog[] }
 
   export let device: Device
   export let authHeaders: Record<string, string> = {}
@@ -144,8 +99,17 @@
     tempChart = null
   }
 
+  // A chart needs at least two samples to draw a meaningful line. With fewer,
+  // Chart.js renders a flat line pinned to the axis, which reads as "this
+  // metric is stuck at zero" rather than "we have no data yet".
+  $: hasSeries = history.length >= 2
+
   function buildCharts() {
     destroyCharts()
+    if (!hasSeries) {
+      chartError = ''
+      return
+    }
     if (!cpuCanvas || !memCanvas || !netCanvas || !tempCanvas) {
       chartError = 'Canvas elements not ready'
       return
@@ -258,6 +222,10 @@
   }
 
   function updateCharts() {
+    if (!hasSeries) {
+      destroyCharts()
+      return
+    }
     const lbls = labels()
     if (cpuChart) {
       cpuChart.data.labels = lbls
@@ -345,8 +313,10 @@
     historyUnsub?.()
     subscribedDeviceId = device.id
     historyUnsub = deviceHistoryStore(device.id).subscribe((points) => {
-      if (points.length === 0) return
       history = points.slice(-MAX_POINTS)
+      // Rebuilding on a drop to zero or one point is what keeps the empty state
+      // honest: a device that stops reporting loses its charts instead of
+      // freezing on a stale line.
       if (cpuChart) updateCharts()
       else if (!loadingHistory) scheduleBuild()
     })
@@ -553,19 +523,43 @@
     <div class="charts-grid">
       <div class="chart-box">
         <span class="chart-title">CPU %</span>
-        <div class="chart-wrap"><canvas bind:this={cpuCanvas}></canvas></div>
+        <div class="chart-wrap">
+          {#if hasSeries}
+            <canvas bind:this={cpuCanvas}></canvas>
+          {:else}
+            <div class="chart-pending" role="status">collecting data...</div>
+          {/if}
+        </div>
       </div>
       <div class="chart-box">
         <span class="chart-title">Memory %</span>
-        <div class="chart-wrap"><canvas bind:this={memCanvas}></canvas></div>
+        <div class="chart-wrap">
+          {#if hasSeries}
+            <canvas bind:this={memCanvas}></canvas>
+          {:else}
+            <div class="chart-pending" role="status">collecting data...</div>
+          {/if}
+        </div>
       </div>
       <div class="chart-box">
         <span class="chart-title">Network (bytes)</span>
-        <div class="chart-wrap"><canvas bind:this={netCanvas}></canvas></div>
+        <div class="chart-wrap">
+          {#if hasSeries}
+            <canvas bind:this={netCanvas}></canvas>
+          {:else}
+            <div class="chart-pending" role="status">collecting data...</div>
+          {/if}
+        </div>
       </div>
       <div class="chart-box">
         <span class="chart-title">Temperature (C)</span>
-        <div class="chart-wrap"><canvas bind:this={tempCanvas}></canvas></div>
+        <div class="chart-wrap">
+          {#if hasSeries}
+            <canvas bind:this={tempCanvas}></canvas>
+          {:else}
+            <div class="chart-pending" role="status">collecting data...</div>
+          {/if}
+        </div>
       </div>
     </div>
 
@@ -722,7 +716,10 @@
   .loading-hint { font-size: 0.6rem; color: #64748b; margin-left: auto; }
   .error-hint { font-size: 0.6rem; color: #f87171; margin-left: auto; }
 
-  .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+  /* auto-fit instead of a fixed 2 columns: a 1fr 1fr grid forces each chart
+     into half the width regardless of viewport, which is what clipped the
+     network and temperature plots. */
+  .charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 0.5rem; }
   .chart-box {
     padding: 0.5rem;
     border: 1px solid rgba(148, 163, 184, 0.1);
@@ -730,7 +727,18 @@
     background: rgba(15, 23, 42, 0.3);
   }
   .chart-title { display: block; font-size: 0.65rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.3rem; }
-  .chart-wrap { position: relative; height: 140px; }
+  /* A fixed height clipped taller canvases. min-height plus an aspect ratio lets
+     the plot grow with the container and still reserve room for the axis. */
+  .chart-wrap { position: relative; min-height: 170px; height: 170px; }
+  @media (max-width: 640px) { .chart-wrap { min-height: 150px; height: 150px; } }
+  .chart-pending {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: #64748b;
+    font-size: 0.72rem;
+  }
 
   .section-block {
     padding: 0.6rem 0.7rem;

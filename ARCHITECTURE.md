@@ -51,20 +51,36 @@ The agent runs on each Linux device. It is the only component allowed to touch t
 
 ### 3. Web Dashboard
 
-The web dashboard is a Svelte 5 + TypeScript 6 + Vite 8 application. It shows the devices that are online, their last sync time, their metadata, live hardware telemetry charts, installed packages, and the small files associated with them. It also provides Docker container management through the Docker tab in the device modal, and Lynis security audit results through the Security tab.
+The web dashboard is a Svelte 5 + TypeScript 6 + Vite 8 application. It shows the devices that are online, their last sync time, their metadata, live hardware telemetry charts, installed packages, and the small files associated with them. It also provides Docker container management and Lynis security audit results.
+
+The dashboard shell is **navigation-first**: a fixed left sidebar (collapsible, drawer on mobile) owns every route, and the selected device scopes the Hardware / System / Customize groups. Selecting a device changes the main panel context — it does not open a modal. A topbar carries the device identity, online status, last-seen time, a refresh-interval selector, global search and the notification/account popovers.
 
 The dashboard is **account-first**: the entry screen is sign in / create account, every device is owned by an account, and agents are registered under the account that generated the install command. Authorization always comes from a valid server session; anonymous identity headers and owner query parameters are ignored.
 
+The visual language lives in `lib/theme.css` (design tokens: near-black surfaces, a single mint accent for healthy/selected state, amber/red/grey for status, separate chart series colours). Components read from these variables rather than hardcoding colours.
+
 Key UI components:
-- `App.svelte`: root layout with auth, device grid, dashboard charts, polling
-- `DeviceModal.svelte`: device detail with tabs (System, Files, Packages, Saves, Notes, Docker, Security)
+- `App.svelte`: shell wiring, auth gate, polling, and the popovers anchored under the topbar
+- `lib/router.ts`: navigation store and the `NAV_GROUPS` structure the sidebar renders
+- `lib/types.ts`: shared `Device` / `HardwareStats` shapes and status helpers
+- `lib/insights.ts`: alert thresholds and `generateInsights`, the single definition of what needs attention
+- `components/shell/Sidebar.svelte`, `Topbar.svelte`, `DeviceList.svelte`: the app chrome
+- `components/ui/`: reusable primitives (Icon, StatusDot, SeverityBadge, GaugeCard, StatCard, MiniSparkline, EmptyState, Skeleton, ConfirmDialog)
+- `components/screens/Home.svelte`: fleet KPI row, device table with sparklines, recent-alerts feed
+- `components/screens/DeviceOverview.svelte`: gauges, per-core load, storage/network cards, history chart
+- `components/screens/Alerts.svelte`, `Reports.svelte`: fleet-wide findings and inventory reports
+- `components/screens/Storage.svelte`, `Processes.svelte`, `Packages.svelte`, `Services.svelte`: per-device hardware and system views
+- `components/screens/RemoteActions.svelte`, `DeviceSettings.svelte`: confirmed remote actions with an audit trail, and device identity/removal
+- `DeviceModal.svelte`: device detail; still owns the Files / Packages / Saves / Notes / Docker / Security tabs, and can render inline via `variant="page"` rather than as a popup
 - `DockerTab.svelte`: container management (list, start/stop/restart/kill/remove, exec, compose editor, prune)
 - `SecurityTab.svelte`: Lynis security audit runner, hardening index gauge, warnings/suggestions, history
-- `Sparkline.svelte`: lightweight canvas CPU/memory/network sparklines for device cards (no Chart.js)
-- `SimpleMetrics.svelte`: device summary cards with save badges
 - `SystemMetrics.svelte`: detailed hardware telemetry display and history charts
 - `NotificationsModal.svelte`: notification provider settings and inbox
 - `NotificationToast.svelte`: real-time toast notifications via SSE
+
+**Status:** the shell and every fleet and device screen are implemented. Four screens render honest "not collected yet" states for the parts whose API does not exist: `Services` (systemd units, open ports), `RemoteActions` (reboot / update-packages / restart-agent command types), the pending-updates half of `Packages`, and the SMART half of `Storage`. Those are marked in the UI with the missing endpoint, and `lib/flags.ts` (`VITE_MOCK_*`) can swap in labelled sample data for layout review. `cpu`, `memory`, `network` and `sensors` currently all resolve to the same `DeviceOverview`; `containers`, `logs` and `security` still resolve to `DeviceModal` tabs.
+
+Note that `svelte-check` does not reliably catch malformed Svelte block structure in this repo; `vite build` is the trustworthy gate for template changes.
 
 ## Responsibilities
 

@@ -1,0 +1,122 @@
+/* Design tokens for the Rigsight-style panel.
+ *
+ * Imported before app.css so the legacy rules can override specific values
+ * while new components read straight from these variables. The palette is
+ * deliberately one accent: mint means "healthy or selected", and every other
+ * colour is either a status (amber/red/grey) or a chart series. That keeps a
+ * colour meaningful wherever it appears.
+ */
+
+:root {
+  /* Surfaces */
+  --bg: #0a0a0b;
+  --bg-elevated: #111113;
+  --card: #111113;
+  --card-hover: #17171a;
+  --card-inset: #0d0d0f;
+  --border: #1f1f23;
+  --border-strong: #2a2a30;
+
+  /* The single accent. Used for healthy state and selection only. */
+  --accent: #34d399;
+  --accent-dim: rgba(52, 211, 153, 0.15);
+  --accent-border: rgba(52, 211, 153, 0.4);
+  --accent-ink: #062e21;
+
+  /* Status semantics */
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --crit: #f87171;
+  --offline: #6b7280;
+  --warn-dim: rgba(251, 191, 36, 0.14);
+  --crit-dim: rgba(248, 113, 113, 0.14);
+
+  /* Chart series — used only inside plots, never for chrome. */
+  --series-1: #60a5fa;
+  --series-2: #f472b6;
+  --series-3: #facc15;
+  --series-4: #22d3ee;
+  --series-5: #a78bfa;
+
+  /* Text. --text-muted is the floor for body copy: #64748b fails AA on this
+     background at small sizes, so it is reserved for large or decorative text. */
+  --text: #e7e9ee;
+  --text-bright: #ffffff;
+  --text-muted: #9398a6;
+  --text-faint: #6b7280;
+
+  /* Shape and motion */
+  --radius: 14px;
+  --radius-sm: 9px;
+  --radius-pill: 999px;
+  --t-fast: 150ms ease;
+  --t: 180ms ease;
+
+  /* Layout */
+  --sidebar-w: 240px;
+  --sidebar-w-collapsed: 68px;
+  --topbar-h: 60px;
+
+  --font: Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: ui-monospace, 'SF Mono', 'Cascadia Code', 'Fira Code', Menlo, monospace;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-pop: 0 12px 40px rgba(0, 0, 0, 0.55);
+}
+
+/* Label: the small uppercase grey caption used above every value. */
+.label {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* Numeric values share one treatment so columns line up and the eye can scan
+   size before reading the digits. */
+.value {
+  color: var(--text-bright);
+  font-size: 1.5rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.value-sm {
+  color: var(--text);
+  font-size: 0.95rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.mono {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+}
+
+/* Surface primitive shared by every card. */
+.surface {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.surface-inset {
+  background: var(--card-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.text-ok { color: var(--ok); }
+.text-warn { color: var(--warn); }
+.text-crit { color: var(--crit); }
+.text-muted { color: var(--text-muted); }
+
+/* Keyboard focus must stay visible on every interactive element. app.css sets
+   a global :focus-visible, but it points at the old teal; restate it in the
+   new palette so both agree. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

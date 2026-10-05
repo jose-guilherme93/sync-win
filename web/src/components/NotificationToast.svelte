@@ -1,5 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher, onMount, onDestroy } from 'svelte'
+  import { formatRelative } from '../lib/format'
 
   export let event: {
     id: number
@@ -46,15 +47,8 @@
     }
   }
 
-  function timeAgo(ts: string) {
-    const t = Date.parse(ts)
-    if (!Number.isFinite(t)) return ''
-    const diff = Math.max(0, Math.floor((Date.now() - t) / 1000))
-    if (diff < 10) return 'just now'
-    if (diff < 60) return `${diff}s ago`
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
-    return `${Math.floor(diff / 3600)}h ago`
-  }
+  // Shared helper: a null or Go zero timestamp renders empty instead of a day count.
+  const timeAgo = (ts: string) => formatRelative(ts)
 
   function dismiss() {
     if (timer) clearInterval(timer)

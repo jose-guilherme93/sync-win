@@ -629,35 +629,49 @@ button.kpi:hover {
   min-width: 0;
 }
 
+/* The tab labels were #94a3b8 on a dark card with only a 2px underline for the
+   active state, which left the row reading as inert text. The container now
+   gets its own surface, labels are brighter, and the active tab carries three
+   signals at once: colour, underline and a filled background. */
 .tablist {
   display: flex;
   gap: 0.15rem;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  padding: 0.25rem;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 10px;
+  background: rgba(2, 6, 23, 0.5);
   overflow-x: auto;
+  scrollbar-width: thin;
 }
 
 .tablist button {
   background: transparent;
   border: 0;
-  border-bottom: 2px solid transparent;
-  border-radius: 7px 7px 0 0;
-  padding: 0.45rem 0.7rem;
-  color: #94a3b8;
-  font-size: 0.78rem;
+  border-radius: 7px;
+  padding: 0.5rem 0.8rem;
+  color: #cbd5e1;
+  font-size: 0.8rem;
   font-weight: 600;
   white-space: nowrap;
   display: inline-flex;
   align-items: center;
+  transition: background 0.15s, color 0.15s;
 }
 
 .tablist button:hover {
-  color: #e2e8f0;
+  color: #ffffff;
+  background: rgba(148, 163, 184, 0.12);
 }
 
 .tablist button.active {
-  color: #ccfbf1;
-  border-bottom-color: #2dd4bf;
-  background: rgba(13, 148, 136, 0.12);
+  color: #0a0a0b;
+  background: #34d399;
+  box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.5);
+}
+
+.tablist button:focus-visible {
+  outline: 2px solid #34d399;
+  outline-offset: 2px;
 }
 
 .tablist .count {
@@ -669,9 +683,16 @@ button.kpi:hover {
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  background: rgba(59, 130, 246, 0.16);
-  color: #93c5fd;
+  background: rgba(148, 163, 184, 0.22);
+  color: #e2e8f0;
   font-size: 0.64rem;
+}
+
+/* On the filled active tab the count needs to invert too, otherwise the badge
+   reads as a hole punched in the accent colour. */
+.tablist button.active .count {
+  background: rgba(10, 10, 11, 0.2);
+  color: #052e21;
 }
 
 .panel {
@@ -2326,4 +2347,94 @@ button.secondary {
   font-size: 0.7rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
+}
+
+/* ── App shell (Rigsight redesign) ──
+   The signed-in page no longer uses the centered .page column: the shell is a
+   fixed-height row of sidebar + main, and only .content scrolls. The .page.full
+   modifier removes the max-width that would otherwise squeeze the sidebar. */
+.page.full {
+  max-width: none;
+  padding: 0;
+}
+
+.app-shell {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.sidebar-wrap {
+  flex-shrink: 0;
+  height: 100vh;
+}
+
+.main-col {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  height: 100vh;
+}
+
+.content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--bg);
+}
+
+.panel-inner {
+  display: grid;
+  gap: 0.85rem;
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 1rem 1.25rem 2.5rem;
+}
+
+.nav-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+/* Anchors the topbar's notification and account popovers. They are rendered at
+   App level (they need App state) but positioned under the topbar, so this
+   container is the fixed reference the existing .bell-dropdown /
+   .user-dropdown absolute positioning hangs off. */
+.shell-popover {
+  position: fixed;
+  top: var(--topbar-h);
+  right: 1rem;
+  z-index: 55;
+}
+
+/* Below tablet width the sidebar becomes a slide-in drawer over the content. */
+@media (max-width: 900px) {
+  .sidebar-wrap {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 50;
+    transform: translateX(-100%);
+    transition: transform var(--t);
+  }
+
+  .sidebar-wrap.open {
+    transform: translateX(0);
+  }
+
+  .panel-inner {
+    padding: 1rem 0.9rem 2rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-wrap {
+    transition: none;
+  }
 }
