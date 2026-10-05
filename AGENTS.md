@@ -110,6 +110,13 @@ sync-win/
 └── SECURITY.md
 ```
 
+## Commit and release convention
+
+Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
+The `Release` workflow derives the version automatically on every push to `main`
+(`feat` = minor, `fix`/anything else = patch, `feat!`/`BREAKING CHANGE` = major).
+Never bump versions or create tags by hand — use the right commit type instead.
+
 ## How to develop
 
 - Keep changes small and explicit.

@@ -211,6 +211,21 @@ sudo SYNCWIN_AUTO_UPDATE=0 bash install.sh
 
 The updater is pull-based: the agent only contacts the configured SyncWin server. The system-wide installer uses a root systemd timer; the user installer uses `systemctl --user`.
 
+## Releases
+
+Releases are automatic. Every push to `main` creates the next semantic version
+from [Conventional Commits](https://www.conventionalcommits.org/):
+
+| Commit | Bump | Example |
+| --- | --- | --- |
+| `fix:`, `chore:`, anything else | patch | `0.2.0` → `0.2.1` |
+| `feat:` | minor | `0.2.1` → `0.3.0` |
+| `feat!:`, `BREAKING CHANGE:` | major | `0.3.0` → `1.0.0` |
+
+The workflow tags the commit (`vX.Y.Z`), creates the GitHub Release and, when
+`DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` are configured, publishes the Docker
+image. Manual runs can force a bump from the Actions tab.
+
 ## Documentation
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — full architectural design

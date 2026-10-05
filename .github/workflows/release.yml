@@ -1,0 +1,165 @@
+# =============================================================================
+# Release — automatic semantic versioning, GitHub Releases and Docker publish
+# =============================================================================
+# Every push to main creates the next version from Conventional Commits and
+# tags it. No manual tagging is ever needed:
+#
+#   feat: ...                      -> minor  (0.1.0 -> 0.2.0)
+#   fix: ... / chore: ... / etc.   -> patch  (0.2.0 -> 0.2.1)
+#   feat!: ... / BREAKING CHANGE:  -> major  (0.2.0 -> 1.0.0)
+#
+# The image is pushed to Docker Hub only when DOCKERHUB_USERNAME and
+# DOCKERHUB_TOKEN are configured; otherwise the tag and Release are still
+# created without failing. Run it manually from the Actions tab to force a
+# specific bump.
+# =============================================================================
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump (auto follows Conventional Commits)"
+        required: false
+        default: auto
+        type: choice
+        options:
+          - auto
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Version, tag and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next version
+        id: version
+        env:
+          FORCED_BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          last="$(git tag --list 'v*' --sort=-v:refname | head -n1)"
+          [ -z "$last" ] && last="v0.0.0"
+
+          base="${last#v}"
+          IFS='.' read -r major minor patch <<< "$base"
+          major=${major:-0}; minor=${minor:-0}; patch=${patch:-0}
+
+          if git rev-parse -q --verify "refs/tags/${last}" >/dev/null 2>&1; then
+            range="${last}..HEAD"
+          else
+            range="HEAD"
+          fi
+          messages="$(git log "$range" --pretty=format:'%s%n%b')"
+
+          bump="patch"
+          if printf '%s\n' "$messages" | grep -qE '(BREAKING CHANGE:|^[a-zA-Z]+(\([^)]*\))?!:)'; then
+            bump="major"
+          elif printf '%s\n' "$messages" | grep -qE '^feat(\([^)]*\))?:'; then
+            bump="minor"
+          fi
+          if [ -n "${FORCED_BUMP:-}" ] && [ "${FORCED_BUMP}" != "auto" ]; then
+            bump="${FORCED_BUMP}"
+          fi
+
+          case "$bump" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            *)     patch=$((patch + 1)) ;;
+          esac
+
+          version="${major}.${minor}.${patch}"
+          tag="v${version}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "bump=${bump}" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Next release: ${tag} (${bump})"
+
+      - name: Create tag
+        if: steps.version.outputs.exists == 'false'
+        run: |
+          set -euo pipefail
+          tag="${{ steps.version.outputs.tag }}"
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null 2>&1; then
+            echo "${tag} already exists; nothing to do."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${tag}" -m "Release ${tag}"
+          git push origin "${tag}"
+
+      - name: Create GitHub Release
+        if: steps.version.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          generate_release_notes: true
+
+      - name: Check Docker Hub credentials
+        id: registry
+        if: steps.version.outputs.exists == 'false'
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          if [ -n "${DOCKERHUB_USERNAME:-}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Docker Hub credentials not set; skipping image publish."
+          fi
+
+      - name: Set up QEMU
+        if: steps.version.outputs.exists == 'false' && steps.registry.outputs.enabled == 'true'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        if: steps.version.outputs.exists == 'false' && steps.registry.outputs.enabled == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        if: steps.version.outputs.exists == 'false' && steps.registry.outputs.enabled == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push image
+        if: steps.version.outputs.exists == 'false' && steps.registry.outputs.enabled == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.server
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/sync-win:${{ steps.version.outputs.version }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/sync-win:latest
+          labels: |
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          secrets: |
+            agent_update_key=${{ secrets.AGENT_UPDATE_KEY }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
