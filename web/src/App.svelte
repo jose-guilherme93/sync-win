@@ -10,6 +10,7 @@
   import { formatRelative, formatAbsolute } from './lib/format'
   import Sidebar from './components/shell/Sidebar.svelte'
   import Topbar from './components/shell/Topbar.svelte'
+  import Home from './components/screens/Home.svelte'
   import { nav, type Section } from './lib/router'
 
   type Device = {
@@ -1756,6 +1757,9 @@
           <div class="toast {toastKind}" role="status">{toastMessage}</div>
         {/if}
 
+        {#if navState.section === 'home' || navState.section === 'devices' || navState.section === 'alerts' || navState.section === 'findings'}
+          <Home {devices} onSelect={selectDevice} onAdd={openAddDevice} />
+        {:else}
   <section class="kpis" aria-label="Fleet summary">
     <button class="kpi" class:selected={statusFilter === 'all'} aria-pressed={statusFilter === 'all'} on:click={() => setStatusFilter('all')}>
       <strong>{kpis.total}</strong><span>Devices</span>
@@ -1882,6 +1886,7 @@
       </div>
     </div>
   {/if}
+        {/if}
         </div>
         {/if}
       </main>
