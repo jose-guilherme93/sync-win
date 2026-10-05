@@ -617,3 +617,33 @@ func TestBuildPreferenceAllowsSmallText(t *testing.T) {
 		t.Fatalf("category override ignored, got %q", payload.Category)
 	}
 }
+
+func TestSensitivePreferencePathUsesContractGlobs(t *testing.T) {
+	rejected := []string{"id_rsa_backup", "server.pem", "cert.key", "store.p12", "bundle.pfx", ".netrc"}
+	for _, name := range rejected {
+		if !sensitivePreferencePath(filepath.Join("/home/u", name)) {
+			t.Errorf("sensitivePreferencePath(%q) = false, want true", name)
+		}
+	}
+	if sensitivePreferencePath("/home/u/.config/foo.conf") {
+		t.Error("ordinary config file was flagged as sensitive")
+	}
+}
+
+func TestParseDiskIODedupsPartitions(t *testing.T) {
+	data := strings.Join([]string{
+		"   8       0 sda 10 0 1000 0 20 0 2000 0 0 0 0",
+		"   8       1 sda1 10 0 1000 0 20 0 2000 0 0 0 0",
+		" 259       0 nvme0n1 10 0 4000 0 20 0 8000 0 0 0 0",
+		" 259       1 nvme0n1p1 10 0 4000 0 20 0 8000 0 0 0 0",
+		"   7       0 loop0 10 0 800 0 20 0 800 0 0 0 0",
+	}, "\n")
+	whole := map[string]bool{"sda": true, "nvme0n1": true}
+	read, write := parseDiskIO(data, func(name string) bool { return whole[name] })
+	if want := uint64((1000 + 4000) * 512); read != want {
+		t.Fatalf("read = %d, want %d", read, want)
+	}
+	if want := uint64((2000 + 8000) * 512); write != want {
+		t.Fatalf("write = %d, want %d", write, want)
+	}
+}

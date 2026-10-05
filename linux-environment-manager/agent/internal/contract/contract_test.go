@@ -118,13 +118,14 @@ func TestDurationHelpers(t *testing.T) {
 			JitterFraction        float64 `json:"jitter_fraction"`
 		}{HTTPTimeoutSeconds: 15, BackoffBaseMultiplier: 2, BackoffMaxSeconds: 600},
 		Commands: struct {
-			Transport             string   `json:"transport"`
-			SupportedTypes        []string `json:"supported_types"`
-			TimeoutSecondsDefault int      `json:"timeout_seconds_default"`
-			OutputCapBytes        int64    `json:"output_cap_bytes"`
-			DockerLogsMaxTail     int      `json:"docker_logs_max_tail"`
-			PolicyPath            string   `json:"policy_path"`
-			PolicyDefaults        struct {
+			Transport                string   `json:"transport"`
+			SupportedTypes           []string `json:"supported_types"`
+			TimeoutSecondsDefault    int      `json:"timeout_seconds_default"`
+			OutputCapBytes           int64    `json:"output_cap_bytes"`
+			DockerLogsMaxTail        int      `json:"docker_logs_max_tail"`
+			DockerExecTimeoutSeconds int      `json:"docker_exec_timeout_seconds"`
+			PolicyPath               string   `json:"policy_path"`
+			PolicyDefaults           struct {
 				AllowInstallApp       bool `json:"allow_install_app"`
 				AllowExcludeFile      bool `json:"allow_exclude_file"`
 				AllowRestoreSaves     bool `json:"allow_restore_saves"`
@@ -149,5 +150,16 @@ func TestDurationHelpers(t *testing.T) {
 	}
 	if c.CommandTimeout(60) != time.Minute {
 		t.Fatalf("CommandTimeout(60) = %s", c.CommandTimeout(60))
+	}
+}
+
+func TestDockerExecTimeoutDefault(t *testing.T) {
+	c := &Contract{}
+	if got := c.DockerExecTimeout(); got != 30*time.Second {
+		t.Fatalf("DockerExecTimeout() = %s, want 30s", got)
+	}
+	c.Commands.DockerExecTimeoutSeconds = 45
+	if got := c.DockerExecTimeout(); got != 45*time.Second {
+		t.Fatalf("DockerExecTimeout() = %s, want 45s", got)
 	}
 }

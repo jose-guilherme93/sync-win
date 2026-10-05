@@ -70,13 +70,14 @@ type Contract struct {
 		StatePath              string `json:"state_path"`
 	} `json:"preferences_sync"`
 	Commands struct {
-		Transport             string   `json:"transport"`
-		SupportedTypes        []string `json:"supported_types"`
-		TimeoutSecondsDefault int      `json:"timeout_seconds_default"`
-		OutputCapBytes        int64    `json:"output_cap_bytes"`
-		DockerLogsMaxTail     int      `json:"docker_logs_max_tail"`
-		PolicyPath            string   `json:"policy_path"`
-		PolicyDefaults        struct {
+		Transport                string   `json:"transport"`
+		SupportedTypes           []string `json:"supported_types"`
+		TimeoutSecondsDefault    int      `json:"timeout_seconds_default"`
+		OutputCapBytes           int64    `json:"output_cap_bytes"`
+		DockerLogsMaxTail        int      `json:"docker_logs_max_tail"`
+		DockerExecTimeoutSeconds int      `json:"docker_exec_timeout_seconds"`
+		PolicyPath               string   `json:"policy_path"`
+		PolicyDefaults           struct {
 			AllowInstallApp       bool `json:"allow_install_app"`
 			AllowExcludeFile      bool `json:"allow_exclude_file"`
 			AllowRestoreSaves     bool `json:"allow_restore_saves"`
@@ -123,6 +124,15 @@ func (c *Contract) DockerLogsMaxTail() int {
 		return c.Commands.DockerLogsMaxTail
 	}
 	return 2000
+}
+
+// DockerExecTimeout is the hard timeout for a docker exec start call.
+func (c *Contract) DockerExecTimeout() time.Duration {
+	seconds := c.Commands.DockerExecTimeoutSeconds
+	if seconds <= 0 {
+		seconds = 30
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 // Load parses the embedded contract. It never fails in practice; a broken

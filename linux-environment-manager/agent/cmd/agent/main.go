@@ -271,7 +271,7 @@ func executeDockerRequest(req dockerRequest) dockerResult {
 		if err != nil {
 			return dockerResult{"failed", err.Error()}
 		}
-		output, err := collectors.DockerExecStart(execID)
+		output, err := collectors.DockerExecStart(execID, lemContract.DockerExecTimeout())
 		if err != nil {
 			return dockerResult{"failed", err.Error()}
 		}
@@ -1557,20 +1557,28 @@ func readMemoryInfo() (used, total uint64, err error) {
 	return
 }
 
-// readDiskIO reads disk I/O counters from /proc/diskstats.
+// readDiskIO reads disk I/O counters from /proc/diskstats, summing whole disks
+// only. Partition entries (sda1, nvme0n1p2, …) duplicate their parent's
+// counters, so counting both inflated the totals.
 func readDiskIO() (readBytes, writeBytes uint64, err error) {
 	data, err := os.ReadFile("/proc/diskstats")
 	if err != nil {
 		return 0, 0, err
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	readBytes, writeBytes = parseDiskIO(string(data), isWholeDisk)
+	return
+}
+
+// parseDiskIO sums sector counters for whole disks. isWholeDisk filters out
+// partitions and virtual devices; it is a parameter so the parsing can be
+// tested without /sys.
+func parseDiskIO(data string, isWholeDisk func(string) bool) (readBytes, writeBytes uint64) {
+	for _, line := range strings.Split(data, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 14 {
 			continue
 		}
-		name := fields[2]
-		// Skip partitions (only sum whole disks like sda, vda, nvme0n1)
-		if strings.HasPrefix(name, "loop") || strings.HasPrefix(name, "ram") || strings.HasPrefix(name, "dm-") {
+		if !isWholeDisk(fields[2]) {
 			continue
 		}
 		// fields[5] = sectors_read, fields[9] = sectors_written
@@ -1580,6 +1588,16 @@ func readDiskIO() (readBytes, writeBytes uint64, err error) {
 		writeBytes += sectorsWritten * 512
 	}
 	return
+}
+
+// isWholeDisk reports whether a /proc/diskstats name is a whole block device
+// (present in /sys/block) rather than a partition or a virtual device.
+func isWholeDisk(name string) bool {
+	if strings.HasPrefix(name, "loop") || strings.HasPrefix(name, "ram") || strings.HasPrefix(name, "dm-") {
+		return false
+	}
+	_, err := os.Stat(filepath.Join("/sys/block", name))
+	return err == nil
 }
 
 // readKernelVersion reads the kernel version from /proc/version.
@@ -1972,25 +1990,39 @@ func safePreferencePath(home, path string) bool {
 
 func sensitivePreferencePath(path string) bool {
 	name := strings.ToLower(filepath.Base(path))
-	if name == "id_rsa" || name == "id_dsa" || name == "id_ecdsa" || name == "id_ed25519" || name == ".netrc" || name == ".pgpass" || name == ".my.cnf" {
+	for _, pattern := range lemContract.Collection.RejectedContentRules.SensitiveFilenames {
+		if ok, err := filepath.Match(strings.ToLower(pattern), name); err == nil && ok {
+			return true
+		}
+	}
+	switch name {
+	case ".netrc", ".pgpass", ".my.cnf":
 		return true
 	}
-	return strings.HasSuffix(name, ".pem") || strings.HasSuffix(name, ".key") || strings.HasSuffix(name, ".p12") || strings.HasSuffix(name, ".pfx")
+	return false
 }
 
-// findSecret scans content for known secret patterns.
+// secretSignatures maps the contract's secret pattern names to a detectable
+// substring.
+var secretSignatures = map[string]string{
+	"aws_access_key_id": "AKIA",
+	"github_token":      "ghp_",
+	"slack_token":       "xoxb-",
+	"stripe_live_key":   "sk_live_",
+	"google_api_key":    "AIza",
+	"pem_private_key":   "PRIVATE KEY",
+}
+
+// findSecret scans content for the secret patterns declared by the contract, in
+// the contract's order, and returns the reason for the first match.
 func findSecret(content string) string {
-	patterns := map[string]string{
-		"AKIA":        "aws_access_key_id",
-		"ghp_":        "github_token",
-		"xoxb-":       "slack_token",
-		"sk_live_":    "stripe_live_key",
-		"AIza":        "google_api_key",
-		"PRIVATE KEY": "pem_private_key",
-	}
-	for pattern, reason := range patterns {
-		if strings.Contains(content, pattern) {
-			return reason
+	for _, pattern := range lemContract.Collection.RejectedContentRules.SecretPatterns {
+		signature, ok := secretSignatures[pattern]
+		if !ok {
+			continue
+		}
+		if strings.Contains(content, signature) {
+			return pattern
 		}
 	}
 	return ""

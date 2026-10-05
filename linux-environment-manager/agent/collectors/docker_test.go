@@ -300,7 +300,7 @@ func TestDockerExecArgumentLimits(t *testing.T) {
 }
 
 func TestDockerExecStartEmptyID(t *testing.T) {
-	_, err := DockerExecStart("")
+	_, err := DockerExecStart("", 0)
 	if err == nil {
 		t.Error("expected error for empty exec ID")
 	}

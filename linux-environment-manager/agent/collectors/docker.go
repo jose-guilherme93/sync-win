@@ -579,16 +579,20 @@ func DockerExecCreate(containerID string, cmd []string) (string, error) {
 	return resp.ID, nil
 }
 
-// DockerExecStart runs a previously created exec instance and returns its output.
-func DockerExecStart(execID string) (string, error) {
+// DockerExecStart runs a previously created exec instance and returns its
+// output. The timeout comes from the collection contract.
+func DockerExecStart(execID string, timeout time.Duration) (string, error) {
 	if !validContainerID(execID) {
 		return "", fmt.Errorf("invalid exec ID")
+	}
+	if timeout <= 0 {
+		timeout = dockerRequestTimeout
 	}
 	body := map[string]interface{}{
 		"Detach": false,
 		"Tty":    false,
 	}
-	data, status, err := dockerRequestWithTimeout("POST", "/exec/"+execID+"/start", body, dockerRequestTimeout)
+	data, status, err := dockerRequestWithTimeout("POST", "/exec/"+execID+"/start", body, timeout)
 	if err != nil {
 		return "", err
 	}
