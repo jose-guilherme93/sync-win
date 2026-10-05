@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // webhookConfig is the decrypted configuration for the generic webhook
@@ -73,34 +74,73 @@ func isPrivateIP(ip net.IP) bool {
 	return ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast()
 }
 
-func validateOutboundWebhookURL(raw string) error {
-	u, err := url.Parse(raw)
+// lookupIPAddr is a seam for tests; production uses the default resolver.
+var lookupIPAddr = net.DefaultResolver.LookupIPAddr
+
+// dialWebhook is a seam for tests; production dials the pinned IP directly.
+var dialWebhook = (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+
+// pinnedWebhookClient resolves the target once, rejects any private address,
+// and returns a client whose dialer always connects to that exact validated IP.
+//
+// Resolving and dialing separately (the previous behaviour) is a TOCTOU
+// DNS-rebinding hole: a hostname can return a public address to the validation
+// lookup and a private one to the dial lookup. Pinning the IP closes it, while
+// TLS still validates the certificate against the original hostname.
+func pinnedWebhookClient(ctx context.Context, base *http.Client, rawURL string) (*http.Client, error) {
+	u, err := url.Parse(rawURL)
 	if err != nil || u.Hostname() == "" {
-		return errors.New("webhook URL is invalid")
+		return nil, errors.New("webhook URL is invalid")
 	}
 	host := strings.ToLower(u.Hostname())
 	if host == "localhost" || host == "localhost.localdomain" {
-		return errors.New("webhook URL resolves to a private address")
+		return nil, errors.New("webhook URL resolves to a private address")
 	}
-	if ip := net.ParseIP(host); ip != nil {
-		if isPrivateIP(ip) {
-			return errors.New("webhook URL resolves to a private address")
-		}
-		return nil
-	}
-	ips, err := net.LookupIP(host)
-	if err != nil {
-		return fmt.Errorf("resolve webhook host: %w", err)
-	}
-	if len(ips) == 0 {
-		return errors.New("webhook host has no addresses")
-	}
-	for _, ip := range ips {
-		if isPrivateIP(ip) {
-			return errors.New("webhook URL resolves to a private address")
+	port := u.Port()
+	if port == "" {
+		if u.Scheme == "https" {
+			port = "443"
+		} else {
+			port = "80"
 		}
 	}
-	return nil
+
+	pinnedIP := net.ParseIP(host)
+	if pinnedIP == nil {
+		addrs, err := lookupIPAddr(ctx, host)
+		if err != nil {
+			return nil, fmt.Errorf("resolve webhook host: %w", err)
+		}
+		if len(addrs) == 0 {
+			return nil, errors.New("webhook host has no addresses")
+		}
+		for _, addr := range addrs {
+			if isPrivateIP(addr.IP) {
+				return nil, errors.New("webhook URL resolves to a private address")
+			}
+			if pinnedIP == nil {
+				pinnedIP = addr.IP
+			}
+		}
+	} else if isPrivateIP(pinnedIP) {
+		return nil, errors.New("webhook URL resolves to a private address")
+	}
+
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	pinned := pinnedIP.String()
+	transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return dialWebhook(ctx, network, net.JoinHostPort(pinned, port))
+	}
+
+	client := *base
+	client.Transport = transport
+	// Redirects are disabled: each one would target a host that was never
+	// validated against the private-address filter.
+	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return errors.New("webhook redirects are disabled")
+	}
+	return &client, nil
 }
 
 func (p webhookProvider) Validate(raw json.RawMessage) error {
@@ -116,7 +156,11 @@ type webhookPayload struct {
 }
 
 func (p webhookProvider) post(ctx context.Context, client *http.Client, cfg webhookConfig, payload webhookPayload) error {
-	if err := validateOutboundWebhookURL(cfg.URL); err != nil {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	pinnedClient, err := pinnedWebhookClient(ctx, client, cfg.URL)
+	if err != nil {
 		return err
 	}
 	body, err := json.Marshal(payload)
@@ -134,16 +178,7 @@ func (p webhookProvider) post(ctx context.Context, client *http.Client, cfg webh
 		mac.Write(body)
 		req.Header.Set("X-LEM-Signature", "sha256="+hex.EncodeToString(mac.Sum(nil)))
 	}
-	if client == nil {
-		client = http.DefaultClient
-	}
-	safeClient := *client
-	// Do not follow redirects: each redirect would be a second SSRF decision
-	// and can otherwise bypass the address validated above.
-	safeClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
-		return errors.New("webhook redirects are disabled")
-	}
-	resp, err := safeClient.Do(req)
+	resp, err := pinnedClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("webhook send: %w", err)
 	}

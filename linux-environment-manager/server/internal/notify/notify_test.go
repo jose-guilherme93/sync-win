@@ -3,8 +3,11 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -181,6 +184,49 @@ func TestWebhookPostRejectsPrivateTargetBeforeRequest(t *testing.T) {
 	}
 	if called {
 		t.Fatal("private webhook target received a request")
+	}
+}
+
+// TestWebhookRejectsHostResolvingToPrivateIP covers a hostname (not a literal
+// IP) that resolves to a private address: it must be rejected at send time.
+func TestWebhookRejectsHostResolvingToPrivateIP(t *testing.T) {
+	orig := lookupIPAddr
+	defer func() { lookupIPAddr = orig }()
+	lookupIPAddr = func(context.Context, string) ([]net.IPAddr, error) {
+		return []net.IPAddr{{IP: net.ParseIP("10.0.0.5")}}, nil
+	}
+
+	p := webhookProvider{}
+	err := p.post(context.Background(), http.DefaultClient, webhookConfig{URL: "http://internal.example.com/hook"}, webhookPayload{})
+	if err == nil || !strings.Contains(err.Error(), "private") {
+		t.Fatalf("expected private-address rejection, got %v", err)
+	}
+}
+
+// TestWebhookDialerUsesPinnedIP proves the validated IP is the one dialed, so a
+// hostname cannot rebind between validation and connection.
+func TestWebhookDialerUsesPinnedIP(t *testing.T) {
+	origLookup, origDial := lookupIPAddr, dialWebhook
+	defer func() {
+		lookupIPAddr = origLookup
+		dialWebhook = origDial
+	}()
+	lookupIPAddr = func(context.Context, string) ([]net.IPAddr, error) {
+		return []net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}, nil
+	}
+	var gotAddr string
+	dialWebhook = func(_ context.Context, _ string, addr string) (net.Conn, error) {
+		gotAddr = addr
+		return nil, errors.New("stop after capturing address")
+	}
+
+	p := webhookProvider{}
+	err := p.post(context.Background(), http.DefaultClient, webhookConfig{URL: "http://rebind.example:8123/hook"}, webhookPayload{})
+	if err == nil {
+		t.Fatal("expected the stubbed dialer to abort the request")
+	}
+	if gotAddr != "93.184.216.34:8123" {
+		t.Fatalf("dialed %q, want the pinned 93.184.216.34:8123", gotAddr)
 	}
 }
 
