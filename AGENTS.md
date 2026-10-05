@@ -183,6 +183,7 @@ Use the most direct command for the module being changed.
 
 ## Security rules
 
+- Public self-registration is disabled by default (`SYNCWIN_ENABLE_REGISTRATION=false`); the first account is bootstrapped from `SYNCWIN_ADMIN_EMAIL`/`SYNCWIN_ADMIN_PASSWORD` on startup and never overwritten.
 - Never execute arbitrary shell commands remotely.
 - Never store secrets in plaintext.
 - Never copy the entire home directory.

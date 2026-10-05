@@ -29,6 +29,11 @@ services:
       SYNCWIN_ENABLE_LEGACY_INSTALL: "${SYNCWIN_ENABLE_LEGACY_INSTALL:-false}"
       SYNCWIN_ENABLE_REMOTE_MUTATIONS: "${SYNCWIN_ENABLE_REMOTE_MUTATIONS:-false}"
       SYNCWIN_ENABLE_DOCKER_MUTATIONS: "${SYNCWIN_ENABLE_DOCKER_MUTATIONS:-false}"
+      # The dev stack keeps public registration on so `make dev-account` and
+      # manual sign-ups work locally. Production defaults to false.
+      SYNCWIN_ENABLE_REGISTRATION: "${SYNCWIN_ENABLE_REGISTRATION:-true}"
+      SYNCWIN_ADMIN_EMAIL: "${SYNCWIN_ADMIN_EMAIL:-}"
+      SYNCWIN_ADMIN_PASSWORD: "${SYNCWIN_ADMIN_PASSWORD:-}"
       # Comma-separated allowlist. The Vite dev server is reachable as both
       # localhost and 127.0.0.1, which the browser treats as distinct origins;
       # listing one of them made the other fail CORS on login.

@@ -34,7 +34,7 @@ func newTestServer(t *testing.T) *Server {
 	structLogger := logging.New(logCfg, logStore)
 	t.Cleanup(func() { structLogger.Stop() })
 
-	return &Server{store: st, logStore: logStore, log: structLogger, streamTickets: newStreamTicketStore(), rateLimiter: newRateLimiter()}
+	return &Server{store: st, logStore: logStore, log: structLogger, streamTickets: newStreamTicketStore(), rateLimiter: newRateLimiter(), flags: featureFlags{EnableRegistration: true}}
 }
 
 func TestAgentInstallScriptRegistersAndVerifies(t *testing.T) {
@@ -482,10 +482,75 @@ func TestFeatureFlagsFailClosed(t *testing.T) {
 	t.Setenv("SYNCWIN_ENABLE_LEGACY_INSTALL", "")
 	t.Setenv("SYNCWIN_ENABLE_REMOTE_MUTATIONS", "")
 	t.Setenv("SYNCWIN_ENABLE_DOCKER_MUTATIONS", "")
+	t.Setenv("SYNCWIN_ENABLE_REGISTRATION", "")
 
 	flags := loadFeatureFlags()
-	if flags.EnableFingerprintReconnect || flags.EnableLegacyInstall || flags.EnableRemoteMutations || flags.EnableDockerMutations {
+	if flags.EnableFingerprintReconnect || flags.EnableLegacyInstall || flags.EnableRemoteMutations || flags.EnableDockerMutations || flags.EnableRegistration {
 		t.Fatalf("security feature flags must default to false: %#v", flags)
+	}
+}
+
+func TestRegistrationDisabledByDefault(t *testing.T) {
+	s := newTestServer(t)
+	s.flags.EnableRegistration = false
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(`{"email":"public@example.com","password":"supersecret1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.handleAuthRegister(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("registration must be 403 when disabled, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAuthConfigExposesRegistrationFlag(t *testing.T) {
+	s := newTestServer(t)
+
+	s.flags.EnableRegistration = true
+	rec := httptest.NewRecorder()
+	s.handleAuthConfig(rec, httptest.NewRequest(http.MethodGet, "/api/auth/config", nil))
+	var payload map[string]bool
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode config: %v", err)
+	}
+	if !payload["registration_enabled"] {
+		t.Fatalf("expected registration_enabled=true, got %v", payload)
+	}
+
+	s.flags.EnableRegistration = false
+	rec = httptest.NewRecorder()
+	s.handleAuthConfig(rec, httptest.NewRequest(http.MethodGet, "/api/auth/config", nil))
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode config: %v", err)
+	}
+	if payload["registration_enabled"] {
+		t.Fatalf("expected registration_enabled=false, got %v", payload)
+	}
+}
+
+func TestBootstrapAdminCreatesAndPreservesAccount(t *testing.T) {
+	s := newTestServer(t)
+	t.Setenv("SYNCWIN_ADMIN_EMAIL", "admin@example.com")
+	t.Setenv("SYNCWIN_ADMIN_PASSWORD", "correct horse battery staple")
+
+	bootstrapAdmin(s.store, s.log, false)
+	user, err := s.store.AuthenticateUser("admin@example.com", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("admin login: %v", err)
+	}
+
+	// The environment password must never overwrite an account that already
+	// exists, so a password changed in the dashboard survives restarts.
+	if err := s.store.UpdateUserPassword(user.ID, "correct horse battery staple", "changed-password-123"); err != nil {
+		t.Fatalf("change password: %v", err)
+	}
+	bootstrapAdmin(s.store, s.log, false)
+	if _, err := s.store.AuthenticateUser("admin@example.com", "correct horse battery staple"); err == nil {
+		t.Fatal("bootstrap must not reset an existing password")
+	}
+	if _, err := s.store.AuthenticateUser("admin@example.com", "changed-password-123"); err != nil {
+		t.Fatalf("changed password should still work: %v", err)
 	}
 }
 

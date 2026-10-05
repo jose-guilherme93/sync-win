@@ -161,6 +161,7 @@ A funcionalidade P1 está concluída. A próxima etapa é uma nova priorização
 - [x] política local do agent (`~/.config/sync-win/policy.json`): o agent recusa comandos desabilitados localmente e reporta a recusa ao servidor — o servidor nunca força execução
 - [x] comandos com timeout e cap de saída; pacotes validados antes de executar
 - [x] dashboard account-first: tela inicial é login/criar conta; todo device é registrado sob a conta (`owner_id` = usuário autenticado), sem depender de identidade anônima do navegador; `GET /api/auth/me` restaura a sessão no carregamento
+- [x] cadastro público desabilitado por padrão (`SYNCWIN_ENABLE_REGISTRATION=false`); admin inicial criado no boot a partir de `SYNCWIN_ADMIN_EMAIL`/`SYNCWIN_ADMIN_PASSWORD` (senha existente nunca é sobrescrita); a opção de criar conta só aparece quando o registro é habilitado
 - [x] instalador com passos numerados e verificação real de conexão (heartbeat) antes de declarar sucesso; falha imprime checklist acionável
 - [x] senhas armazenadas como Argon2id; tokens de sessão/device armazenados apenas como hash; dashboard usa cookie HttpOnly + CSRF; owner isolation strict
 - [x] tokens de enrollment: uso único, expiração em 15 minutos, vinculados ao owner

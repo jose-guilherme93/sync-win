@@ -14,7 +14,8 @@ This document describes the security model, rules, and best practices for SyncWi
 
 ### User accounts
 
-- Users register with email and password.
+- Public self-registration is disabled by default. When disabled, `POST /api/auth/register` returns `403` and `GET /api/auth/config` reports `registration_enabled=false`; the dashboard hides the sign-up option.
+- The first account is bootstrapped on startup from `SYNCWIN_ADMIN_EMAIL`/`SYNCWIN_ADMIN_PASSWORD`. The environment password never overwrites an account that already exists, so a password changed in the dashboard is preserved.
 - Passwords are stored as salted Argon2id hashes (`argon2id$v=19$...`); legacy `s256$` hashes are upgraded after a successful login.
 - Passwords must contain 8–256 bytes.
 - The dashboard uses a random `syncwin_session` HttpOnly cookie. The raw session token is not persisted in the browser; a compatibility bearer token may be returned to non-browser clients.

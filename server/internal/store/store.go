@@ -1695,6 +1695,62 @@ func (s *Store) AuthenticateUser(email, password string) (User, error) {
 	return u, nil
 }
 
+// UserByEmail returns the account with the given email. The error is
+// sql.ErrNoRows when no such account exists.
+func (s *Store) UserByEmail(email string) (User, error) {
+	email = strings.TrimSpace(email)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var u User
+	var created string
+	err := s.db.QueryRow("SELECT id, email, password_hash, created_at FROM users WHERE email = ?", email).Scan(&u.ID, &u.Email, &u.PasswordHash, &created)
+	if err != nil {
+		return User{}, err
+	}
+	u.CreatedAt = textTime(created)
+	return u, nil
+}
+
+// CountUsers returns how many accounts exist. It is used to detect a locked-out
+// deployment (registration disabled and no admin configured).
+func (s *Store) CountUsers() (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var count int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// EnsureAdminUser creates the initial admin account from environment
+// configuration if it does not exist yet. An existing account is never
+// modified, so a password changed in the dashboard is preserved.
+func (s *Store) EnsureAdminUser(email, password string) (User, bool, error) {
+	email = strings.TrimSpace(email)
+	if err := validateEmail(email); err != nil {
+		return User{}, false, err
+	}
+	if existing, err := s.UserByEmail(email); err == nil {
+		return existing, false, nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return User{}, false, err
+	}
+	user, err := s.CreateUser(email, password)
+	if errors.Is(err, ErrEmailTaken) {
+		// Lost a race to a concurrent bootstrap; use the existing account.
+		existing, lookupErr := s.UserByEmail(email)
+		if lookupErr != nil {
+			return User{}, false, lookupErr
+		}
+		return existing, false, nil
+	}
+	if err != nil {
+		return User{}, false, err
+	}
+	return user, true, nil
+}
+
 // CreateSession creates a new session for the given owner. Only a hash of the
 // bearer token is persisted; the raw token is returned to the client once.
 func (s *Store) CreateSession(ownerID string) (Session, error) {

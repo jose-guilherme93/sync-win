@@ -1,6 +1,6 @@
 # Quick Start
 
-This guide walks through setting up SyncWin from scratch: starting the server, creating an account, and installing the agent on a Linux device.
+This guide walks through setting up SyncWin from scratch: starting the server, signing in as admin, and installing the agent on a Linux device.
 
 ## Prerequisites
 
@@ -27,33 +27,49 @@ make dev     # dashboard http://localhost:5173 · api http://localhost:8088
 
 Run `make help` for the full target list.
 
-## 2. Create an account
+## 2. Sign in as admin
 
-There is **no default or seeded login**, and `.env` contains no credentials — it
-only holds server secrets such as `SYNCWIN_SECRET_KEY`. Accounts are created at
-runtime and stored in SQLite (`sync-win.db` inside the `sync-win-data` volume in
-production, `./data-dev/sync-win.db` in development). The password must be at least 8 characters.
+Public self-registration is **disabled by default**, so a fresh deployment has no
+open sign-up form. The first account is created automatically on boot from two
+environment variables:
 
-### In the browser
+```bash
+SYNCWIN_ADMIN_EMAIL=you@example.com
+SYNCWIN_ADMIN_PASSWORD=at-least-8-chars
+```
+
+`make env` creates `.env` with a generated `SYNCWIN_SECRET_KEY`; add the two
+admin variables above and restart the stack. On boot the server creates the
+account only if it does not exist — the password in `.env` is **never** used to
+overwrite an existing account, so a password changed in the dashboard survives
+restarts.
 
 Open `http://localhost:8080` (production) or `http://localhost:5173`
-(development). You will see the sign in / create account screen.
+(development) and sign in with the admin credentials. Accounts are stored in
+SQLite (`sync-win.db` inside the `sync-win-data` volume in production,
+`./data-dev/sync-win.db` in development). The password must be at least 8
+characters.
 
-1. Click **Create account**
-2. Enter your email and password
-3. Click **Register**
+### Allow open sign-ups (optional)
 
-You are now logged in and on the main dashboard (empty, since no devices are enrolled yet).
+To let anyone create an account, set:
 
-### From the command line (development)
+```bash
+SYNCWIN_ENABLE_REGISTRATION=true
+```
 
-With the dev stack running (`make dev` or `make dev-d`):
+The "Create account" option only appears in the dashboard when this flag is on.
+
+### Development shortcut
+
+The dev stack (`make dev`) enables registration, so you can also create a demo
+account:
 
 ```bash
 make dev-account   # creates demo@sync-win.local / sync-win-demo-password on :8088
 ```
 
-Or register through the API directly:
+Or register through the API directly (only works when registration is enabled):
 
 ```bash
 curl -X POST http://localhost:8088/api/auth/register \
@@ -61,9 +77,8 @@ curl -X POST http://localhost:8088/api/auth/register \
   -d '{"email":"you@example.com","password":"at-least-8-chars"}'
 ```
 
-Then sign in with the same email and password. The automated test suites
-(`make test`, `make test-race`, `make test-web`) need no account at all — they
-mock the API.
+The automated test suites (`make test`, `make test-race`, `make test-web`) need
+no account at all — they mock the API.
 
 ## 3. Install the agent on a Linux machine
 

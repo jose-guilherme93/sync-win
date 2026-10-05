@@ -64,7 +64,7 @@ The one-line installer prints numbered progress steps and verifies the connectio
 
 The web frontend is a Svelte 5 + TypeScript 6 + Vite 8 application that shows devices online/offline, last sync information, live hardware telemetry charts, installed packages, and synchronized preference files. Features include:
 
-- Account-first auth (sign in / create account)
+- Account-first auth (sign in; public registration is disabled by default and the first account is bootstrapped from `SYNCWIN_ADMIN_EMAIL`/`SYNCWIN_ADMIN_PASSWORD`)
 - Device grid with status badges and save counts
 - Real-time CPU/memory/network sparklines on device cards (lightweight canvas)
 - Device detail modal with tabs: System, Files, Packages, Saves, Notes, Docker
@@ -85,12 +85,13 @@ In production the server serves the built dashboard itself from `SYNCWIN_WEB_DIR
 make prod
 ```
 
-The production stack builds the image and starts the server at `http://localhost:8080` with persistent data in the `sync-win-data` Docker volume (set `SYNCWIN_DATA_PATH=./data` for a host bind mount). Open the dashboard, create an account, and install the agent on your Linux devices.
+The production stack builds the image and starts the server at `http://localhost:8080` with persistent data in the `sync-win-data` Docker volume (set `SYNCWIN_DATA_PATH=./data` for a host bind mount). Public registration is disabled by default; set `SYNCWIN_ADMIN_EMAIL` and `SYNCWIN_ADMIN_PASSWORD` in `.env` to create the first account, then sign in and install the agent on your Linux devices.
 
 Before the first production run, create the environment file with a generated secret:
 
 ```bash
 make env      # creates .env from .env.example and fills SYNCWIN_SECRET_KEY
+# then set SYNCWIN_ADMIN_EMAIL and SYNCWIN_ADMIN_PASSWORD in .env
 make prod
 ```
 

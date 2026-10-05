@@ -52,9 +52,24 @@ Health check endpoint. No authentication required.
 
 ## Authentication
 
+### `GET /api/auth/config`
+
+Public (unauthenticated) auth configuration the dashboard reads before sign-in.
+No credentials required.
+
+**Response:** `200 OK`
+```json
+{
+  "registration_enabled": false
+}
+```
+
 ### `POST /api/auth/register`
 
-Register a new user account.
+Register a new user account. **Disabled by default**: unless
+`SYNCWIN_ENABLE_REGISTRATION=true`, the server responds `403` and no account is
+created. The first account is normally bootstrapped from
+`SYNCWIN_ADMIN_EMAIL`/`SYNCWIN_ADMIN_PASSWORD` on startup instead.
 
 **Request:**
 ```json

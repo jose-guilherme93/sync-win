@@ -141,6 +141,7 @@
   let email = ''
   let password = ''
   let authMode: 'login' | 'register' = 'login'
+  let registrationEnabled = false
   let authError = ''
   let sessionExpired = false
   let accountEmail = ''
@@ -269,6 +270,20 @@
 
   function setStatusFilter(next: StatusFilter) {
     statusFilter = statusFilter === next ? 'all' : next
+  }
+
+  // Public self-registration is disabled by default on the server. The auth
+  // gate only offers "Create account" when the server explicitly allows it.
+  async function loadAuthConfig() {
+    try {
+      const response = await apiFetch(apiURL('/api/auth/config'))
+      if (!response.ok) return
+      const payload = await response.json()
+      registrationEnabled = Boolean(payload.registration_enabled)
+      if (!registrationEnabled) authMode = 'login'
+    } catch {
+      // Fail closed: keep registration hidden if the config cannot be read.
+    }
   }
 
   // The dashboard is account-first: every device belongs to the signed-in
@@ -918,6 +933,10 @@
   async function submitAuth() {
     try {
       authError = ''
+      if (authMode === 'register' && !registrationEnabled) {
+        authError = 'Registration is disabled.'
+        return
+      }
       const response = await apiFetch(apiURL(`/api/auth/${authMode}`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1453,6 +1472,7 @@
   }
 
   onMount(() => {
+    void loadAuthConfig()
     void restoreSession()
     loadNotifSound()
     schedulePoll(POLL_MS)
@@ -1508,9 +1528,11 @@
           <label>Email<input bind:value={email} type="email" autocomplete="email" placeholder="you@example.com" required /></label>
           <label>Password<input bind:value={password} type="password" autocomplete={authMode === 'login' ? 'current-password' : 'new-password'} placeholder="At least 8 characters" minlength={8} required /></label>
           <button type="submit">{authMode === 'login' ? 'Sign in' : 'Create account'}</button>
-          <button type="button" class="secondary" on:click={() => (authMode = authMode === 'login' ? 'register' : 'login')}>
-            {authMode === 'login' ? 'New here? Create account' : 'Already have an account? Sign in'}
-          </button>
+          {#if registrationEnabled}
+            <button type="button" class="secondary" on:click={() => (authMode = authMode === 'login' ? 'register' : 'login')}>
+              {authMode === 'login' ? 'New here? Create account' : 'Already have an account? Sign in'}
+            </button>
+          {/if}
         </form>
       </div>
     </div>

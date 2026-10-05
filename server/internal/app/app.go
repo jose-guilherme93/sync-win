@@ -149,6 +149,7 @@ func Run() error {
 	dockerQueue := docker.NewQueue(30 * time.Second)
 	dockerBroadcaster := docker.NewBroadcaster()
 	flags := loadFeatureFlags()
+	bootstrapAdmin(dataStore, structLogger, flags.EnableRegistration)
 	server := &Server{store: dataStore, logStore: logStore, log: structLogger, aggregator: aggregator, notifier: notifier, dockerQueue: dockerQueue, dockerBroadcaster: dockerBroadcaster, streamTickets: newStreamTicketStore(), rateLimiter: newRateLimiter(), flags: flags, trustProxy: envBool("SYNCWIN_TRUST_PROXY", false)}
 
 	// Log application startup
@@ -160,12 +161,14 @@ func Run() error {
 			"legacy_install":        flags.EnableLegacyInstall,
 			"remote_mutations":      flags.EnableRemoteMutations,
 			"docker_mutations":      flags.EnableDockerMutations,
+			"registration":          flags.EnableRegistration,
 		})
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", server.handleHealth)
 	mux.HandleFunc("/api/auth/register", server.handleAuthRegister)
 	mux.HandleFunc("/api/auth/login", server.handleAuthLogin)
+	mux.HandleFunc("/api/auth/config", server.handleAuthConfig)
 	mux.HandleFunc("/api/auth/me", server.handleAuthMe)
 	mux.HandleFunc("/api/auth/update-email", server.handleAuthUpdateEmail)
 	mux.HandleFunc("/api/auth/update-password", server.handleAuthUpdatePassword)
@@ -457,9 +460,44 @@ func readAgentVersion() string {
 	return "0.5.0"
 }
 
+// bootstrapAdmin creates the initial account from SYNCWIN_ADMIN_EMAIL and
+// SYNCWIN_ADMIN_PASSWORD when both are set. Public registration is disabled by
+// default, so this is how the first account comes to exist. An existing account
+// is never modified, so a password changed in the dashboard is preserved.
+func bootstrapAdmin(st *store.Store, logger *logging.Logger, registrationEnabled bool) {
+	email := strings.TrimSpace(os.Getenv("SYNCWIN_ADMIN_EMAIL"))
+	password := os.Getenv("SYNCWIN_ADMIN_PASSWORD")
+	if email == "" && password == "" {
+		if !registrationEnabled {
+			if count, err := st.CountUsers(); err == nil && count == 0 {
+				logger.Warn(logging.CatSecurity, logging.EventAppStarted,
+					"no accounts exist and registration is disabled; set SYNCWIN_ADMIN_EMAIL and SYNCWIN_ADMIN_PASSWORD (or enable SYNCWIN_ENABLE_REGISTRATION)", nil)
+			}
+		}
+		return
+	}
+	if email == "" || password == "" {
+		logger.Warn(logging.CatAuth, logging.EventAuthFailed,
+			"SYNCWIN_ADMIN_EMAIL and SYNCWIN_ADMIN_PASSWORD must both be set; skipping admin bootstrap", nil)
+		return
+	}
+	user, created, err := st.EnsureAdminUser(email, password)
+	if err != nil {
+		logger.Warn(logging.CatAuth, logging.EventAuthFailed, "admin bootstrap failed", map[string]any{"error": err.Error()})
+		return
+	}
+	if created {
+		logger.Audit(logging.CatAuth, logging.EventAuthSuccess, "admin account created", map[string]any{"user_id": user.ID, "email": user.Email})
+	}
+}
+
 func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.flags.EnableRegistration {
+		s.writeError(w, http.StatusForbidden, errors.New("registration is disabled"))
 		return
 	}
 	if !s.allowRate(w, r, "auth-register", 10, time.Minute) {
@@ -477,6 +515,17 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	s.log.Audit(logging.CatAuth, logging.EventAuthSuccess, "user registered", map[string]any{"user_id": user.ID, "email": req.Email})
 	s.writeAuth(w, r, user)
+}
+
+// handleAuthConfig exposes the public (unauthenticated) auth configuration the
+// dashboard needs before sign-in, currently whether self-registration is open.
+func (s *Server) handleAuthConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{"registration_enabled": s.flags.EnableRegistration})
 }
 
 func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {

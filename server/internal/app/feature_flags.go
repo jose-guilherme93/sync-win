@@ -13,6 +13,7 @@ type featureFlags struct {
 	EnableLegacyInstall        bool
 	EnableRemoteMutations      bool
 	EnableDockerMutations      bool
+	EnableRegistration         bool
 }
 
 func loadFeatureFlags() featureFlags {
@@ -21,6 +22,7 @@ func loadFeatureFlags() featureFlags {
 		EnableLegacyInstall:        envBool("SYNCWIN_ENABLE_LEGACY_INSTALL", false),
 		EnableRemoteMutations:      envBool("SYNCWIN_ENABLE_REMOTE_MUTATIONS", false),
 		EnableDockerMutations:      envBool("SYNCWIN_ENABLE_DOCKER_MUTATIONS", false),
+		EnableRegistration:         envBool("SYNCWIN_ENABLE_REGISTRATION", false),
 	}
 }
 
