@@ -2,41 +2,43 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "LEM: Gerar protótipo OpenPencil",
-      "detail": "Regera o protótipo visual completo do LEM.",
+      "label": "SyncWin: Iniciar interface",
+      "detail": "Inicia a API e a interface Svelte; abra http://localhost:5173 no navegador.",
       "type": "shell",
-      "command": "bash prototypes/openpencil/build.sh",
+      "command": "make dev-d DEV_HTTP_PORT=18080",
       "options": {
-        "cwd": "${workspaceFolder}/linux-environment-manager"
+        "cwd": "${workspaceFolder}"
       },
       "problemMatcher": [],
       "presentation": {
         "reveal": "always",
         "panel": "dedicated",
         "clear": true
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
       }
     },
     {
-      "label": "LEM: Iniciar interface",
-      "detail": "Inicia a API e a interface Svelte para comparação.",
+      "label": "SyncWin: Ver logs da interface",
       "type": "shell",
-      "command": "make dev-d LEM_HTTP_PORT=18080",
+      "command": "make dev-logs",
       "options": {
-        "cwd": "${workspaceFolder}/linux-environment-manager"
+        "cwd": "${workspaceFolder}"
       },
       "problemMatcher": [],
       "presentation": {
         "reveal": "always",
-        "panel": "dedicated",
-        "clear": true
+        "panel": "dedicated"
       }
     },
     {
-      "label": "LEM: Parar interface",
+      "label": "SyncWin: Parar interface",
       "type": "shell",
       "command": "make dev-down",
       "options": {
-        "cwd": "${workspaceFolder}/linux-environment-manager"
+        "cwd": "${workspaceFolder}"
       },
       "problemMatcher": [],
       "presentation": {

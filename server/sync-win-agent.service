@@ -1,0 +1,31 @@
+[Unit]
+Description=SyncWin Linux Agent
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/sync-win-agent daemon --server {{SERVER_URL}} --device-id {{DEVICE_ID}} --device-token {{DEVICE_TOKEN}}
+Restart=always
+RestartSec=5
+
+User=sync-win
+Group=sync-win
+SupplementaryGroups=docker
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=no
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+ReadWritePaths=/var/lib/sync-win /var/log/sync-win /etc/sync-win /var/run/docker.sock
+
+[Install]
+WantedBy=multi-user.target

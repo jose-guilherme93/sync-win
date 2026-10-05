@@ -1,0 +1,31 @@
+services:
+  server:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.server
+      network: host
+    init: true
+    ports:
+      - "8080:8080"
+    environment:
+      SYNCWIN_ENV: development
+      SYNCWIN_SECRET_KEY: "${SYNCWIN_SECRET_KEY:-dev-insecure-key-not-for-production}"
+      # Dashboard session lifetime. Default 720h = 30 days.
+      SYNCWIN_SESSION_TTL_HOURS: "${SYNCWIN_SESSION_TTL_HOURS:-720}"
+      SYNCWIN_ENABLE_FINGERPRINT_RECONNECT: "${SYNCWIN_ENABLE_FINGERPRINT_RECONNECT:-false}"
+      SYNCWIN_ENABLE_LEGACY_INSTALL: "${SYNCWIN_ENABLE_LEGACY_INSTALL:-false}"
+      SYNCWIN_ENABLE_REMOTE_MUTATIONS: "${SYNCWIN_ENABLE_REMOTE_MUTATIONS:-false}"
+      SYNCWIN_ENABLE_DOCKER_MUTATIONS: "${SYNCWIN_ENABLE_DOCKER_MUTATIONS:-false}"
+      SYNCWIN_CORS_ALLOWED_ORIGIN: "${SYNCWIN_CORS_ALLOWED_ORIGIN:-}"
+      SYNCWIN_HTTPS: "false"
+      LOG_CONSOLE_LEVEL: INFO
+    volumes:
+      - ./data:/data
+    working_dir: /app
+    command: ["/app/server"]
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3

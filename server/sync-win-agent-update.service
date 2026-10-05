@@ -1,0 +1,8 @@
+[Unit]
+Description=SyncWin Agent automatic update
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart={{AGENT_BINARY}} update --server {{SERVER_URL}} --service {{SERVICE_NAME}}{{USER_FLAG}}

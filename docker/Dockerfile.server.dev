@@ -1,0 +1,31 @@
+# Development image for the SyncWin server.
+# Source is bind-mounted at /src/server by compose.dev.yaml, so the runtime
+# stage only prepares the toolchain and installs; air rebuilds the server.
+FROM golang:1.25-alpine AS agent-build
+WORKDIR /src
+COPY agent/go.mod ./
+RUN go mod download
+COPY agent ./agent
+RUN cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/sync-win-agent ./cmd/agent
+
+FROM golang:1.25-alpine
+
+RUN apk add --no-cache git curl tzdata
+# Pinned to a release that builds with the Go toolchain in this image.
+RUN go install github.com/air-verse/air@v1.61.7
+
+WORKDIR /src/server
+COPY server/go.mod server/go.sum ./
+RUN go mod download
+
+# These files are served by the development install endpoint.
+COPY --from=agent-build /out/sync-win-agent /app/sync-win-agent
+COPY scripts/install.sh /app/install.sh
+COPY server/sync-win-agent.service /app/sync-win-agent.service
+COPY server/sync-win-agent-update.service /app/sync-win-agent-update.service
+COPY server/sync-win-agent-update.timer /app/sync-win-agent-update.timer
+RUN sha256sum /app/sync-win-agent | awk '{print $1 "  sync-win-agent"}' > /app/checksums.txt
+
+EXPOSE 8080
+
+CMD ["air", "-c", ".air.toml"]
