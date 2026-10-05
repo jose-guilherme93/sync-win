@@ -31,4 +31,24 @@ describe('telemetry cache', () => {
 
     expect(await getCachedHistory('dev-3', 'auto', 'from-b', 'to-b')).toBeNull()
   })
+
+  it('recovers after a transient IndexedDB open failure', async () => {
+    const real = globalThis.indexedDB
+    const failing = {
+      open: () => {
+        const req: { onerror?: () => void; onsuccess?: () => void; onupgradeneeded?: () => void } = {}
+        queueMicrotask(() => req.onerror?.())
+        return req
+      }
+    }
+    vi.stubGlobal('indexedDB', failing)
+    vi.resetModules()
+    const mod = await import('./telemetry-cache')
+    expect(await mod.getCachedHistory('d', 'auto', 'f', 't')).toBeNull()
+
+    // The failed promise must not be cached: a later call succeeds.
+    vi.stubGlobal('indexedDB', real)
+    await mod.setCachedHistory('d', 'auto', 'f', 't', [{ x: 1 }])
+    expect(await mod.getCachedHistory('d', 'auto', 'f', 't')).toEqual([{ x: 1 }])
+  })
 })

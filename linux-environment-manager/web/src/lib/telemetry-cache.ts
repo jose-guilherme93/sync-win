@@ -35,7 +35,12 @@ function openDB(): Promise<IDBDatabase> {
       }
     }
     req.onsuccess = () => resolve(req.result)
-    req.onerror = () => reject(req.error)
+    req.onerror = () => {
+      // Do not cache a rejected promise forever: a transient IndexedDB failure
+      // would otherwise disable the cache for the rest of the session.
+      dbPromise = null
+      reject(req.error)
+    }
   })
   return dbPromise
 }

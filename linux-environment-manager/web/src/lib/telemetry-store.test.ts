@@ -48,4 +48,15 @@ describe('telemetry store', () => {
     expect(merged.at(-1)?.cpu).toBe(42)
     expect(merged.at(-1)?.timestamp).toBe(liveTs)
   })
+
+  it('resetTelemetry clears every device so a new session starts empty', async () => {
+    const mod = await import('./telemetry-store')
+    mod.addTelemetryPoint('dev-a', { cpu_usage_percent: 10 })
+    mod.addTelemetryPoint('dev-b', { cpu_usage_percent: 20 })
+
+    mod.resetTelemetry()
+
+    expect(get(mod.deviceHistoryStore('dev-a'))).toEqual([])
+    expect(get(mod.deviceHistoryStore('dev-b'))).toEqual([])
+  })
 })

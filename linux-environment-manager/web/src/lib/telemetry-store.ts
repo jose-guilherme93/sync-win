@@ -60,6 +60,12 @@ export function setHistoryFromAPI(deviceId: string, points: ChartPoint[]) {
   })
 }
 
+// resetTelemetry clears all live telemetry. Used on sign-out so one account's
+// charts never bleed into the next session on the same browser.
+export function resetTelemetry() {
+  store.set(new Map())
+}
+
 export function deviceHistoryStore(deviceId: string): Readable<ChartPoint[]> {
   return derived(store, ($map) => $map.get(deviceId) || [])
 }

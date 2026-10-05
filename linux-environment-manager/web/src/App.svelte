@@ -5,7 +5,7 @@
   import Sparkline from './components/Sparkline.svelte'
   import NotificationsModal from './components/NotificationsModal.svelte'
   import NotificationToast from './components/NotificationToast.svelte'
-  import { addTelemetryPoint } from './lib/telemetry-store'
+  import { addTelemetryPoint, resetTelemetry } from './lib/telemetry-store'
   import { apiFetch, apiURL, serverBase } from './lib/api'
 
   type Device = {
@@ -314,6 +314,7 @@
         accountEmail = ''
         devices = []
         lastDevicesJson = ''
+        resetAccountState()
         sessionExpired = true
       }
     } catch {
@@ -346,8 +347,13 @@
       notifSSE.onmessage = (ev) => {
         try {
           const event = JSON.parse(ev.data)
-          if (event && event.id && !notifEvents.some(e => e.id === event.id)) {
-            notifEvents = [...notifEvents, event]
+          if (event && event.id) {
+            // Advance the cursor too, otherwise the next inbox poll re-fetches
+            // and re-appends events that already arrived over SSE.
+            if (event.id > lastNotifId) lastNotifId = event.id
+            if (!notifEvents.some(e => e.id === event.id)) {
+              notifEvents = [...notifEvents, event]
+            }
           }
         } catch {}
       }
@@ -672,7 +678,9 @@
       if (Array.isArray(events) && events.length > 0) {
         for (const e of events) {
           if (e.id > lastNotifId) lastNotifId = e.id
-          if (!e.read) notifEvents = [...notifEvents, e]
+          if (!e.read && !notifEvents.some(existing => existing.id === e.id)) {
+            notifEvents = [...notifEvents, e]
+          }
         }
       }
     } catch {}
@@ -938,6 +946,24 @@
     }
   }
 
+  // resetAccountState clears everything derived from the signed-in account so a
+  // different account on the same browser never sees the previous one's
+  // notifications, cached panels or telemetry.
+  function resetAccountState() {
+    notifEvents = []
+    lastNotifId = 0
+    deviceDetails = {}
+    filesByDevice = {}
+    appsByDevice = {}
+    savesByDevice = {}
+    activeTab = {}
+    appsLoadedAt = {}
+    expandedGroups = {}
+    selectedDeviceId = ''
+    deviceModalOpen = false
+    resetTelemetry()
+  }
+
   function signOut() {
     void apiFetch(apiURL(`/api/auth/logout`), { method: 'POST', headers: ownerHeaders }).catch(() => {})
     clearAccountStorage()
@@ -946,12 +972,10 @@
     accountEmail = ''
     ownerIdentity = ''
     devices = []
-    filesByDevice = {}
-    appsByDevice = {}
-    selectedDeviceId = ''
     lastDevicesJson = ''
     error = ''
     loading = false
+    resetAccountState()
     notify('Signed out.')
   }
 

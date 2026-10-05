@@ -178,7 +178,9 @@
           image: c.image,
           state: c.state,
           status: c.status || '',
-          created_at: c.created_at || 0
+          created_at: c.created_at || 0,
+          ports: c.ports || [],
+          mounts: c.mounts || []
         }))
         dockerAvailable = state.available !== false
         dockerInfo = state.info || null
