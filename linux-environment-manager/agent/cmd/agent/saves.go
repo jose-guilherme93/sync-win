@@ -187,7 +187,7 @@ func pruneSaveHashes(st *agentState, keep map[string]string) {
 	}
 }
 
-func restoreSaves(raw string) (int, error) {
+func restoreSaves(raw string, allowedPrefixes []string) (int, error) {
 	if strings.TrimSpace(raw) == "" {
 		return 0, fmt.Errorf("restore payload is empty")
 	}
@@ -206,6 +206,14 @@ func restoreSaves(raw string) (int, error) {
 	seen := make(map[string]bool, len(payload.Files))
 	var total int64
 	for _, file := range payload.Files {
+		// Confinement is checked before writing: a restore may only target the
+		// configured save roots. This stops a compromised server from
+		// overwriting shell startup files, the agent's own policy/allowlist, or
+		// SSH material even when allow_restore_saves is enabled.
+		rel := filepath.ToSlash(filepath.Clean(filepath.FromSlash(file.RelativePath)))
+		if !restorePathAllowed(rel, allowedPrefixes) {
+			return 0, fmt.Errorf("restore path is outside the configured save roots: %s", file.RelativePath)
+		}
 		path, err := safeRestorePath(home, file.RelativePath)
 		if err != nil {
 			return 0, err
@@ -243,6 +251,86 @@ func restoreSaves(raw string) (int, error) {
 		}
 	}
 	return len(prepared), nil
+}
+
+// fetchSaveExtraDirs loads the operator-configured extra save directories from
+// the server so restore can allow them in addition to the contract roots.
+func fetchSaveExtraDirs(serverURL, deviceID, deviceToken string) ([]string, error) {
+	status, body, err := getJSON(serverURL+"/api/devices/"+deviceID+"/sync-config", deviceToken)
+	if err != nil {
+		return nil, fmt.Errorf("read save sync config: %w", err)
+	}
+	if status >= 400 {
+		return nil, fmt.Errorf("save sync config returned %d", status)
+	}
+	var config saveConfigResponse
+	if err := json.Unmarshal(body, &config); err != nil {
+		return nil, fmt.Errorf("decode save sync config: %w", err)
+	}
+	return config.ExtraDirs, nil
+}
+
+// allowedRestorePrefixes returns the home-relative prefixes a restore may
+// target: every contract save root (up to its first glob metacharacter) plus
+// the operator-configured extra directories.
+func allowedRestorePrefixes(extraDirs []string, home string) []string {
+	patterns := append(append([]string(nil), lemContract.Collection.Saves.Roots...), extraDirs...)
+	prefixes := make([]string, 0, len(patterns))
+	for _, pattern := range patterns {
+		if prefix := homeRelativePrefix(home, pattern); prefix != "" {
+			prefixes = append(prefixes, prefix)
+		}
+	}
+	return prefixes
+}
+
+// homeRelativePrefix expands a save-root pattern and returns its home-relative
+// prefix up to the first glob metacharacter. Patterns outside the home are
+// ignored ("").
+func homeRelativePrefix(home, pattern string) string {
+	expanded := filepath.Clean(contract.ExpandPath(pattern))
+	rel, err := filepath.Rel(home, expanded)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	slash := filepath.ToSlash(rel)
+	if idx := strings.IndexAny(slash, "*?["); idx >= 0 {
+		slash = slash[:idx]
+	}
+	return strings.TrimRight(slash, "/")
+}
+
+// deniedRestorePrefixes are refused even if a save root would otherwise match,
+// as defense in depth against path confusion.
+var deniedRestorePrefixes = []string{
+	".config/lem",
+	".ssh",
+	".config/autostart",
+	".config/systemd",
+	".local/state/lem",
+	".local/bin",
+	".bashrc",
+	".bash_profile",
+	".profile",
+	".zshrc",
+}
+
+// restorePathAllowed reports whether a home-relative path may be restored.
+func restorePathAllowed(rel string, prefixes []string) bool {
+	for _, denied := range deniedRestorePrefixes {
+		if rel == denied || strings.HasPrefix(rel, denied+"/") {
+			return false
+		}
+	}
+	for _, prefix := range prefixes {
+		if prefix == "" {
+			continue
+		}
+		if rel == prefix || strings.HasPrefix(rel, prefix+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func safeRestorePath(home, relative string) (string, error) {

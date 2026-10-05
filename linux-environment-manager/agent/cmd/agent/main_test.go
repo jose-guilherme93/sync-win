@@ -413,6 +413,43 @@ func TestPreferencePathsHonorsExtraAllowlist(t *testing.T) {
 	}
 }
 
+func TestPreferencePathsHonorsExcludeList(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	allowDir := filepath.Join(home, ".config", "lem")
+	if err := os.MkdirAll(allowDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	allowed := filepath.Join(home, "custom-pref.conf")
+	if err := os.WriteFile(allowed, []byte("key=value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(allowDir, "allowed-files"), []byte("custom-pref.conf\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Seed the excluded list directly: the file must not be collected.
+	if err := os.WriteFile(filepath.Join(allowDir, "excluded-files"), []byte("custom-pref.conf\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range preferencePaths() {
+		if path == allowed {
+			t.Fatal("excluded file was still collected")
+		}
+	}
+	// And the exclude_file command must persist to the same list read above.
+	if err := os.Remove(filepath.Join(allowDir, "excluded-files")); err != nil {
+		t.Fatal(err)
+	}
+	if err := excludeFile("custom-pref.conf"); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range preferencePaths() {
+		if path == allowed {
+			t.Fatal("exclude_file did not filter collection")
+		}
+	}
+}
+
 func TestSendAppInventorySendsEmptyArray(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))

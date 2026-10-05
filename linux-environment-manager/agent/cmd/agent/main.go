@@ -785,7 +785,7 @@ func processCommands(serverURL, deviceID, deviceToken string) error {
 	}
 
 	for _, cmd := range commands {
-		result := executeCommand(cmd)
+		result := executeCommand(cmd, serverURL, deviceID, deviceToken)
 		resultURL := serverURL + "/api/devices/" + deviceID + "/commands/" + cmd.ID
 		if err := postJSON(resultURL, deviceToken, map[string]string{
 			"device_token": deviceToken,
@@ -810,7 +810,7 @@ func executeCommand(cmd struct {
 	Name    string `json:"name"`
 	Source  string `json:"source"`
 	Payload string `json:"payload"`
-}) commandResult {
+}, serverURL, deviceID, deviceToken string) commandResult {
 	policy := loadLocalPolicy()
 	switch cmd.Type {
 	case "exclude_file":
@@ -825,7 +825,12 @@ func executeCommand(cmd struct {
 		if !policy.AllowRestoreSaves {
 			return commandResult{"failed", "command disabled by local policy"}
 		}
-		count, err := restoreSaves(cmd.Payload)
+		extraDirs, err := fetchSaveExtraDirs(serverURL, deviceID, deviceToken)
+		if err != nil {
+			return commandResult{"failed", err.Error()}
+		}
+		prefixes := allowedRestorePrefixes(extraDirs, agentHome())
+		count, err := restoreSaves(cmd.Payload, prefixes)
 		if err != nil {
 			return commandResult{"failed", err.Error()}
 		}
@@ -1877,7 +1882,7 @@ func runCommandWithLimits(name string, args []string, timeout time.Duration) (st
 
 // exclusionsPath returns the path to the excluded files list.
 func exclusionsPath() string {
-	return contract.ExpandPath("~/.config/lem/excluded-files")
+	return contract.ExpandPath(lemContract.Collection.ExcludedFilesPath)
 }
 
 // excludeFile adds a path to the excluded files list.
@@ -2068,6 +2073,7 @@ func preferencePaths() []string {
 		}
 	}
 
+	excluded := excludedPreferencePaths(home)
 	paths := make([]string, 0, len(candidates))
 	seen := make(map[string]bool)
 	for _, candidate := range candidates {
@@ -2079,10 +2085,48 @@ func preferencePaths() []string {
 		if !safePreferencePath(home, path) || seen[path] {
 			continue
 		}
+		// Honor the excluded-files list written by the exclude_file command.
+		// Without this the command reported success while the file kept syncing.
+		if preferenceExcluded(relativeToHome(home, path), excluded) {
+			continue
+		}
 		seen[path] = true
 		paths = append(paths, path)
 	}
 	return paths
+}
+
+// excludedPreferencePaths reads the excluded-files list. Entries are
+// home-relative and match either a file exactly or a directory prefix.
+func excludedPreferencePaths(home string) []string {
+	data, err := os.ReadFile(contract.ExpandPath(lemContract.Collection.ExcludedFilesPath))
+	if err != nil {
+		return nil
+	}
+	entries := make([]string, 0)
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		entries = append(entries, filepath.ToSlash(filepath.Clean(line)))
+	}
+	return entries
+}
+
+func preferenceExcluded(rel string, excluded []string) bool {
+	if rel == "" || rel == "." {
+		return false
+	}
+	for _, entry := range excluded {
+		if entry == "" || entry == "." {
+			continue
+		}
+		if rel == entry || strings.HasPrefix(rel, entry+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func syncPreferences(serverURL, deviceID, deviceToken string, st *agentState) error {
