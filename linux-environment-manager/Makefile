@@ -25,6 +25,11 @@ DEV   := $(COMPOSE) -f $(DEV_FILE)
 PROD  := $(COMPOSE) -f $(PROD_FILE)
 LOCAL := $(COMPOSE) -f $(LOCAL_FILE)
 
+# Local demo account for manual testing. There is no default/seeded login in
+# the product: create one with `make dev-account` (dev stack must be running).
+DEMO_EMAIL    ?= demo@lem.local
+DEMO_PASSWORD ?= lem-demo-password
+
 # Keep the agent version in sync with the collection contract.
 AGENT_VERSION := $(shell jq -r '.agent_version // empty' agent/internal/contract/contract.json 2>/dev/null)
 export LEM_AGENT_VERSION ?= $(if $(AGENT_VERSION),$(AGENT_VERSION),0.6.1)
@@ -69,6 +74,7 @@ help: ## Show this help
 	@printf "\n$(C)Utilities$(N)\n"
 	@printf "  $(G)%-16s$(N) %s\n" "env"        "Create .env from .env.example with a generated secret"
 	@printf "  $(G)%-16s$(N) %s\n" "secret"     "Print a fresh LEM_SECRET_KEY"
+	@printf "  $(G)%-16s$(N) %s\n" "dev-account" "Create a local demo account (no default login exists)"
 	@printf "  $(G)%-16s$(N) %s\n" "clean"      "Remove build artifacts"
 	@printf "  $(G)%-16s$(N) %s\n" "clean-dev"  "Remove dev data and volumes"
 	@printf "\nAgent version: $(G)$(LEM_AGENT_VERSION)$(N)\n"
@@ -220,6 +226,15 @@ env: ## Create .env from .env.example with a generated secret
 .PHONY: secret
 secret: ## Print a fresh LEM_SECRET_KEY
 	@openssl rand -hex 32
+
+.PHONY: dev-account
+dev-account: ## Create a local demo account on the running dev stack (there is no default login)
+	@printf "$(C)Creating demo account $(DEMO_EMAIL) on http://localhost:%s$(N)\n" "$${DEV_HTTP_PORT:-8088}"
+	@curl -fsS -X POST "http://localhost:$${DEV_HTTP_PORT:-8088}/api/auth/register" \
+		-H 'Content-Type: application/json' \
+		-d "{\"email\":\"$(DEMO_EMAIL)\",\"password\":\"$(DEMO_PASSWORD)\"}" > /dev/null \
+		&& printf "$(G)OK$(N) — sign in with $(G)$(DEMO_EMAIL)$(N) / $(G)$(DEMO_PASSWORD)$(N)\n" \
+		|| { printf "$(Y)Failed.$(N) Is the dev stack running ('make dev-d')? The account may already exist.\n"; exit 1; }
 
 .PHONY: clean
 clean: ## Remove build artifacts

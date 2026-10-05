@@ -29,13 +29,41 @@ Run `make help` for the full target list.
 
 ## 2. Create an account
 
-Open `http://localhost:8080` in your browser. You will see the sign in / create account screen.
+There is **no default or seeded login**, and `.env` contains no credentials — it
+only holds server secrets such as `LEM_SECRET_KEY`. Accounts are created at
+runtime and stored in SQLite (`./data/lem.db` in production, `./data-dev/lem.db`
+in development). The password must be at least 8 characters.
+
+### In the browser
+
+Open `http://localhost:8080` (production) or `http://localhost:5173`
+(development). You will see the sign in / create account screen.
 
 1. Click **Create account**
 2. Enter your email and password
 3. Click **Register**
 
 You are now logged in and on the main dashboard (empty, since no devices are enrolled yet).
+
+### From the command line (development)
+
+With the dev stack running (`make dev` or `make dev-d`):
+
+```bash
+make dev-account   # creates demo@lem.local / lem-demo-password on :8088
+```
+
+Or register through the API directly:
+
+```bash
+curl -X POST http://localhost:8088/api/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"you@example.com","password":"at-least-8-chars"}'
+```
+
+Then sign in with the same email and password. The automated test suites
+(`make test`, `make test-race`, `make test-web`) need no account at all — they
+mock the API.
 
 ## 3. Install the agent on a Linux machine
 
