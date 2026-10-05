@@ -47,6 +47,7 @@ export type HardwareStats = {
   docker_info?: DockerInfo
   docker_containers?: DockerContainer[]
   lynis_available?: boolean
+  lynis_install_cmd?: string
   operating_system?: string
   kernel_version?: string
 }

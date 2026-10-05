@@ -1,9 +1,8 @@
 <script lang="ts">
-  import type { AppInfo, Device } from '../../lib/types'
+  import type { AppInfo } from '../../lib/types'
   import EmptyState from '../ui/EmptyState.svelte'
   import Skeleton from '../ui/Skeleton.svelte'
 
-  export let device: Device
   export let apps: AppInfo[] = []
   export let loading = false
 
@@ -79,7 +78,7 @@
     <EmptyState
       icon="⬆"
       title="Not collected yet"
-      message="Checking for available updates requires running the package manager, which the agent does not do. A /api/devices/{id}/updates endpoint is needed before this list can be filled."
+      message="Checking for available updates requires running the package manager, which the agent does not do. A GET /api/devices/&#123;id&#125;/updates endpoint is needed before this list can be filled."
     />
   </article>
 </section>

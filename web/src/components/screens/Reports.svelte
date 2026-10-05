@@ -57,12 +57,14 @@
       {:else}
         <ul class="list">
           {#each totals.disks as item (item.device.id + item.part.mount)}
-            <li on:click={() => onSelect(item.device.id)}>
-              <span class="mono mount">{item.part.mount}</span>
-              <span class="host">{deviceLabel(item.device)}</span>
-              <span class="pct" class:text-warn={item.part.used_percent > THRESHOLDS.diskWarn && item.part.used_percent <= THRESHOLDS.diskCrit} class:text-crit={item.part.used_percent > THRESHOLDS.diskCrit}>
-                {item.part.used_percent.toFixed(0)}%
-              </span>
+            <li>
+              <button on:click={() => onSelect(item.device.id)}>
+                <span class="mono mount">{item.part.mount}</span>
+                <span class="host">{deviceLabel(item.device)}</span>
+                <span class="pct" class:text-warn={item.part.used_percent > THRESHOLDS.diskWarn && item.part.used_percent <= THRESHOLDS.diskCrit} class:text-crit={item.part.used_percent > THRESHOLDS.diskCrit}>
+                  {item.part.used_percent.toFixed(0)}%
+                </span>
+              </button>
             </li>
           {/each}
         </ul>
@@ -76,9 +78,11 @@
       {:else}
         <ul class="list">
           {#each longestUp as row (row.device.id)}
-            <li on:click={() => onSelect(row.device.id)}>
-              <span class="host">{deviceLabel(row.device)}</span>
-              <span class="mono">{formatDuration(row.device.hardware!.uptime_seconds)}</span>
+            <li>
+              <button on:click={() => onSelect(row.device.id)}>
+                <span class="host">{deviceLabel(row.device)}</span>
+                <span class="mono">{formatDuration(row.device.hardware!.uptime_seconds)}</span>
+              </button>
             </li>
           {/each}
         </ul>
@@ -132,13 +136,14 @@
   .pad { padding: 1rem 0.9rem; }
 
   .list { list-style: none; margin: 0; padding: 0; }
-  .list li {
-    display: flex; align-items: center; gap: 0.6rem;
-    padding: 0.5rem 0.9rem; border-bottom: 1px solid var(--border);
-    font-size: 0.78rem; cursor: pointer;
-  }
+  .list li { border-bottom: 1px solid var(--border); }
   .list li:last-child { border-bottom: 0; }
-  .list li:hover { background: var(--card-hover); }
+  .list button {
+    display: flex; align-items: center; gap: 0.6rem; width: 100%;
+    padding: 0.5rem 0.9rem; border: 0; background: transparent;
+    color: inherit; font: inherit; font-size: 0.78rem; text-align: left; cursor: pointer;
+  }
+  .list button:hover { background: var(--card-hover); }
   .mount { color: var(--text); min-width: 4rem; }
   .host { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
   .pct { font-variant-numeric: tabular-nums; font-weight: 600; }

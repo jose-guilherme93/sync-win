@@ -19,70 +19,9 @@
   import RemoteActions from './components/screens/RemoteActions.svelte'
   import DeviceSettings from './components/screens/DeviceSettings.svelte'
   import { nav, type Section } from './lib/router'
+  import type { AppInfo, Device, HardwareStats } from './lib/types'
   import { generateInsights } from './lib/insights'
 
-  type Device = {
-    id: string
-    hostname: string
-    user_id: string
-    status: string
-    last_seen_at: string
-    last_sync_at: string
-    created_at?: string
-    hardware?: HardwareStats
-    apps?: AppInfo[]
-    app_count: number
-    preference_count: number
-    saves_count: number
-    saves_size_bytes: number
-    saves_last_synced_at?: string
-    last_error?: string
-    last_error_at?: string
-  }
-
-  type AppInfo = { name: string; version: string; source: string; path?: string }
-
-  type HardwareStats = {
-    cpu_usage_percent: number
-    memory_used_bytes: number
-    memory_total_bytes: number
-    disk_read_bytes: number
-    disk_write_bytes: number
-    disk_read_rate: number
-    disk_write_rate: number
-    uptime_seconds: number
-    load_average: string
-    cpu_model: string
-    kernel_version: string
-    operating_system: string
-    power_watts: number
-    architecture?: string
-    desktop_environment?: string
-    locale?: string
-    timezone?: string
-    agent_version?: string
-    collected_at: string
-    cpu_core_usage?: number[]
-    swap_used_bytes?: number
-    swap_total_bytes?: number
-    memory_buffers_bytes?: number
-    memory_cached_bytes?: number
-    disk_partitions?: { mount: string; device: string; total_bytes: number; used_bytes: number; free_bytes: number; used_percent: number }[]
-    network_ifaces?: { name: string; rx_bytes: number; tx_bytes: number; rx_rate?: number; tx_rate?: number; rx_packets: number; tx_packets: number; rx_errors: number; tx_errors: number }[]
-    net_rx_rate?: number
-    net_tx_rate?: number
-    cpu_temperature?: number
-    gpu_temperature_celsius?: number
-    battery_percent?: number
-    battery_status?: string
-    top_cpu_processes?: { pid: number; name: string; cpu_percent: number; mem_rss_bytes: number }[]
-    top_mem_processes?: { pid: number; name: string; cpu_percent: number; mem_rss_bytes: number }[]
-    agent_cpu_usage?: number
-    agent_memory_bytes?: number
-    docker_available?: boolean
-    docker_containers?: any[]
-    docker_info?: any
-  }
 
   type PreferenceFile = {
     id: string
@@ -1573,7 +1512,9 @@
            forms). The wrapper classes are what handleClickOutside watches, so
            clicking away closes them. -->
       {#if bellOpen}
-        <div class="shell-popover bell-wrapper" on:click|stopPropagation>
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="shell-popover bell-wrapper" role="presentation" on:click|stopPropagation on:keydown|stopPropagation>
           <div class="bell-dropdown">
             <div class="bell-header">
               <span class="bell-title">Notifications</span>
@@ -1608,7 +1549,9 @@
       {/if}
 
       {#if userMenuOpen}
-        <div class="shell-popover user-menu-wrapper" on:click|stopPropagation>
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="shell-popover user-menu-wrapper" role="presentation" on:click|stopPropagation on:keydown|stopPropagation>
           <div class="user-dropdown">
             <div class="dropdown-header">
               <div class="avatar-large">{accountEmail.charAt(0).toUpperCase()}</div>
@@ -1673,9 +1616,9 @@
             {:else if navState.section === 'processes'}
               <Processes device={modalDevice} />
             {:else if navState.section === 'packages'}
-              <Packages device={modalDevice} apps={deviceDetails[modalDevice.id]?.apps || modalDevice.apps || []} />
+              <Packages apps={deviceDetails[modalDevice.id]?.apps || modalDevice.apps || []} />
             {:else if navState.section === 'services'}
-              <Services device={modalDevice} />
+              <Services />
             {:else if navState.section === 'remote'}
               <RemoteActions device={modalDevice} />
             {:else if navState.section === 'settings'}

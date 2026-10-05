@@ -13,62 +13,17 @@
   } from 'chart.js'
   import { setHistoryFromAPI, addTelemetryPoint, deviceHistoryStore, type ChartPoint } from '../lib/telemetry-store'
   import { apiFetch, apiURL, serverBase } from '../lib/api'
+  import type { Device as SharedDevice, HardwareStats as SharedHardwareStats } from '../lib/types'
 
   Chart.register(LineController, LineElement, PointElement, LinearScale, CategoryScale, Filler, Tooltip, Legend)
 
-  type DiskPartition = { mount: string; device: string; total_bytes: number; used_bytes: number; free_bytes: number; used_percent: number }
-  type NetworkIFace = { name: string; rx_bytes: number; tx_bytes: number; rx_rate?: number; tx_rate?: number; rx_packets: number; tx_packets: number; rx_errors: number; tx_errors: number }
-  type ProcessInfo = { pid: number; name: string; cpu_percent: number; mem_rss_bytes: number }
   type DeviceLog = { timestamp: string; level: string; source: string; message: string }
 
-  type HardwareStats = {
-    cpu_usage_percent: number
-    memory_used_bytes: number
-    memory_total_bytes: number
-    disk_read_bytes: number
-    disk_write_bytes: number
-    disk_read_rate: number
-    disk_write_rate: number
-    uptime_seconds: number
-    load_average: string
-    cpu_model: string
-    kernel_version: string
-    operating_system: string
-    power_watts: number
-    architecture?: string
-    desktop_environment?: string
-    locale?: string
-    timezone?: string
-    agent_version?: string
-    collected_at: string
-    cpu_core_usage?: number[]
-    swap_used_bytes?: number
-    swap_total_bytes?: number
-    memory_buffers_bytes?: number
-    memory_cached_bytes?: number
-    disk_partitions?: DiskPartition[]
-    network_ifaces?: NetworkIFace[]
-    cpu_temperature?: number
-    gpu_temperature_celsius?: number
-    battery_percent?: number
-    battery_status?: string
-    top_cpu_processes?: ProcessInfo[]
-    top_mem_processes?: ProcessInfo[]
-    agent_cpu_usage?: number
-    agent_memory_bytes?: number
-    logs?: DeviceLog[]
-  }
-
-  type Device = {
-    id: string
-    hostname: string
-    user_id: string
-    status: string
-    last_seen_at: string
-    last_sync_at: string
-    hardware?: HardwareStats
-    logs?: DeviceLog[]
-  }
+  // Shapes come from lib/types so a Device passed from the shell type-checks
+  // here. This view additionally reads the raw log array the detail payload
+  // carries, which the shared Device type does not model.
+  type HardwareStats = SharedHardwareStats & { logs?: DeviceLog[] }
+  type Device = SharedDevice & { logs?: DeviceLog[] }
 
   export let device: Device
   export let authHeaders: Record<string, string> = {}

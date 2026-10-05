@@ -61,7 +61,7 @@
   {#if !collapsed}
     <div class="devices-section">
       <p class="group-label">Devices</p>
-      <DeviceList {devices} selectedId onSelect={onSelectDevice} onAdd={onAddDevice} />
+      <DeviceList {devices} {selectedId} onSelect={onSelectDevice} onAdd={onAddDevice} />
     </div>
   {/if}
 

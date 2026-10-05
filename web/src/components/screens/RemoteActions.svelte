@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Device } from '../../lib/types'
+  import { deviceLabel, type Device } from '../../lib/types'
   import { MOCK } from '../../lib/flags'
   import { formatRelative } from '../../lib/format'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
@@ -76,6 +76,10 @@
 </script>
 
 <section class="actions">
+  <header class="screen-head">
+    <h2>Remote actions</h2>
+    <span class="target">target: {deviceLabel(device)}</span>
+  </header>
   {#if !MOCK.services}
     <div class="notice" role="status">
       These actions are not enabled: the server command queue does not yet accept
@@ -128,6 +132,9 @@
 
 <style>
   .actions { display: grid; gap: 0.85rem; }
+  .screen-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem; }
+  .screen-head h2 { margin: 0; font-size: 0.95rem; color: var(--text-bright); }
+  .target { color: var(--text-faint); font-size: 0.75rem; }
 
   .notice {
     padding: 0.6rem 0.8rem; border: 1px solid rgba(251, 191, 36, 0.35);

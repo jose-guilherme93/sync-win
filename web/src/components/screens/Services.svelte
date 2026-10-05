@@ -1,10 +1,7 @@
 <script lang="ts">
-  import type { Device } from '../../lib/types'
   import { MOCK } from '../../lib/flags'
   import EmptyState from '../ui/EmptyState.svelte'
   import SeverityBadge from '../ui/SeverityBadge.svelte'
-
-  export let device: Device
 
   type Service = { name: string; state: 'running' | 'failed' | 'stopped'; enabled: boolean; description: string }
 
@@ -66,7 +63,7 @@
       <EmptyState
         icon="⚙"
         title="Service status not collected"
-        message="The agent does not enumerate systemd units yet. This screen needs a GET /api/devices/{id}/services endpoint that runs `systemctl list-units` on the agent and returns name, state and enabled flag."
+        message="The agent does not enumerate systemd units yet. This screen needs a GET /api/devices/&#123;id&#125;/services endpoint that runs systemctl list-units on the agent and returns name, state and enabled flag."
       />
     {:else if filtered.length === 0}
       <EmptyState icon="🔍" title="No match" message="Adjust the filter." />
@@ -90,7 +87,7 @@
     <EmptyState
       icon="🔌"
       title="Not collected yet"
-      message="Listening sockets are not reported by the agent. This screen needs a GET /api/devices/{id}/ports endpoint (ss -tulpn) so the dashboard can match a port to its owning service."
+      message="Listening sockets are not reported by the agent. This screen needs a GET /api/devices/&#123;id&#125;/ports endpoint (ss -tulpn) so the dashboard can match a port to its owning service."
     />
   </article>
 </section>

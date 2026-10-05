@@ -4,6 +4,9 @@
   import DockerTab from './DockerTab.svelte'
   import SecurityTab from './SecurityTab.svelte'
   import { apiFetch, apiURL, serverBase } from '../lib/api'
+  // Shared shapes so a Device passed from the shell type-checks against this
+  // component. The fields this view reads are a subset of HardwareStats.
+  import type { Device, HardwareStats } from '../lib/types'
   import { formatRelative } from '../lib/format'
 
   type AppInfo = { name: string; version: string; source: string; path?: string }
@@ -21,65 +24,6 @@
     size_bytes: number
     synced_at: string
     status: string
-  }
-
-  type HardwareStats = {
-    cpu_usage_percent: number
-    memory_used_bytes: number
-    memory_total_bytes: number
-    disk_read_bytes: number
-    disk_write_bytes: number
-    disk_read_rate: number
-    disk_write_rate: number
-    uptime_seconds: number
-    load_average: string
-    cpu_model: string
-    kernel_version: string
-    operating_system: string
-    power_watts: number
-    collected_at: string
-    architecture?: string
-    desktop_environment?: string
-    locale?: string
-    timezone?: string
-    agent_version?: string
-    cpu_temperature?: number
-    gpu_temperature_celsius?: number
-    battery_percent?: number
-    battery_status?: string
-    agent_cpu_usage?: number
-    agent_memory_bytes?: number
-    cpu_core_usage?: number[]
-    swap_used_bytes?: number
-    swap_total_bytes?: number
-    memory_buffers_bytes?: number
-    memory_cached_bytes?: number
-    disk_partitions?: { mount: string; device: string; total_bytes: number; used_bytes: number; free_bytes: number; used_percent: number }[]
-    network_ifaces?: { name: string; rx_bytes: number; tx_bytes: number; rx_rate?: number; tx_rate?: number; rx_packets: number; tx_packets: number; rx_errors: number; tx_errors: number }[]
-    top_cpu_processes?: { pid: number; name: string; cpu_percent: number; mem_rss_bytes: number }[]
-    top_mem_processes?: { pid: number; name: string; cpu_percent: number; mem_rss_bytes: number }[]
-    docker_available?: boolean
-    docker_containers?: any[]
-    docker_info?: any
-    lynis_available?: boolean
-    lynis_install_cmd?: string
-  }
-
-  type Device = {
-    id: string
-    hostname: string
-    user_id: string
-    status: string
-    last_seen_at: string
-    last_sync_at: string
-    created_at?: string
-    hardware?: HardwareStats
-    app_count: number
-    preference_count: number
-    saves_count: number
-    saves_size_bytes: number
-    last_error?: string
-    last_error_at?: string
   }
 
   type SaveGroup = {
