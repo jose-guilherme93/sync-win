@@ -455,12 +455,14 @@ type networkIface struct {
 }
 
 type dockerContainer struct {
-	ID     string   `json:"id"`
-	Names  []string `json:"names,omitempty"`
-	Name   string   `json:"name"`
-	Image  string   `json:"image"`
-	State  string   `json:"state"`
-	Status string   `json:"status,omitempty"`
+	ID     string                   `json:"id"`
+	Names  []string                 `json:"names,omitempty"`
+	Name   string                   `json:"name"`
+	Image  string                   `json:"image"`
+	State  string                   `json:"state"`
+	Status string                   `json:"status,omitempty"`
+	Ports  []collectors.DockerPort  `json:"ports,omitempty"`
+	Mounts []collectors.DockerMount `json:"mounts,omitempty"`
 }
 
 type dockerInfo struct {
@@ -1316,6 +1318,8 @@ func collectHardwareStats(prev *hardwareSample, now time.Time) (telemetryStats, 
 						Image:  c.Image,
 						State:  c.State,
 						Status: c.Status,
+						Ports:  c.Ports,
+						Mounts: c.Mounts,
 					})
 				}
 				mu.Lock()

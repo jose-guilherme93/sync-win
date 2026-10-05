@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -59,16 +60,34 @@ func (l *rateLimiter) allow(key string, limit int, window time.Duration) bool {
 	return true
 }
 
-func requestRateKey(r *http.Request, bucket string) string {
+// clientIP returns the address used for rate limiting. X-Forwarded-For and
+// X-Real-IP are only trusted when the server is explicitly configured to sit
+// behind a trusted proxy (LEM_TRUST_PROXY), so by default a client cannot evade
+// the limiter by forging headers.
+func clientIP(r *http.Request, trustProxy bool) string {
+	if trustProxy {
+		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+			if first := strings.TrimSpace(strings.Split(forwarded, ",")[0]); first != "" {
+				return first
+			}
+		}
+		if realIP := strings.TrimSpace(r.Header.Get("X-Real-IP")); realIP != "" {
+			return realIP
+		}
+	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
 	}
-	return bucket + ":" + host
+	return host
+}
+
+func requestRateKey(r *http.Request, bucket string, trustProxy bool) string {
+	return bucket + ":" + clientIP(r, trustProxy)
 }
 
 func (s *Server) allowRate(w http.ResponseWriter, r *http.Request, bucket string, limit int, window time.Duration) bool {
-	if s.rateLimiter == nil || s.rateLimiter.allow(requestRateKey(r, bucket), limit, window) {
+	if s.rateLimiter == nil || s.rateLimiter.allow(requestRateKey(r, bucket, s.trustProxy), limit, window) {
 		return true
 	}
 	w.Header().Set("Retry-After", "60")

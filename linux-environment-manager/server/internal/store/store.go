@@ -214,11 +214,28 @@ type DeviceLog struct {
 }
 
 type DockerContainer struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Image  string `json:"image"`
-	State  string `json:"state"`
-	Status string `json:"status"`
+	ID     string        `json:"id"`
+	Name   string        `json:"name"`
+	Image  string        `json:"image"`
+	State  string        `json:"state"`
+	Status string        `json:"status"`
+	Ports  []DockerPort  `json:"ports,omitempty"`
+	Mounts []DockerMount `json:"mounts,omitempty"`
+}
+
+type DockerPort struct {
+	IP          string `json:"ip,omitempty"`
+	PrivatePort int    `json:"private_port"`
+	PublicPort  int    `json:"public_port,omitempty"`
+	Type        string `json:"type"`
+}
+
+type DockerMount struct {
+	Type        string `json:"type"`
+	Source      string `json:"source"`
+	Destination string `json:"destination"`
+	RW          bool   `json:"rw"`
+	Name        string `json:"name,omitempty"`
 }
 
 type DockerInfo struct {
@@ -1001,10 +1018,17 @@ func (s *Store) SavePreferenceBatch(deviceID string, inputs []PreferenceInput) (
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	_, err := s.getDeviceLocked(deviceID)
+	if _, err := s.getDeviceLocked(deviceID); err != nil {
+		return nil, nil, err
+	}
+
+	// One transaction per batch: a failure partway through must not leave the
+	// device with a half-applied set of files.
+	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, nil, err
 	}
+	defer tx.Rollback()
 
 	var saved []PreferenceFile
 	var rejected []PreferenceRejection
@@ -1023,7 +1047,7 @@ func (s *Store) SavePreferenceBatch(deviceID string, inputs []PreferenceInput) (
 		size := int64(len(decoded))
 		var existing PreferenceFile
 		var existingSyncedAt string
-		err = s.db.QueryRow(
+		err = tx.QueryRow(
 			"SELECT id, device_id, user_id, category, filename, relative_path, content, encoding, content_hash, size_bytes, synced_at, status FROM files WHERE device_id = ? AND category = ? AND relative_path = ? AND filename = ?",
 			deviceID, input.Category, input.RelativePath, input.Filename,
 		).Scan(&existing.ID, &existing.DeviceID, &existing.UserID, &existing.Category, &existing.Filename, &existing.RelativePath, &existing.Content, &existing.Encoding, &existing.ContentHash, &existing.SizeBytes, &existingSyncedAt, &existing.Status)
@@ -1036,7 +1060,7 @@ func (s *Store) SavePreferenceBatch(deviceID string, inputs []PreferenceInput) (
 			id = existing.ID
 		}
 		now := time.Now().UTC()
-		_, err = s.db.Exec(
+		_, err = tx.Exec(
 			`INSERT INTO files (id, device_id, user_id, category, filename, relative_path, content, encoding, content_hash, size_bytes, synced_at, status)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(device_id, category, relative_path, filename) DO UPDATE SET
@@ -1049,8 +1073,7 @@ func (s *Store) SavePreferenceBatch(deviceID string, inputs []PreferenceInput) (
 			id, deviceID, "", input.Category, input.Filename, input.RelativePath, input.Content, input.Encoding, hash, size, timeText(now), "synced",
 		)
 		if err != nil {
-			rejected = append(rejected, PreferenceRejection{Filename: input.Filename, Reason: err.Error()})
-			continue
+			return nil, nil, fmt.Errorf("store preference %s: %w", input.Filename, err)
 		}
 		saved = append(saved, PreferenceFile{
 			ID:           id,
@@ -1071,11 +1094,14 @@ func (s *Store) SavePreferenceBatch(deviceID string, inputs []PreferenceInput) (
 	// A completed sync batch marks the device as online and refreshes its
 	// last sync timestamp, even when every file was unchanged.
 	syncAt := timeText(time.Now().UTC())
-	if _, err := s.db.Exec(
+	if _, err := tx.Exec(
 		"UPDATE devices SET last_sync_at = ?, status = 'online', updated_at = ? WHERE id = ?",
 		syncAt, syncAt, deviceID,
 	); err != nil {
 		return saved, rejected, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, nil, err
 	}
 	return saved, rejected, nil
 }
@@ -1320,12 +1346,16 @@ func (s *Store) AppendTelemetryDownsampled(agg TelemetryDownsampled) error {
 	return err
 }
 
+// maxTelemetryRows bounds how many rows a single history range query can load
+// into memory, regardless of the requested window.
+const maxTelemetryRows = 5000
+
 func (s *Store) GetDownsampledRange(deviceID, resolution string, from, to time.Time) ([]TelemetryDownsampled, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	rows, err := s.db.Query(
-		"SELECT id, device_id, timestamp, resolution, cpu_avg, cpu_min, cpu_max, mem_avg, mem_min, mem_max, net_rx_avg, net_tx_avg, temp_avg, temp_max, power_avg, sample_count FROM telemetry_downsampled WHERE device_id = ? AND resolution = ? AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC",
-		deviceID, resolution, timeText(from), timeText(to),
+		"SELECT id, device_id, timestamp, resolution, cpu_avg, cpu_min, cpu_max, mem_avg, mem_min, mem_max, net_rx_avg, net_tx_avg, temp_avg, temp_max, power_avg, sample_count FROM telemetry_downsampled WHERE device_id = ? AND resolution = ? AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC LIMIT ?",
+		deviceID, resolution, timeText(from), timeText(to), maxTelemetryRows,
 	)
 	if err != nil {
 		return nil, err
@@ -1569,10 +1599,18 @@ func (s *Store) CreateUser(email, password string) (User, error) {
 	now := timeText(time.Now().UTC())
 	_, err := s.db.Exec("INSERT INTO users (id, email, password_hash, created_at) VALUES (?, ?, ?, ?)", id, email, hash, now)
 	if err != nil {
+		// Never surface the raw SQLite constraint error (it leaks internals and
+		// is an enumeration oracle).
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return User{}, ErrEmailTaken
+		}
 		return User{}, err
 	}
 	return User{ID: id, Email: email, PasswordHash: hash, CreatedAt: textTime(now)}, nil
 }
+
+// ErrEmailTaken is returned by CreateUser when the email already has an account.
+var ErrEmailTaken = errors.New("email already registered")
 
 const (
 	argonTime    = 3
@@ -2273,8 +2311,8 @@ func (s *Store) GetTelemetryHistoryRaw(deviceID string, from, to time.Time) ([]m
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	rows, err := s.db.Query(
-		"SELECT id, payload, received_at FROM telemetry_raw WHERE device_id = ? AND received_at >= ? AND received_at <= ? ORDER BY id ASC",
-		deviceID, timeText(from), timeText(to),
+		"SELECT id, payload, received_at FROM telemetry_raw WHERE device_id = ? AND received_at >= ? AND received_at <= ? ORDER BY id ASC LIMIT ?",
+		deviceID, timeText(from), timeText(to), maxTelemetryRows,
 	)
 	if err != nil {
 		return nil, err

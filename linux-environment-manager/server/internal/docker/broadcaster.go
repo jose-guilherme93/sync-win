@@ -9,30 +9,48 @@ import (
 // DockerState represents the cached Docker state for a device,
 // sent via SSE to subscribed browsers.
 type DockerState struct {
-	Available  bool             `json:"available"`
-	Containers []DockerSummary  `json:"containers"`
-	Info       *DockerInfoData  `json:"info,omitempty"`
+	Available  bool            `json:"available"`
+	Containers []DockerSummary `json:"containers"`
+	Info       *DockerInfoData `json:"info,omitempty"`
 }
 
 // DockerSummary is a lightweight container snapshot.
 type DockerSummary struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Image  string `json:"image"`
-	State  string `json:"state"`
-	Status string `json:"status"`
+	ID     string        `json:"id"`
+	Name   string        `json:"name"`
+	Image  string        `json:"image"`
+	State  string        `json:"state"`
+	Status string        `json:"status"`
+	Ports  []PortMapping `json:"ports,omitempty"`
+	Mounts []MountInfo   `json:"mounts,omitempty"`
+}
+
+// PortMapping is a container port published on the host.
+type PortMapping struct {
+	IP          string `json:"ip,omitempty"`
+	PrivatePort int    `json:"private_port"`
+	PublicPort  int    `json:"public_port,omitempty"`
+	Type        string `json:"type"`
+}
+
+// MountInfo is a container mount point.
+type MountInfo struct {
+	Type        string `json:"type"`
+	Source      string `json:"source"`
+	Destination string `json:"destination"`
+	RW          bool   `json:"rw"`
 }
 
 // DockerInfoData holds engine info.
 type DockerInfoData struct {
-	Version   string `json:"version"`
-	Total     int    `json:"total"`
-	Running   int    `json:"running"`
-	Stopped   int    `json:"stopped"`
-	Paused    int    `json:"paused"`
-	Images    int    `json:"images"`
-	Driver    string `json:"driver"`
-	NCPU      int    `json:"ncpu"`
+	Version string `json:"version"`
+	Total   int    `json:"total"`
+	Running int    `json:"running"`
+	Stopped int    `json:"stopped"`
+	Paused  int    `json:"paused"`
+	Images  int    `json:"images"`
+	Driver  string `json:"driver"`
+	NCPU    int    `json:"ncpu"`
 }
 
 // Broadcaster manages SSE subscriptions for Docker state per device.

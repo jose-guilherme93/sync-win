@@ -31,6 +31,7 @@ services:
       LEM_ENABLE_DOCKER_MUTATIONS: "${LEM_ENABLE_DOCKER_MUTATIONS:-false}"
       LEM_CORS_ALLOWED_ORIGIN: "${LEM_CORS_ALLOWED_ORIGIN:-}"
       LEM_HTTPS: "${LEM_HTTPS:-false}"
+      LEM_TRUST_PROXY: "${LEM_TRUST_PROXY:-false}"
       LEM_HTTP_ADDR: ":8080"
       LEM_DATA_DIR: /data
       LEM_WEB_DIR: /app/web

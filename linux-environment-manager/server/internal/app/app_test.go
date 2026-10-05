@@ -867,3 +867,23 @@ func TestAgentSignatureEndpoint(t *testing.T) {
 		t.Fatalf("missing signature status = %d, want 404", missing.Code)
 	}
 }
+
+func TestTelemetryHistoryRejectsInvalidRange(t *testing.T) {
+	s := newTestServer(t)
+	_, token, deviceID := newAuthedDevice(t, s, "telemetry@example.com")
+
+	cases := []string{
+		"/api/devices/" + deviceID + "/telemetry/history?from=not-a-date",
+		"/api/devices/" + deviceID + "/telemetry/history?to=not-a-date",
+		"/api/devices/" + deviceID + "/telemetry/history?from=2024-01-02T00:00:00Z&to=2024-01-01T00:00:00Z",
+	}
+	for _, target := range cases {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		s.handleTelemetryHistoryV2(rec, req, deviceID)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s: status = %d, want 400", target, rec.Code)
+		}
+	}
+}

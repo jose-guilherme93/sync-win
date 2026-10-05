@@ -41,6 +41,7 @@ type Server struct {
 	streamTickets     *streamTicketStore
 	rateLimiter       *rateLimiter
 	flags             featureFlags
+	trustProxy        bool
 }
 
 type statusWriter struct {
@@ -140,7 +141,12 @@ func Run() error {
 	logDB := dataStore.DB()
 	logStore := logging.NewStore(logDB)
 	structLogger := logging.New(logCfg, logStore)
-	defer structLogger.Stop()
+	// Stop the logger (which flushes buffered entries into the log store)
+	// before closing the database; closing first dropped the final logs.
+	defer func() {
+		structLogger.Stop()
+		_ = dataStore.Close()
+	}()
 
 	// Notification credentials are encrypted with LEM_SECRET_KEY. In
 	// production the key is mandatory; in development (LEM_ENV=development)
@@ -148,7 +154,6 @@ func Run() error {
 	// project still boots out of the box without leaking secrets to disk.
 	if _, err := lemcrypto.Key(); err != nil {
 		if os.Getenv("LEM_ENV") != "development" {
-			_ = dataStore.Close()
 			return fmt.Errorf("%v — generate one with: openssl rand -hex 32", err)
 		}
 		os.Setenv("LEM_SECRET_KEY", "lem-development-only-insecure-key")
@@ -161,7 +166,7 @@ func Run() error {
 	dockerQueue := docker.NewQueue(30 * time.Second)
 	dockerBroadcaster := docker.NewBroadcaster()
 	flags := loadFeatureFlags()
-	server := &Server{store: dataStore, logStore: logStore, log: structLogger, aggregator: aggregator, notifier: notifier, dockerQueue: dockerQueue, dockerBroadcaster: dockerBroadcaster, streamTickets: newStreamTicketStore(), rateLimiter: newRateLimiter(), flags: flags}
+	server := &Server{store: dataStore, logStore: logStore, log: structLogger, aggregator: aggregator, notifier: notifier, dockerQueue: dockerQueue, dockerBroadcaster: dockerBroadcaster, streamTickets: newStreamTicketStore(), rateLimiter: newRateLimiter(), flags: flags, trustProxy: envBool("LEM_TRUST_PROXY", false)}
 
 	// Log application startup
 	structLogger.Info(logging.CatSystem, logging.EventAppStarted,
@@ -248,8 +253,12 @@ func Run() error {
 		Addr:              addr,
 		Handler:           securityHeadersMiddleware(corsMiddleware(csrfMiddleware(logging.HTTPMiddleware(structLogger, gzipMiddleware(limitBody(mux)))))),
 		ReadHeaderTimeout: 5 * time.Second,
-		WriteTimeout:      0, // no timeout: SSE needs long-lived connections
-		IdleTimeout:       15 * time.Second,
+		// Bound how long a client may take to send the request body. This does
+		// not affect SSE responses, which have no request body.
+		ReadTimeout: 15 * time.Second,
+		// No write timeout: SSE connections stay open for hours.
+		WriteTimeout: 0,
+		IdleTimeout:  15 * time.Second,
 	}
 	structLogger.Info(logging.CatSystem, logging.EventAppStarted, fmt.Sprintf("server listening on %s", addr))
 
@@ -327,7 +336,6 @@ func Run() error {
 
 	select {
 	case err := <-serveErr:
-		_ = dataStore.Close()
 		return err
 	case <-ctx.Done():
 		structLogger.Info(logging.CatSystem, logging.EventAppShutdown, "shutting down LEM server")
@@ -338,7 +346,7 @@ func Run() error {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		_ = srv.Close()
 	}
-	return dataStore.Close()
+	return nil
 }
 
 func limitBody(next http.Handler) http.Handler {
@@ -493,7 +501,7 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.allowRate(w, r, "auth-register", 10, time.Minute) {
+	if !s.allowRate(w, r, "auth-login", 10, time.Minute) {
 		return
 	}
 	var req authRequest
@@ -1354,14 +1362,29 @@ func (s *Server) handleTelemetryHistoryV2(w http.ResponseWriter, r *http.Request
 	resolution := "auto"
 
 	if v := r.URL.Query().Get("from"); v != "" {
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			from = t
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, errors.New("invalid 'from' timestamp (expected RFC3339)"))
+			return
 		}
+		from = t
 	}
 	if v := r.URL.Query().Get("to"); v != "" {
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			to = t
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, errors.New("invalid 'to' timestamp (expected RFC3339)"))
+			return
 		}
+		to = t
+	}
+	if to.Before(from) {
+		s.writeError(w, http.StatusBadRequest, errors.New("'to' must not be before 'from'"))
+		return
+	}
+	// Bound the window so an extreme range cannot force a full scan; the store
+	// also caps the number of returned rows.
+	if to.Sub(from) > 90*24*time.Hour {
+		from = to.Add(-90 * 24 * time.Hour)
 	}
 	if v := r.URL.Query().Get("resolution"); v != "" {
 		resolution = v
@@ -2928,9 +2951,20 @@ func (s *Server) handleDockerState(w http.ResponseWriter, r *http.Request, devic
 		Containers: make([]docker.DockerSummary, 0),
 	}
 	for _, c := range device.Hardware.DockerContainers {
-		state.Containers = append(state.Containers, docker.DockerSummary{
+		summary := docker.DockerSummary{
 			ID: c.ID, Name: c.Name, Image: c.Image, State: c.State, Status: c.Status,
-		})
+		}
+		for _, p := range c.Ports {
+			summary.Ports = append(summary.Ports, docker.PortMapping{
+				PrivatePort: p.PrivatePort, PublicPort: p.PublicPort, Type: p.Type, IP: p.IP,
+			})
+		}
+		for _, m := range c.Mounts {
+			summary.Mounts = append(summary.Mounts, docker.MountInfo{
+				Type: m.Type, Source: m.Source, Destination: m.Destination, RW: m.RW,
+			})
+		}
+		state.Containers = append(state.Containers, summary)
 	}
 	if device.Hardware.DockerInfo != nil {
 		state.Info = &docker.DockerInfoData{
@@ -2998,9 +3032,20 @@ func (s *Server) getDockerState(deviceID string) docker.DockerState {
 		Containers: make([]docker.DockerSummary, 0),
 	}
 	for _, c := range device.Hardware.DockerContainers {
-		state.Containers = append(state.Containers, docker.DockerSummary{
+		summary := docker.DockerSummary{
 			ID: c.ID, Name: c.Name, Image: c.Image, State: c.State, Status: c.Status,
-		})
+		}
+		for _, p := range c.Ports {
+			summary.Ports = append(summary.Ports, docker.PortMapping{
+				PrivatePort: p.PrivatePort, PublicPort: p.PublicPort, Type: p.Type, IP: p.IP,
+			})
+		}
+		for _, m := range c.Mounts {
+			summary.Mounts = append(summary.Mounts, docker.MountInfo{
+				Type: m.Type, Source: m.Source, Destination: m.Destination, RW: m.RW,
+			})
+		}
+		state.Containers = append(state.Containers, summary)
 	}
 	if device.Hardware.DockerInfo != nil {
 		state.Info = &docker.DockerInfoData{

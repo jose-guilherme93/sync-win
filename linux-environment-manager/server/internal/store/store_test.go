@@ -842,3 +842,56 @@ func TestListDeviceSummariesForOwner(t *testing.T) {
 		t.Errorf("unexpected fingerprint %q", got.HardwareFingerprint)
 	}
 }
+
+func TestSavePreferenceBatchCommitsAllInOneTransaction(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	device, err := store.RegisterDevice("tx-pc", "user", "owner", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, rejected, err := store.SavePreferenceBatch(device.ID, []PreferenceInput{
+		{Category: "general", Filename: "a.txt", RelativePath: "a.txt", Content: "a\n"},
+		{Category: "general", Filename: "b.txt", RelativePath: "b.txt", Content: "b\n"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(saved) != 2 || len(rejected) != 0 {
+		t.Fatalf("saved=%d rejected=%d", len(saved), len(rejected))
+	}
+	files, err := store.ListFiles(device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("expected 2 persisted files, got %d", len(files))
+	}
+}
+
+func TestSavePreferenceBatchUnknownDeviceFails(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.SavePreferenceBatch("dev-missing", []PreferenceInput{
+		{Category: "general", Filename: "a.txt", RelativePath: "a.txt", Content: "a\n"},
+	}); err == nil {
+		t.Fatal("expected an error for an unknown device")
+	}
+}
+
+func TestCreateUserDuplicateReturnsErrEmailTaken(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateUser("dup@example.com", "correct horse battery staple"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateUser("dup@example.com", "correct horse battery staple"); !errors.Is(err, ErrEmailTaken) {
+		t.Fatalf("duplicate create error = %v, want ErrEmailTaken", err)
+	}
+}
