@@ -124,7 +124,8 @@ linux-environment-manager/
 From the repository root:
 
 ```bash
-make test          # server + agent go test, web svelte-check
+make test          # server + agent go test, web unit tests + svelte-check
+make test-race     # server + agent go test with the race detector
 make lint          # go vet + svelte-check
 ```
 
@@ -133,8 +134,12 @@ Or the underlying commands directly:
 ```bash
 cd server && go test ./...
 cd ../agent && go test ./...
-cd ../web && npm install && npm run build
+cd ../web && npm install && npm run test && npm run check && npm run build
 ```
+
+The dashboard test runner is Vitest (jsdom + @testing-library/svelte); test
+files live next to the code as `*.test.ts`. `npm run test:watch` runs in watch
+mode. CI runs `go test -race` and `npm run test` for every push.
 
 Use the most direct command for the module being changed.
 

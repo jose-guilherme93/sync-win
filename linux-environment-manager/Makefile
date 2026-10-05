@@ -185,13 +185,13 @@ test-agent: ## Run agent tests
 	cd agent && go test ./...
 
 .PHONY: test-web
-test-web: ## Run web type-check
-	cd web && npm run check
+test-web: ## Run web unit tests and type-check
+	cd web && npm run test && npm run check
 
 .PHONY: test-race
 test-race: ## Run Go tests for server and agent with the race detector
-	cd server && go test -race ./...
-	cd agent && go test -race ./...
+	cd server && go test -race -count=1 ./...
+	cd agent && go test -race -count=1 ./...
 
 .PHONY: lint
 lint: ## Run Go and web linters
