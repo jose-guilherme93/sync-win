@@ -13,6 +13,7 @@
   import Home from './components/screens/Home.svelte'
   import DeviceOverview from './components/screens/DeviceOverview.svelte'
   import { nav, type Section } from './lib/router'
+  import { generateInsights } from './lib/insights'
 
   type Device = {
     id: string
@@ -1497,56 +1498,6 @@
     return ''
   }
 
-  function generateInsights(h?: HardwareStats) {
-    if (!h) return []
-    const insights: { text: string; type: 'info' | 'warn' | 'crit' }[] = []
-    const cpu = h.cpu_usage_percent || 0
-    const mem = memoryPercent(h)
-    const agentCpu = h.agent_cpu_usage || 0
-
-    if (cpu > 90) insights.push({ text: `CPU ${cpu.toFixed(0)}%`, type: 'crit' })
-    else if (cpu > 70) insights.push({ text: `CPU ${cpu.toFixed(0)}%`, type: 'warn' })
-
-    if (mem > 90) insights.push({ text: `RAM ${mem.toFixed(0)}%`, type: 'crit' })
-    else if (mem > 75) insights.push({ text: `RAM ${mem.toFixed(0)}%`, type: 'warn' })
-
-    if (h.cpu_temperature && h.cpu_temperature > 85) insights.push({ text: `Temp ${h.cpu_temperature.toFixed(0)}C`, type: 'crit' })
-    else if (h.cpu_temperature && h.cpu_temperature > 70) insights.push({ text: `Temp ${h.cpu_temperature.toFixed(0)}C`, type: 'warn' })
-
-    if (h.battery_percent != null && h.battery_percent > 0 && h.battery_percent < 15 && h.battery_status !== 'charging') {
-      insights.push({ text: `Battery ${h.battery_percent.toFixed(0)}%`, type: 'crit' })
-    }
-
-    if (h.disk_partitions) {
-      for (const p of h.disk_partitions) {
-        if (p.used_percent > 90) insights.push({ text: `${p.mount} ${p.used_percent.toFixed(0)}% full`, type: 'crit' })
-        else if (p.used_percent > 80) insights.push({ text: `${p.mount} ${p.used_percent.toFixed(0)}%`, type: 'warn' })
-      }
-    }
-
-    if (h.network_ifaces) {
-      for (const iface of h.network_ifaces) {
-        if (iface.rx_errors > 0 || iface.tx_errors > 0) {
-          insights.push({ text: `Net err ${iface.name}`, type: 'warn' })
-        }
-      }
-    }
-
-    if (agentCpu > 5) insights.push({ text: `Agent ${agentCpu.toFixed(1)}%`, type: 'warn' })
-
-    if (h.kernel_version) {
-      const parts = h.kernel_version.split('.')
-      if (parts.length >= 2) {
-        const major = parseInt(parts[0])
-        const minor = parseInt(parts[1])
-        if (major < 5 || (major === 5 && minor < 15)) {
-          insights.push({ text: `Kernel ${h.kernel_version}`, type: 'warn' })
-        }
-      }
-    }
-
-    return insights
-  }
 
   function categoryChip(category: string) {
     let hash = 0
