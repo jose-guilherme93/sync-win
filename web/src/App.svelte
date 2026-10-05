@@ -1681,7 +1681,7 @@
             {:else if navState.section === 'settings'}
               <DeviceSettings device={modalDevice} onRemove={removeDeviceConfirmed} />
             {:else if isHardwareSection}
-              <DeviceOverview device={modalDevice} />
+              <DeviceOverview device={modalDevice} authHeaders={ownerHeaders} />
             {:else}
               <DeviceModal
                 device={modalDevice}

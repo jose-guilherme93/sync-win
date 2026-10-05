@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
   import { deviceHistoryStore, type ChartPoint } from '../../lib/telemetry-store'
+  import { apiFetch, apiURL } from '../../lib/api'
   import { memoryPercent, swapPercent, type Device } from '../../lib/types'
   import { formatBytes, formatDuration, formatRate, severityFor } from '../../lib/format'
   import GaugeCard from '../ui/GaugeCard.svelte'
@@ -9,10 +10,20 @@
   import Skeleton from '../ui/Skeleton.svelte'
 
   export let device: Device
+  export let authHeaders: Record<string, string> = {}
 
-  let history: ChartPoint[] = []
-  const unsub = deviceHistoryStore(device.id).subscribe((value) => (history = value))
+  // Live points from the shared store. These are what the 5-minute view uses,
+  // because the store updates every poll and is fresher than any fetch.
+  let liveHistory: ChartPoint[] = []
+  const unsub = deviceHistoryStore(device.id).subscribe((value) => (liveHistory = value))
   onDestroy(unsub)
+
+  // History pulled from the server for the longer ranges. The store only holds
+  // a short live window (MAX_POINTS), which is why the period selector used to
+  // show the same two minutes whatever you picked.
+  let serverHistory: ChartPoint[] = []
+  let loadingHistory = false
+  let historyError = ''
 
   // Maps a series to an SVG polyline across a 600x160 box. Both axes are fixed
   // so series with different natural ranges stay comparable; temperature is
@@ -30,17 +41,90 @@
   }
 
   const PERIODS = [
-    { id: '5m', label: '5 min', ms: 5 * 60_000 },
-    { id: '1h', label: '1 hour', ms: 60 * 60_000 },
-    { id: '6h', label: '6 hours', ms: 6 * 60 * 60_000 },
-    { id: '24h', label: '24 hours', ms: 24 * 60 * 60_000 },
-    { id: 'day', label: 'Day', ms: 24 * 60 * 60_000 }
+    { id: '5m', label: '5 min', ms: 5 * 60_000, live: true },
+    { id: '1h', label: '1 hour', ms: 60 * 60_000, live: false },
+    { id: '6h', label: '6 hours', ms: 6 * 60 * 60_000, live: false },
+    { id: '24h', label: '24 hours', ms: 24 * 60 * 60_000, live: false },
+    { id: 'day', label: 'Day', ms: 24 * 60 * 60_000, live: false }
   ]
   let period = '1h'
 
-  // The store only keeps a short live window; longer periods are drawn from
-  // whatever it holds rather than pretending to have server history.
-  $: windowed = history
+  // history-v2 returns either downsampled aggregates (cpu_avg, mem_avg, …) or
+  // raw payloads, depending on the window. Normalising here keeps the chart
+  // oblivious to which one the server chose.
+  function normalizePoint(raw: any): ChartPoint | null {
+    if (!raw) return null
+    if (raw.cpu_avg != null || raw.mem_avg != null) {
+      return {
+        timestamp: raw.timestamp || '',
+        cpu: raw.cpu_avg ?? 0,
+        memory: raw.mem_avg ?? 0,
+        netRx: raw.net_rx_avg ?? 0,
+        netTx: raw.net_tx_avg ?? 0,
+        temp: raw.temp_avg ?? raw.temp_max ?? null
+      }
+    }
+    let hw = raw.payload
+    if (typeof hw === 'string') {
+      try { hw = JSON.parse(hw) } catch { return null }
+    }
+    if (!hw || typeof hw !== 'object') return null
+    const total = hw.memory_total_bytes || 0
+    return {
+      timestamp: raw.timestamp || raw.received_at || '',
+      cpu: hw.cpu_usage_percent || 0,
+      memory: total ? ((hw.memory_used_bytes || 0) / total) * 100 : 0,
+      netRx: hw.net_rx_rate || 0,
+      netTx: hw.net_tx_rate || 0,
+      temp: hw.cpu_temperature ?? null
+    }
+  }
+
+  async function loadHistory() {
+    const option = PERIODS.find((p) => p.id === period)
+    if (!option) return
+
+    // The live window needs no request: it is already in memory and updates on
+    // every poll.
+    if (option.live) {
+      serverHistory = []
+      return
+    }
+
+    loadingHistory = true
+    historyError = ''
+    try {
+      const to = new Date()
+      const from = new Date(to.getTime() - option.ms)
+      const query = new URLSearchParams({
+        from: from.toISOString(),
+        to: to.toISOString(),
+        resolution: 'auto'
+      })
+      const response = await apiFetch(
+        apiURL(`/api/devices/${device.id}/telemetry/history-v2?${query.toString()}`),
+        { headers: authHeaders }
+      )
+      if (!response.ok) throw new Error(`request failed (${response.status})`)
+      const payload = await response.json()
+      const points: ChartPoint[] = Array.isArray(payload?.points)
+        ? payload.points.map(normalizePoint).filter((p: ChartPoint | null): p is ChartPoint => p != null)
+        : []
+      serverHistory = points
+    } catch (err) {
+      // Keep whatever we had; a failed fetch must not blank the chart.
+      serverHistory = []
+      historyError = err instanceof Error ? err.message : 'history unavailable'
+    } finally {
+      loadingHistory = false
+    }
+  }
+
+  // Refetch whenever the device or the selected range changes. The 5-minute
+  // option leaves this as a no-op.
+  $: if (device.id && period) void loadHistory()
+
+  $: windowed = PERIODS.find((p) => p.id === period)?.live ? liveHistory : serverHistory
 
   function seriesOf(key: 'cpu' | 'memory' | 'temp' | 'netRx' | 'netTx'): number[] {
     return windowed.map((p) => (p[key] as number) ?? 0).filter((v) => Number.isFinite(v))
@@ -261,18 +345,28 @@
     <article class="card">
       <header class="card-head">
         <h2>History</h2>
-        <div class="periods" role="group" aria-label="History range">
-          {#each PERIODS as option (option.id)}
-            <button class:active={period === option.id} on:click={() => (period = option.id)}>{option.label}</button>
-          {/each}
+        <div class="head-right">
+          {#if loadingHistory}<span class="hint" role="status">loading…</span>{/if}
+          {#if historyError}<span class="hint error" role="alert">{historyError}</span>{/if}
+          <div class="periods" role="group" aria-label="History range">
+            {#each PERIODS as option (option.id)}
+              <button class:active={period === option.id} on:click={() => (period = option.id)}>{option.label}</button>
+            {/each}
+          </div>
         </div>
       </header>
 
-      {#if windowed.length < 2}
+      {#if loadingHistory && windowed.length < 2}
+        <Skeleton variant="lines" rows={4} />
+      {:else if windowed.length < 2}
         <EmptyState
           icon="📈"
-          title="Collecting data…"
-          message="The history chart appears once at least two samples have been collected from this device."
+          title={historyError ? 'History unavailable' : 'Collecting data…'}
+          message={historyError
+            ? 'The server did not return history for this range. The live 5-minute view may still have data.'
+            : PERIODS.find((p) => p.id === period)?.live
+              ? 'The history chart appears once at least two live samples have been collected.'
+              : 'No server-side samples exist for this range yet. Telemetry is downsampled in the background, so longer ranges fill in over time.'}
         />
       {:else}
         <div class="chart-wrap">
@@ -294,6 +388,7 @@
           {#if hw.cpu_temperature != null}
             <span><i class="swatch temp"></i> Temp {hw.cpu_temperature.toFixed(0)}°C</span>
           {/if}
+          <span class="legend-count">{windowed.length} samples</span>
         </div>
       {/if}
     </article>
@@ -458,6 +553,11 @@
 
   .periods button:hover { background: var(--card-hover); color: var(--text); }
   .periods button.active { background: var(--accent-dim); color: var(--accent); }
+
+  .head-right { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; justify-content: flex-end; }
+  .hint { color: var(--text-faint); font-size: 0.7rem; }
+  .hint.error { color: var(--crit); }
+  .legend-count { margin-left: auto; color: var(--text-faint); }
 
   .chart-wrap { width: 100%; height: 170px; }
   .chart { width: 100%; height: 100%; }
