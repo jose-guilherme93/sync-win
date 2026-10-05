@@ -73,9 +73,12 @@ sync-win/
 │           └── contract.go         # Embedded loader with runtime validation
 ├── web/
 │   ├── src/
-│   │   ├── App.svelte              # Root: auth, dashboard, polling
+│   │   ├── App.svelte              # Shell wiring, auth, polling, topbar popovers
 │   │   ├── components/
-│   │   │   ├── DeviceModal.svelte  # Device detail (System/Files/Packages/Saves/Notes/Docker)
+│   │   │   ├── shell/              # Sidebar, Topbar, DeviceList (app chrome)
+│   │   │   ├── ui/                 # Icon, StatusDot, GaugeCard, StatCard, Skeleton, ConfirmDialog…
+│   │   │   ├── screens/            # Home (fleet), DeviceOverview
+│   │   │   ├── DeviceModal.svelte  # Device detail tabs; variant="page" renders inline
 │   │   │   ├── DockerTab.svelte    # Docker container management
 │   │   │   ├── Sparkline.svelte       # Lightweight canvas sparklines for device cards
 │   │   │   ├── SystemMetrics.svelte    # Detailed hardware telemetry
@@ -83,6 +86,11 @@ sync-win/
 │   │   │   ├── NotificationsModal.svelte  # Notification settings and inbox
 │   │   │   └── NotificationToast.svelte   # Toast notifications
 │   │   └── lib/
+│   │       ├── theme.css           # Design tokens (single accent, status, series colours)
+│   │       ├── router.ts           # Navigation store + NAV_GROUPS
+│   │       ├── types.ts            # Shared Device / HardwareStats shapes
+│   │       ├── insights.ts         # Alert thresholds (single source)
+│   │       ├── format.ts           # Timestamp/byte/severity helpers (guards the Go zero time)
 │   │       ├── telemetry-store.ts  # Telemetry state management
 │   │       └── telemetry-cache.ts  # 60s TTL cache
 │   └── dist/                       # Production build (served by Go server)
