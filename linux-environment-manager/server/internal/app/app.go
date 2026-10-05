@@ -192,6 +192,7 @@ func Run() error {
 	mux.HandleFunc("/api/agent/enroll", server.handleEnroll)
 	mux.HandleFunc("/api/agent/reconnect", server.handleReconnect)
 	mux.HandleFunc("/api/agent/checksums", server.handleChecksums)
+	mux.HandleFunc("/api/agent/signature", server.handleAgentSignature)
 	mux.HandleFunc("/install/", server.handleInstallScript)
 
 	// Logging API endpoints
@@ -1934,6 +1935,28 @@ func (s *Server) handleChecksums(w http.ResponseWriter, r *http.Request) {
 	data, err := os.ReadFile("/app/checksums.txt")
 	if err != nil {
 		s.writeError(w, http.StatusNotFound, errors.New("checksums not available"))
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write(data)
+}
+
+// handleAgentSignature serves the detached Ed25519 signature of the agent
+// binary. The agent verifies it against the public key embedded at build time
+// before installing an update, so a compromised or spoofed server cannot ship
+// an arbitrary binary.
+func (s *Server) handleAgentSignature(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	path := os.Getenv("LEM_AGENT_SIGNATURE")
+	if path == "" {
+		path = "/app/lem-agent.sig"
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || len(strings.TrimSpace(string(data))) == 0 {
+		s.writeError(w, http.StatusNotFound, errors.New("agent signature not available"))
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")

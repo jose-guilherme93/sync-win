@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -836,5 +837,33 @@ func TestShellDoubleQuoteNeutralizesInjection(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("shellDoubleQuote result %q missing escaped %q", got, want)
 		}
+	}
+}
+
+func TestAgentSignatureEndpoint(t *testing.T) {
+	s := newTestServer(t)
+
+	sigPath := filepath.Join(t.TempDir(), "lem-agent.sig")
+	if err := os.WriteFile(sigPath, []byte("c2lnbmF0dXJl\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LEM_AGENT_SIGNATURE", sigPath)
+
+	rec := httptest.NewRecorder()
+	s.handleAgentSignature(rec, httptest.NewRequest(http.MethodGet, "/api/agent/signature", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "c2lnbmF0dXJl") {
+		t.Fatalf("body = %q", rec.Body.String())
+	}
+
+	// A missing or empty signature must be reported as unavailable, never as a
+	// valid empty signature.
+	t.Setenv("LEM_AGENT_SIGNATURE", filepath.Join(t.TempDir(), "missing.sig"))
+	missing := httptest.NewRecorder()
+	s.handleAgentSignature(missing, httptest.NewRequest(http.MethodGet, "/api/agent/signature", nil))
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("missing signature status = %d, want 404", missing.Code)
 	}
 }

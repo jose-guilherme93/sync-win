@@ -5,7 +5,20 @@ RUN cd server && go mod download
 COPY server ./server
 COPY agent ./agent
 RUN cd server && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/server ./cmd/server
-RUN cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/lem-agent ./cmd/agent
+RUN cd server && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/agentsign ./cmd/agentsign
+
+# Build the agent and, when an Ed25519 signing key is supplied as the BuildKit
+# secret id=agent_update_key, embed its public key and emit a detached
+# signature. Without the secret the agent is built unsigned and refuses
+# auto-updates (fail closed). The private key never lands in an image layer.
+RUN --mount=type=secret,id=agent_update_key,required=false \
+    set -e; \
+    key=""; ldf=""; \
+    if [ -f /run/secrets/agent_update_key ]; then key="$(cat /run/secrets/agent_update_key)"; fi; \
+    if [ -n "$key" ]; then ldf="-X main.agentUpdatePublicKey=$(/out/agentsign -derive-public -key "$key")"; fi; \
+    cd /src/agent && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "$ldf" -o /out/lem-agent ./cmd/agent; \
+    : > /out/lem-agent.sig; \
+    if [ -n "$key" ]; then /out/agentsign -key "$key" -in /out/lem-agent -out /out/lem-agent.sig; fi
 
 # Extract agent version from contract.json (single source of truth)
 RUN apk add --no-cache jq && \
@@ -24,6 +37,7 @@ WORKDIR /app
 RUN mkdir -p /data && chmod 0777 /data
 COPY --from=build /out/server /app/server
 COPY --from=build /out/lem-agent /app/lem-agent
+COPY --from=build /out/lem-agent.sig /app/lem-agent.sig
 COPY --from=build /out/agent-version.txt /app/agent-version.txt
 COPY --from=web /src/dist /app/web
 COPY scripts/install.sh /app/install.sh

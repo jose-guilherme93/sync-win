@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -17,6 +19,12 @@ import (
 )
 
 const maxAgentDownloadBytes = 128 << 20
+
+// agentUpdatePublicKey is the base64 Ed25519 public key used to authenticate
+// auto-updates. It is injected at build time with
+// -ldflags "-X main.agentUpdatePublicKey=<key>". An empty key makes the updater
+// fail closed: it will not install an unsigned binary.
+var agentUpdatePublicKey string
 
 type agentVersionResponse struct {
 	Version string `json:"version"`
@@ -68,6 +76,16 @@ func updateAgentAt(executable, serverURL, service string, userSystemd bool) erro
 	}
 	defer os.Remove(temp)
 
+	// Authenticate before doing anything with the binary. The signature is
+	// checked first so the downloaded file is never executed (installedAgentVersion
+	// runs it) until it is proven to come from the trusted key.
+	signature, err := downloadAgentSignature(serverURL)
+	if err != nil {
+		return err
+	}
+	if err := verifyAgentSignature(temp, signature); err != nil {
+		return err
+	}
 	if err := verifyAgentChecksum(serverURL, temp); err != nil {
 		return err
 	}
@@ -152,6 +170,48 @@ func downloadAgent(serverURL, executable string) (string, error) {
 		return "", fmt.Errorf("close agent update: %w", err)
 	}
 	return file.Name(), nil
+}
+
+func downloadAgentSignature(serverURL string) ([]byte, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(serverURL + "/api/agent/signature")
+	if err != nil {
+		return nil, fmt.Errorf("fetch agent signature: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("signature endpoint returned %d", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
+	if err != nil {
+		return nil, fmt.Errorf("read agent signature: %w", err)
+	}
+	signature, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw)))
+	if err != nil || len(signature) == 0 {
+		return nil, fmt.Errorf("invalid agent signature encoding")
+	}
+	return signature, nil
+}
+
+// verifyAgentSignature authenticates the downloaded binary against the public
+// key embedded at build time. It fails closed when the agent was built without
+// a key.
+func verifyAgentSignature(path string, signature []byte) error {
+	if strings.TrimSpace(agentUpdatePublicKey) == "" {
+		return fmt.Errorf("agent was built without an update signing key; refusing unsigned update")
+	}
+	publicKey, err := base64.StdEncoding.DecodeString(strings.TrimSpace(agentUpdatePublicKey))
+	if err != nil || len(publicKey) != ed25519.PublicKeySize {
+		return fmt.Errorf("invalid embedded update signing key")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read downloaded agent: %w", err)
+	}
+	if !ed25519.Verify(ed25519.PublicKey(publicKey), data, signature) {
+		return fmt.Errorf("agent update signature verification failed")
+	}
+	return nil
 }
 
 func verifyAgentChecksum(serverURL, path string) error {

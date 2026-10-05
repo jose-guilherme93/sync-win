@@ -57,6 +57,11 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Optional: set the AGENT_UPDATE_KEY repository secret (base64 Ed25519
+          # private key) to sign the agent binary. Without it the image ships an
+          # unsigned agent that refuses auto-updates.
+          secrets: |
+            agent_update_key=${{ secrets.AGENT_UPDATE_KEY }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |

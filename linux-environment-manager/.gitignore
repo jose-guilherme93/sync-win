@@ -36,6 +36,9 @@ web/.vite/
 .env.*
 !.env.example
 
+# Signing keys
+*.key
+
 # Logs
 *.log
 

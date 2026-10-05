@@ -30,6 +30,9 @@ LOCAL := $(COMPOSE) -f $(LOCAL_FILE)
 DEMO_EMAIL    ?= demo@lem.local
 DEMO_PASSWORD ?= lem-demo-password
 
+# Optional Ed25519 public key embedded into the agent to authenticate updates.
+AGENT_LDFLAGS := $(if $(AGENT_UPDATE_PUBLIC_KEY),-ldflags "-X main.agentUpdatePublicKey=$(AGENT_UPDATE_PUBLIC_KEY)")
+
 # Keep the agent version in sync with the collection contract.
 AGENT_VERSION := $(shell jq -r '.agent_version // empty' agent/internal/contract/contract.json 2>/dev/null)
 export LEM_AGENT_VERSION ?= $(if $(AGENT_VERSION),$(AGENT_VERSION),0.6.1)
@@ -64,6 +67,7 @@ help: ## Show this help
 	@printf "  $(G)%-16s$(N) %s\n" "build"      "Build server, agent and web dashboard"
 	@printf "  $(G)%-16s$(N) %s\n" "build-server" "Build the server binary"
 	@printf "  $(G)%-16s$(N) %s\n" "build-agent"  "Build the agent binary"
+	@printf "  $(G)%-16s$(N) %s\n" "agent-keygen" "Generate an Ed25519 keypair for signed agent updates"
 	@printf "  $(G)%-16s$(N) %s\n" "build-web"    "Build the web dashboard (dist/)"
 	@printf "  $(G)%-16s$(N) %s\n" "docker-build" "Build the production Docker image"
 	@printf "\n$(C)Quality$(N)\n"
@@ -164,8 +168,12 @@ build-server: ## Build the server binary
 	cd server && go build -o ./server ./cmd/server
 
 .PHONY: build-agent
-build-agent: ## Build the agent binary
-	cd agent && go build -o ./agent ./cmd/agent
+build-agent: ## Build the agent binary (set AGENT_UPDATE_PUBLIC_KEY to embed the update signing key)
+	cd agent && go build $(AGENT_LDFLAGS) -o ./agent ./cmd/agent
+
+.PHONY: agent-keygen
+agent-keygen: ## Generate an Ed25519 keypair for signed agent updates
+	cd server && go run ./cmd/agentsign -genkey
 
 .PHONY: build-web
 build-web: ## Build the web dashboard

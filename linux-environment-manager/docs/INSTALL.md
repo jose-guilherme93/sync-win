@@ -91,6 +91,41 @@ sudo AUTO_INSTALL_DEPS=1 LEM_SERVER=https://lem.local LEM_TOKEN=xxxxx bash insta
 - Download uses `--fail`, `--retry`, and `--connect-timeout`
 - Corrupted downloads are detected and aborted
 
+### Signed Auto-Updates
+
+The checksum alone cannot prove *who* produced a binary, and the updater pulls
+from the same server over HTTP. Auto-updates are therefore authenticated with
+**Ed25519**:
+
+1. Generate a keypair once (keep the private key secret):
+
+   ```bash
+   go run ./server/cmd/agentsign -genkey
+   # private:<base64>   public:<base64>
+   ```
+
+2. Build the server image passing the private key as the BuildKit secret
+   `agent_update_key`. The build derives the public key, embeds it in the agent
+   (`-ldflags "-X main.agentUpdatePublicKey=..."`) and produces a detached
+   signature served at `GET /api/agent/signature`.
+
+   ```bash
+   DOCKER_BUILDKIT=1 docker build \
+     --secret id=agent_update_key,src=/path/to/private.key \
+     -f docker/Dockerfile.server -t lem .
+   ```
+
+   For local builds, `make build-agent` accepts
+   `AGENT_UPDATE_PUBLIC_KEY=<base64 public key>`.
+
+3. At update time the agent downloads the binary and the signature **before**
+   doing anything with them, verifies the signature, and only then installs.
+   The downloaded binary is never executed before verification.
+
+**Fail-closed:** an agent built without an embedded public key refuses to
+auto-update. This is intentional — an unsigned update must never be installed.
+CI signs automatically when the `AGENT_UPDATE_KEY` repository secret is set.
+
 ### Systemd Hardening
 
 The service runs with the following protections:
@@ -218,6 +253,14 @@ Exchanges an enrollment token for device identity.
 **Public.**
 
 Returns the SHA-256 checksums file for binary verification.
+
+### `GET /api/agent/signature`
+
+**Public.**
+
+Returns the base64 Ed25519 signature of the agent binary (served from
+`LEM_AGENT_SIGNATURE`, default `/app/lem-agent.sig`). Returns `404` when the
+image was built without a signing key; the agent then refuses to auto-update.
 
 ## Generating Install Commands
 
