@@ -11,6 +11,7 @@
   import Sidebar from './components/shell/Sidebar.svelte'
   import Topbar from './components/shell/Topbar.svelte'
   import Home from './components/screens/Home.svelte'
+  import DeviceOverview from './components/screens/DeviceOverview.svelte'
   import { nav, type Section } from './lib/router'
 
   type Device = {
@@ -210,6 +211,12 @@
   } as Record<string, string>)[navState.section] || null
 
   $: isDeviceSection = Boolean(navState.deviceId) && navState.section !== 'home' && navState.section !== 'devices' && navState.section !== 'alerts' && navState.section !== 'findings' && navState.section !== 'reports'
+
+  // Hardware sections render the redesigned overview cards. The remaining
+  // device sections still use DeviceModal's tabs as an interim measure until
+  // their dedicated screens exist.
+  const HARDWARE_SECTIONS = new Set(['overview', 'cpu', 'memory', 'storage', 'network', 'sensors'])
+  $: isHardwareSection = HARDWARE_SECTIONS.has(navState.section)
   // The modal prefers the full detail payload (logs, processes, Docker state)
   // and falls back to the lightweight list entry while it loads.
   $: modalDevice = selectedDeviceId
@@ -1740,6 +1747,11 @@
       {/if}
       <main class="content">
         {#if isDeviceSection && modalDevice}
+          {#if isHardwareSection}
+            <div class="panel-inner">
+              <DeviceOverview device={modalDevice} />
+            </div>
+          {:else}
           <DeviceModal
             device={modalDevice}
             open={true}
@@ -1751,6 +1763,7 @@
             on:removed={() => handleDeviceRemoved(modalDevice.id)}
             on:restore={(event) => restoreGameSaves(event.detail.deviceId, event.detail.prefixId, event.detail.gameName)}
           />
+          {/if}
         {:else}
         <div class="panel-inner">
         {#if toastMessage}
