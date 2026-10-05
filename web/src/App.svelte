@@ -1,8 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte'
   import DeviceModal from './components/DeviceModal.svelte'
-  import SimpleMetrics from './components/SimpleMetrics.svelte'
-  import Sparkline from './components/Sparkline.svelte'
   import NotificationsModal from './components/NotificationsModal.svelte'
   import NotificationToast from './components/NotificationToast.svelte'
   import { addTelemetryPoint, resetTelemetry } from './lib/telemetry-store'
@@ -12,6 +10,14 @@
   import Topbar from './components/shell/Topbar.svelte'
   import Home from './components/screens/Home.svelte'
   import DeviceOverview from './components/screens/DeviceOverview.svelte'
+  import Alerts from './components/screens/Alerts.svelte'
+  import Reports from './components/screens/Reports.svelte'
+  import Storage from './components/screens/Storage.svelte'
+  import Processes from './components/screens/Processes.svelte'
+  import Packages from './components/screens/Packages.svelte'
+  import Services from './components/screens/Services.svelte'
+  import RemoteActions from './components/screens/RemoteActions.svelte'
+  import DeviceSettings from './components/screens/DeviceSettings.svelte'
   import { nav, type Section } from './lib/router'
   import { generateInsights } from './lib/insights'
 
@@ -93,7 +99,6 @@
     status: string
   }
 
-  type StatusFilter = 'all' | 'online' | 'degraded' | 'errors'
   type LiveState = 'live' | 'paused' | 'reconnecting'
 
   // The address embedded in the install command. It defaults to how the
@@ -161,12 +166,8 @@
   let selectedDeviceId = ''
   let activeTab: Record<string, TabName> = {}
   let installOpen = localStorage.getItem('sync-win-install-open') === '1'
-  let deviceQuery = ''
-  let statusFilter: StatusFilter = 'all'
   let appQuery = ''
 
-  type MetricsMode = 'simple' | 'complex'
-  let metricsMode: MetricsMode = (localStorage.getItem('sync-win-metrics-mode') as MetricsMode) || 'simple'
   let deviceModalOpen = false
   let deviceDetails: Record<string, Device> = {}
 
@@ -288,46 +289,6 @@
   $: if (installOpen && signedIn && !enrollmentToken && !enrollmentLoading && !enrollmentAttempted) {
     enrollmentAttempted = true
     requestEnrollmentToken()
-  }
-
-  $: kpis = devices.reduce(
-    (acc, d) => {
-      acc.total += 1
-      const status = computedStatus(d)
-      if (status === 'online') acc.online += 1
-      if (status === 'offline' || status === 'stale') acc.degraded += 1
-      if (status === 'error' || d.last_error) acc.errors += 1
-      acc.files += d.preference_count || 0
-      return acc
-    },
-    { total: 0, online: 0, degraded: 0, errors: 0, files: 0 }
-  )
-
-  $: query = deviceQuery.trim().toLowerCase()
-  $: filteredDevices = [...devices]
-    .filter((d) => {
-      const matchQuery = !query || `${d.hostname} ${d.user_id} ${d.id}`.toLowerCase().includes(query)
-      const status = computedStatus(d)
-      const matchStatus =
-        statusFilter === 'all' ||
-        (statusFilter === 'online' && status === 'online') ||
-        (statusFilter === 'degraded' && (status === 'offline' || status === 'stale')) ||
-        (statusFilter === 'errors' && (status === 'error' || !!d.last_error))
-      return matchQuery && matchStatus
-    })
-    .sort((a, b) => severity(a) - severity(b) || a.hostname.localeCompare(b.hostname))
-
-  function severity(d: Device) {
-    const status = computedStatus(d)
-    if (status === 'error' || d.last_error) return 0
-    if (status === 'offline') return 1
-    if (status === 'stale') return 2
-    if (status === 'online') return 4
-    return 3
-  }
-
-  function setStatusFilter(next: StatusFilter) {
-    statusFilter = statusFilter === next ? 'all' : next
   }
 
   // Public self-registration is disabled by default on the server. The auth
@@ -855,11 +816,6 @@
     if (navState.deviceId === deviceId) nav.clearDevice()
   }
 
-  function setMetricsMode(mode: MetricsMode) {
-    metricsMode = mode
-    localStorage.setItem('sync-win-metrics-mode', mode)
-  }
-
   function getTab(deviceId: string): TabName {
     return activeTab[deviceId] || 'files'
   }
@@ -1011,6 +967,21 @@
       await loadFiles(deviceId)
     } catch (err) {
       notify(err instanceof Error ? err.message : 'Could not exclude file', 'error')
+    }
+  }
+
+  // Removal from the Settings screen. The confirmation already happened in that
+  // screen's dialog (with typed hostname), so this skips the extra
+  // window.confirm that deleteDevice() shows.
+  async function removeDeviceConfirmed(device: Device) {
+    try {
+      const response = await apiFetch(apiURL(`/api/devices/${device.id}`), { method: 'DELETE', headers: ownerHeaders })
+      if (!response.ok) throw new Error(`request failed: ${response.status}`)
+      handleDeviceRemoved(device.id)
+      nav.clearDevice()
+      notify('Device removed.')
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Could not remove device', 'error')
     }
   }
 
@@ -1441,12 +1412,6 @@
     expandedGroups = { ...expandedGroups, [key]: !expandedGroups[key] }
   }
 
-  function statusColor(status: string) {
-    if (status === 'online') return 'green'
-    if (status === 'offline' || status === 'stale') return 'orange'
-    if (status === 'error') return 'red'
-    return 'gray'
-  }
 
   // Client-side status fallback: compute status from last_seen_at
   // This ensures devices show as offline even if the server status is stale
@@ -1697,162 +1662,47 @@
         </div>
       {/if}
       <main class="content">
-        {#if isDeviceSection && modalDevice}
-          {#if isHardwareSection}
-            <div class="panel-inner">
-              <DeviceOverview device={modalDevice} />
-            </div>
-          {:else}
-          <DeviceModal
-            device={modalDevice}
-            open={true}
-            variant="page"
-            activeTabName={deviceTabForSection}
-            authHeaders={ownerHeaders}
-            initialFiles={filesByDevice[modalDevice.id] || []}
-            on:close={() => nav.clearDevice()}
-            on:removed={() => handleDeviceRemoved(modalDevice.id)}
-            on:restore={(event) => restoreGameSaves(event.detail.deviceId, event.detail.prefixId, event.detail.gameName)}
-          />
-          {/if}
-        {:else}
         <div class="panel-inner">
-        {#if toastMessage}
-          <div class="toast {toastKind}" role="status">{toastMessage}</div>
-        {/if}
-
-        {#if navState.section === 'home' || navState.section === 'devices' || navState.section === 'alerts' || navState.section === 'findings'}
-          <Home {devices} onSelect={selectDevice} onAdd={openAddDevice} />
-        {:else}
-  <section class="kpis" aria-label="Fleet summary">
-    <button class="kpi" class:selected={statusFilter === 'all'} aria-pressed={statusFilter === 'all'} on:click={() => setStatusFilter('all')}>
-      <strong>{kpis.total}</strong><span>Devices</span>
-    </button>
-    <button class="kpi k-online" class:selected={statusFilter === 'online'} aria-pressed={statusFilter === 'online'} on:click={() => setStatusFilter('online')}>
-      <strong>{kpis.online}</strong><span>Online</span>
-    </button>
-    <button class="kpi k-degraded" class:selected={statusFilter === 'degraded'} aria-pressed={statusFilter === 'degraded'} on:click={() => setStatusFilter('degraded')}>
-      <strong>{kpis.degraded}</strong><span>Degraded</span>
-    </button>
-    <button class="kpi k-errors" class:selected={statusFilter === 'errors'} aria-pressed={statusFilter === 'errors'} on:click={() => setStatusFilter('errors')}>
-      <strong>{kpis.errors}</strong><span>Errors</span>
-    </button>
-    <div class="kpi static">
-      <strong>{kpis.files}</strong><span>Synced files</span>
-    </div>
-  </section>
-
-  <div class="toolbar">
-    <input class="search-input" type="search" bind:value={deviceQuery} placeholder="Search by hostname, user or ID" aria-label="Search devices" />
-    <button class="add-device-btn" on:click={openAddDevice}>+ Add Linux Device</button>
-  </div>
-
-  {#if loading}
-    <div class="grid" aria-hidden="true">
-      {#each [0, 1, 2] as i (i)}
-        <article class="card skeleton">
-          <div class="sk-line w40"></div>
-          <div class="sk-line w70"></div>
-          <div class="sk-row">
-            <div class="sk-line w90"></div>
-            <div class="sk-line w90"></div>
-          </div>
-          <div class="sk-line w70"></div>
-        </article>
-      {/each}
-    </div>
-  {:else if error}
-    <div class="error-banner" role="alert">
-      <span>{error}</span>
-      <button class="inline" on:click={() => loadDevices(true)}>Try again</button>
-    </div>
-  {:else if devices.length === 0}
-    <div class="empty">
-      <strong>No devices yet</strong>
-      <p>Run the install command above on a Linux machine. The device appears here within seconds — while it is still installing, before the agent even connects. The installer prints SUCCESS or troubleshooting steps when it finishes.</p>
-      <p>Devices are tied to your account. If you ran the command from another machine but opened this dashboard in a different browser (or incognito), sign in to the same account to see it.</p>
-    </div>
-  {:else if filteredDevices.length === 0}
-    <div class="empty">
-      <strong>No devices match</strong>
-      <p>Adjust the search or clear the status filter.</p>
-      <button class="inline" on:click={() => { deviceQuery = ''; statusFilter = 'all' }}>Clear filters</button>
-    </div>
-  {:else}
-    <div class="device-list grid">
-      {#each filteredDevices as device (device.id)}
-        {@const cpu = device.hardware?.cpu_usage_percent || 0}
-        {@const memPct = memoryPercent(device.hardware)}
-        {@const insights = generateInsights(device.hardware)}
-        {@const deviceStatus = computedStatus(device)}
-        <!-- svelte-ignore a11y-click-events-have-key-events -->
-        <!-- svelte-ignore a11y-no-static-element-interactions -->
-        <article class="card clickable" on:click={() => selectDevice(device.id)}>
-          <div class="card-left">
-            <div class="card-top">
-              <h2>{device.hostname}</h2>
-              <span class={`badge ${statusColor(deviceStatus)}`} title={STATUS_HINTS[deviceStatus] || ''}>
-                <i class="dot"></i>{deviceStatus}
-              </span>
-            </div>
-            <p class="card-user">{device.user_id}</p>
-
-            {#if metricsMode === 'complex'}
-              <Sparkline {device} />
-              <div class="device-summary compact">
-                <div class="stat"><strong>{device.preference_count || 0}</strong><span>files</span></div>
-                <div class="stat"><strong>{device.app_count || 0}</strong><span>pkgs</span></div>
-                {#if (device.saves_count || 0) > 0}
-                  <div class="stat saves-badge" title="Game saves"><strong>{device.saves_count}</strong><span>saves</span></div>
-                {/if}
-              </div>
-            {:else}
-              <SimpleMetrics {device} />
-              <div class="device-summary">
-                <div class="stat"><strong>{device.preference_count || 0}</strong><span>files</span></div>
-                <div class="stat"><strong>{device.app_count || 0}</strong><span>pkgs</span></div>
-                {#if (device.saves_count || 0) > 0}
-                  <div class="stat saves-badge" title="Game saves"><strong>{device.saves_count}</strong><span>saves</span></div>
-                {/if}
-              </div>
-            {/if}
-
-            {#if device.last_error}
-              <div class="health-alert" title={device.last_error}>
-                <strong>Sync problem · {timeAgo(device.last_error_at, now)}</strong>
-                <span>{device.last_error}</span>
-              </div>
-            {/if}
-          </div>
-          <div class="card-divider"></div>
-          {#if insights.length > 0}
-            <div class="card-insights">
-              <span class="insights-label">Insights</span>
-              {#each insights.slice(0, 6) as insight}
-                <span class="insight-chip insight-{insight.type}">{insight.text}</span>
-              {/each}
-              {#if insights.length > 6}
-                <span class="insight-more">+{insights.length - 6}</span>
-              {/if}
-            </div>
+          {#if toastMessage}
+            <div class="toast {toastKind}" role="status">{toastMessage}</div>
           {/if}
-          <div class="card-open-hint">
-            <span>Open details</span>
-          </div>
-        </article>
-      {/each}
-    </div>
-    <div class="metrics-toggle-bar">
-      <span class="metrics-label">Metrics view:</span>
-      <div class="metrics-toggle">
-        <button class:active={metricsMode === 'simple'} on:click={() => setMetricsMode('simple')}>Simple</button>
-        <button class:active={metricsMode === 'complex'} on:click={() => setMetricsMode('complex')}>Complex</button>
-      </div>
-    </div>
-  {/if}
-        {/if}
+
+          {#if isDeviceSection && modalDevice}
+            {#if navState.section === 'storage'}
+              <Storage device={modalDevice} />
+            {:else if navState.section === 'processes'}
+              <Processes device={modalDevice} />
+            {:else if navState.section === 'packages'}
+              <Packages device={modalDevice} apps={deviceDetails[modalDevice.id]?.apps || modalDevice.apps || []} />
+            {:else if navState.section === 'services'}
+              <Services device={modalDevice} />
+            {:else if navState.section === 'remote'}
+              <RemoteActions device={modalDevice} />
+            {:else if navState.section === 'settings'}
+              <DeviceSettings device={modalDevice} onRemove={removeDeviceConfirmed} />
+            {:else if isHardwareSection}
+              <DeviceOverview device={modalDevice} />
+            {:else}
+              <DeviceModal
+                device={modalDevice}
+                open={true}
+                variant="page"
+                activeTabName={deviceTabForSection}
+                authHeaders={ownerHeaders}
+                initialFiles={filesByDevice[modalDevice.id] || []}
+                on:close={() => nav.clearDevice()}
+                on:removed={() => handleDeviceRemoved(modalDevice.id)}
+                on:restore={(event) => restoreGameSaves(event.detail.deviceId, event.detail.prefixId, event.detail.gameName)}
+              />
+            {/if}
+          {:else if navState.section === 'alerts' || navState.section === 'findings'}
+            <Alerts {devices} onSelect={selectDevice} />
+          {:else if navState.section === 'reports'}
+            <Reports {devices} onSelect={selectDevice} />
+          {:else}
+            <Home {devices} onSelect={selectDevice} onAdd={openAddDevice} />
+          {/if}
         </div>
-        {/if}
       </main>
     </div>
   </div>

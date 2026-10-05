@@ -29,6 +29,7 @@ export type Section =
   | 'logs'
   | 'security'
   // Device-scoped — customize
+  | 'remote'
   | 'settings'
 
 export type NavState = {
@@ -42,7 +43,7 @@ export type NavState = {
 export const DEVICE_SCOPED: ReadonlySet<Section> = new Set<Section>([
   'overview', 'cpu', 'memory', 'storage', 'network', 'sensors',
   'containers', 'processes', 'services', 'packages', 'logs',
-  'security', 'settings'
+  'security', 'remote', 'settings'
 ])
 
 // The sidebar is data-driven: it renders these groups in order and marks the
@@ -94,6 +95,7 @@ export const NAV_GROUPS: NavGroup[] = [
     deviceScoped: true,
     items: [
       { section: 'security', label: 'Security', icon: 'lock', deviceScoped: true },
+      { section: 'remote', label: 'Remote actions', icon: 'terminal', deviceScoped: true },
       { section: 'settings', label: 'Settings', icon: 'settings', deviceScoped: true }
     ]
   }
