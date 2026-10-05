@@ -9,11 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	neturl "net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -340,11 +342,20 @@ func Run() error {
 
 func limitBody(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Body != nil {
+		// Attachment uploads have their own (larger) limit enforced in the
+		// handler. Applying the global JSON cap here would silently clamp them
+		// to 2 MB and make the advertised 8 MB unreachable.
+		if r.Body != nil && !isAttachmentUpload(r) {
 			r.Body = http.MaxBytesReader(w, r.Body, maxRequestBytes)
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isAttachmentUpload reports whether the request is a device attachment
+// upload (POST /api/devices/{id}/attachments), which enforces its own body cap.
+func isAttachmentUpload(r *http.Request) bool {
+	return r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attachments")
 }
 
 // gzipMiddleware compresses JSON API responses when the client advertises
@@ -715,13 +726,49 @@ func (s *Server) ownerID(r *http.Request) string {
 }
 
 func scheme(r *http.Request) string {
-	if value := r.Header.Get("X-Forwarded-Proto"); value != "" {
+	if value := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))); value == "http" || value == "https" {
 		return value
 	}
 	if r.TLS != nil {
 		return "https"
 	}
 	return "http"
+}
+
+// validHostPattern restricts request hosts to characters that are legal in a
+// host[:port] and cannot break out of the quoted shell assignment in the
+// generated install scripts.
+var validHostPattern = regexp.MustCompile(`^[A-Za-z0-9._:\[\]-]+$`)
+
+// publicBaseURL returns the externally reachable base URL embedded in install
+// scripts. LEM_PUBLIC_URL wins when set (recommended behind a reverse proxy);
+// otherwise it is derived from the request. The request-derived value is
+// validated so untrusted headers can never inject shell fragments into the
+// generated script.
+func publicBaseURL(r *http.Request) (string, error) {
+	if configured := strings.TrimSpace(os.Getenv("LEM_PUBLIC_URL")); configured != "" {
+		u, err := neturl.Parse(configured)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return "", errors.New("LEM_PUBLIC_URL must be an absolute http(s) URL")
+		}
+		return strings.TrimRight(configured, "/"), nil
+	}
+	host := strings.TrimSpace(r.Host)
+	if host == "" || !validHostPattern.MatchString(host) || strings.Contains(host, "..") {
+		return "", errors.New("invalid request host")
+	}
+	return scheme(r) + "://" + host, nil
+}
+
+// shellDoubleQuote escapes a value interpolated inside a double-quoted shell
+// string so it cannot terminate the quote or expand a command.
+func shellDoubleQuote(value string) string {
+	return strings.NewReplacer(
+		`\`, `\\`,
+		`"`, `\"`,
+		"`", "\\`",
+		`$`, `\$`,
+	).Replace(value)
 }
 
 func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
@@ -1622,12 +1669,16 @@ func (s *Server) handleAgentInstallScript(w http.ResponseWriter, r *http.Request
 	if hostname == "" {
 		hostname = "$(hostname)"
 	}
+	serverURL, err := publicBaseURL(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	device, err := s.store.RegisterDevice(hostname, userID, ownerID, "")
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	serverURL := fmt.Sprintf("%s://%s", scheme(r), r.Host)
 	script := fmt.Sprintf(`#!/usr/bin/env bash
 set -eu
 SERVER_URL="%s"
@@ -1742,7 +1793,7 @@ else
   say "               systemctl --user restart lem-agent"
   exit 1
 fi
-`, serverURL, device.ID, device.DeviceToken)
+`, shellDoubleQuote(serverURL), device.ID, device.DeviceToken)
 	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
 	_, _ = w.Write([]byte(script))
 }
@@ -1786,14 +1837,18 @@ func (s *Server) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	serverURL := fmt.Sprintf("%s://%s", scheme(r), r.Host)
+	serverURL, err := publicBaseURL(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	script := fmt.Sprintf(`#!/usr/bin/env bash
 set -Eeuo pipefail
 
 LEM_SERVER="%s"
 LEM_TOKEN="%s"
 
-`, serverURL, token)
+`, shellDoubleQuote(serverURL), token)
 	// Append the static installer from the embedded filesystem.
 	data, err := os.ReadFile("/app/install.sh")
 	if err != nil {
@@ -2156,6 +2211,24 @@ func (s *Server) handleDeviceNoteByID(w http.ResponseWriter, r *http.Request, de
 
 const maxAttachmentSize = 8 << 20 // 8 MB
 
+// inlineSafeMimeType returns a browser-safe content type for serving an
+// attachment inline, or "" when it must be downloaded as an opaque stream.
+// The type is derived from the bytes and never trusted from the uploader, so
+// an authenticated user cannot store HTML/JS/SVG and have it execute on the
+// dashboard origin.
+func inlineSafeMimeType(data []byte) string {
+	sample := data
+	if len(sample) > 512 {
+		sample = sample[:512]
+	}
+	switch detected := http.DetectContentType(sample); detected {
+	case "image/png", "image/jpeg", "image/gif", "image/webp":
+		return detected
+	default:
+		return ""
+	}
+}
+
 func (s *Server) handleDeviceAttachments(w http.ResponseWriter, r *http.Request, deviceID string) {
 	device, err := s.store.GetDevice(deviceID)
 	if err != nil {
@@ -2196,7 +2269,7 @@ func (s *Server) handleDeviceAttachments(w http.ResponseWriter, r *http.Request,
 			s.writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		mimeType := header.Header.Get("Content-Type")
+		mimeType := inlineSafeMimeType(data)
 		if mimeType == "" {
 			mimeType = "application/octet-stream"
 		}
@@ -2239,8 +2312,23 @@ func (s *Server) handleDeviceAttachmentByID(w http.ResponseWriter, r *http.Reque
 			s.writeError(w, http.StatusNotFound, err)
 			return
 		}
-		w.Header().Set("Content-Type", att.MimeType)
-		w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", att.Filename))
+		contentType := att.MimeType
+		disposition := "attachment"
+		if safe := inlineSafeMimeType(data); safe != "" {
+			contentType = safe
+			disposition = "inline"
+		} else if contentType != "application/octet-stream" {
+			contentType = "application/octet-stream"
+		}
+		w.Header().Set("Content-Type", contentType)
+		if cd := mime.FormatMediaType(disposition, map[string]string{"filename": att.Filename}); cd != "" {
+			w.Header().Set("Content-Disposition", cd)
+		} else {
+			w.Header().Set("Content-Disposition", disposition)
+		}
+		// Attachments are user-controlled: forbid scripts and subresources so a
+		// stored HTML/JS/SVG payload can never execute on the dashboard origin.
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
 		w.Header().Set("Content-Length", strconv.FormatInt(att.SizeBytes, 10))
 		_, _ = w.Write(data)
 	case http.MethodPut:

