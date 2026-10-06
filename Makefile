@@ -190,6 +190,10 @@ docker-build: ## Build the production Docker image
 .PHONY: test
 test: test-server test-agent test-web ## Run all tests
 
+.PHONY: test-e2e
+test-e2e: ## Run the browser end-to-end suite (requires `make dev-d` running)
+	@scripts/e2e.sh
+
 .PHONY: test-server
 test-server: ## Run server tests
 	cd server && go test ./...
