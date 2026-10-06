@@ -1,6 +1,5 @@
 <script lang="ts">
   import { deviceLabel, type Device } from '../../lib/types'
-  import { MOCK } from '../../lib/flags'
   import { formatRelative } from '../../lib/format'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import EmptyState from '../ui/EmptyState.svelte'
@@ -80,14 +79,12 @@
     <h2>Remote actions</h2>
     <span class="target">target: {deviceLabel(device)}</span>
   </header>
-  {#if !MOCK.services}
-    <div class="notice" role="status">
-      These actions are not enabled: the server command queue does not yet accept
-      <code>reboot</code>, <code>update-packages</code> or <code>restart-agent</code>. The buttons
-      document the intended confirmation flow and record attempts in the log below, but nothing is
-      sent to the device.
-    </div>
-  {/if}
+  <div class="notice" role="status">
+    These actions are not enabled: the server command queue does not yet accept
+    <code>reboot</code>, <code>update-packages</code> or <code>restart-agent</code>. The buttons
+    document the intended confirmation flow and record attempts in the log below, but nothing is
+    sent to the device.
+  </div>
 
   <div class="grid">
     {#each ACTIONS as action (action.id)}

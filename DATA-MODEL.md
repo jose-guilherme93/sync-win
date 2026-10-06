@@ -55,6 +55,8 @@ Fields:
 - last_error_at: timestamp of last error
 - hardware_json: JSON blob with latest hardware telemetry (HardwareStats)
 - apps_json: JSON array with latest installed application inventory
+- services_json: JSON array with latest systemd service snapshot (ServiceUnit)
+- ports_json: JSON array with latest listening socket snapshot (OpenPort)
 - status: derived from last_seen_at (online <30s, stale >30s, offline >5min, error, duplicate)
 - hardware_fingerprint: internal hardware metadata only; never an authentication credential or reconnect secret
 - created_at: creation timestamp
@@ -67,6 +69,28 @@ Rules:
 - fingerprint-based reconnect is disabled; a lost token requires a new enrollment token
 - the dashboard should prioritize online state and last sync time
 - agents send heartbeats via `POST /api/devices/{id}/heartbeat`
+
+### System inventory snapshot (services_json, ports_json)
+
+`services_json` and `ports_json` hold the last snapshot reported by the agent, as
+a whole-value replacement — there are no per-row rows to join or expire.
+
+`ServiceUnit`: `{name, status, load_state, active_state, sub_state?, unit_file_state?, description?, enabled}`.
+`status` is the dashboard's bucket (`running`, `failed`, `stopped`); the raw
+systemd columns are kept alongside it. `enabled` is true when the unit file state
+is in the contract's `enabled_states`.
+
+`OpenPort`: `{protocol, local_address, port, process?, pid?}`. Only the owning
+process name and pid are stored — never a command line.
+
+Rules:
+
+- the agent omits a section whose tool failed or is absent; the server keeps the
+  previous snapshot for that section instead of recording an empty one
+- an explicit empty array is a real report ("nothing found") and replaces the snapshot
+- the server re-applies the contract caps and drops entries with no name, no
+  protocol, or a port outside 1–65535, independent of what the agent sent
+- the dashboard reads these through session auth only; the device token is never accepted
 - a new enrollment always creates a new device credential
 - fingerprint metadata must not be returned by dashboard APIs
 

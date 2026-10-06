@@ -95,6 +95,10 @@ const (
 	EventDBError        Event = "database_error"
 	EventDBMigration    Event = "database_migration"
 	EventServiceRestart Event = "service_restart"
+
+	// EventSystemInventory is logged when an agent reports its systemd unit and
+	// listening port snapshots.
+	EventSystemInventory Event = "system_inventory_updated"
 )
 
 // Auth events

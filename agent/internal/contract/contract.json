@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.3.0",
+  "contract_version": "1.4.0",
   "agent_version": "0.6.1",
   "collection": {
     "max_file_bytes": 524288,
@@ -114,6 +114,20 @@
   "apps_inventory": {
     "sources": ["apt", "flatpak", "pacman", "aur", "appimage"],
     "refresh_interval_seconds": 300
+  },
+  "system_inventory": {
+    "refresh_interval_seconds": 300,
+    "services": {
+      "max_units": 400,
+      "timeout_seconds": 10,
+      "states": ["running", "failed", "stopped"],
+      "enabled_states": ["enabled", "enabled-runtime"]
+    },
+    "ports": {
+      "max_ports": 200,
+      "timeout_seconds": 10,
+      "listening_states": ["LISTEN", "UNCONN"]
+    }
   },
   "preferences_sync": {
     "interval_seconds_default": 300,

@@ -268,6 +268,30 @@ type AppInfo struct {
 	Path    string `json:"path,omitempty"`
 }
 
+// ServiceUnit mirrors the agent payload for one systemd service. Status is the
+// bucket the dashboard colours by (running, failed, stopped); the raw systemd
+// columns are kept so a detail view can show what the agent actually read.
+type ServiceUnit struct {
+	Name          string `json:"name"`
+	Status        string `json:"status"`
+	LoadState     string `json:"load_state"`
+	ActiveState   string `json:"active_state"`
+	SubState      string `json:"sub_state,omitempty"`
+	UnitFileState string `json:"unit_file_state,omitempty"`
+	Description   string `json:"description,omitempty"`
+	Enabled       bool   `json:"enabled"`
+}
+
+// OpenPort mirrors one listening socket. Only the owning process name and pid
+// are stored, never a command line.
+type OpenPort struct {
+	Protocol string `json:"protocol"`
+	Local    string `json:"local_address"`
+	Port     int    `json:"port"`
+	Process  string `json:"process,omitempty"`
+	PID      int    `json:"pid,omitempty"`
+}
+
 type PreferenceInput struct {
 	Category     string `json:"category"`
 	Filename     string `json:"filename"`
@@ -365,6 +389,7 @@ func NewStore(root string) (*Store, error) {
 	s.migrateAddWorkspaceDirsColumn()
 	s.migrateAddStatusColumn()
 	s.migrateAddFingerprintColumn()
+	s.migrateAddSystemInventoryColumns()
 	s.migrateHashDeviceTokens()
 	s.migrateAddSecurityAuditsTable()
 	s.migrateAddLogsOwnerColumn()
@@ -409,6 +434,23 @@ func (s *Store) migrateAddLogsOwnerColumn() {
 		(SELECT d.owner_id FROM devices d WHERE d.id = logs.device_id), logs.user_id)
 		WHERE owner_id = ''`)
 	s.db.Exec("CREATE INDEX IF NOT EXISTS idx_logs_owner_ts ON logs(owner_id, ts)")
+}
+
+// migrateAddSystemInventoryColumns adds the services and ports snapshots. Both
+// are plain JSON columns on the device row, mirroring apps_json: the agent
+// replaces them wholesale on every upload, so there is nothing to join or
+// garbage collect.
+func (s *Store) migrateAddSystemInventoryColumns() {
+	for _, column := range []struct{ name, definition string }{
+		{"services_json", "TEXT"},
+		{"ports_json", "TEXT"},
+	} {
+		var count int
+		s.db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('devices') WHERE name=?", column.name).Scan(&count)
+		if count == 0 {
+			s.db.Exec("ALTER TABLE devices ADD COLUMN " + column.name + " " + column.definition)
+		}
+	}
 }
 
 func (s *Store) migrateAddStatusColumn() {
@@ -492,6 +534,8 @@ func (s *Store) initSchema() error {
 		last_error_at TEXT,
 		hardware_json TEXT,
 		apps_json TEXT,
+		services_json TEXT,
+		ports_json TEXT,
 		status TEXT NOT NULL DEFAULT 'online',
 		created_at TEXT NOT NULL,
 		updated_at TEXT NOT NULL
@@ -1345,6 +1389,11 @@ func (s *Store) AppendTelemetryDownsampled(agg TelemetryDownsampled) error {
 	)
 	return err
 }
+
+// maxSystemInventoryRows bounds one stored system inventory snapshot. It is the
+// server-side ceiling and deliberately matches the contract's max_units so an
+// agent cannot push a larger list than the contract documents.
+const maxSystemInventoryRows = 400
 
 // maxTelemetryRows bounds how many rows a single history range query can load
 // into memory, regardless of the requested window.
@@ -2334,6 +2383,116 @@ func (s *Store) UpdateApps(deviceID string, apps []AppInfo) error {
 	now := timeText(time.Now().UTC())
 	_, err := s.db.Exec("UPDATE devices SET apps_json = ?, updated_at = ? WHERE id = ?", string(data), now, deviceID)
 	return err
+}
+
+// UpdateSystemInventory replaces one or both system inventory snapshots. A nil
+// section is left untouched: the agent omits a section it could not collect, and
+// a transient failure must not be read as "this device has no services".
+func (s *Store) UpdateSystemInventory(deviceID string, services *[]ServiceUnit, ports *[]OpenPort) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := timeText(time.Now().UTC())
+	if services != nil {
+		data, err := json.Marshal(normalizeServices(*services))
+		if err != nil {
+			return err
+		}
+		if _, err := s.db.Exec("UPDATE devices SET services_json = ?, updated_at = ? WHERE id = ?", string(data), now, deviceID); err != nil {
+			return err
+		}
+	}
+	if ports != nil {
+		data, err := json.Marshal(normalizePorts(*ports))
+		if err != nil {
+			return err
+		}
+		if _, err := s.db.Exec("UPDATE devices SET ports_json = ?, updated_at = ? WHERE id = ?", string(data), now, deviceID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// GetServices returns the last services snapshot. A device that has never
+// reported one yields an empty list, not an error.
+func (s *Store) GetServices(deviceID string) ([]ServiceUnit, error) {
+	return systemInventoryColumn(s, deviceID, "services_json", func(raw string) ([]ServiceUnit, error) {
+		var units []ServiceUnit
+		if raw == "" {
+			return []ServiceUnit{}, nil
+		}
+		if err := json.Unmarshal([]byte(raw), &units); err != nil {
+			return nil, err
+		}
+		return units, nil
+	})
+}
+
+// GetPorts returns the last listening socket snapshot.
+func (s *Store) GetPorts(deviceID string) ([]OpenPort, error) {
+	return systemInventoryColumn(s, deviceID, "ports_json", func(raw string) ([]OpenPort, error) {
+		var ports []OpenPort
+		if raw == "" {
+			return []OpenPort{}, nil
+		}
+		if err := json.Unmarshal([]byte(raw), &ports); err != nil {
+			return nil, err
+		}
+		return ports, nil
+	})
+}
+
+func systemInventoryColumn[T any](s *Store, deviceID, column string, decode func(string) ([]T, error)) ([]T, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	// COALESCE is required, not cosmetic: a device row that never received an
+	// inventory holds NULL, and scanning NULL into a string fails outright.
+	var raw string
+	query := "SELECT COALESCE(" + column + ", '') FROM devices WHERE id = ?"
+	if err := s.db.QueryRow(query, deviceID).Scan(&raw); err != nil {
+		return nil, err
+	}
+	return decode(raw)
+}
+
+// normalizeServices enforces the server-side caps. The agent already applies
+// them, but the server must not store more than the contract allows just
+// because an agent lied or an old build did not know about the limit.
+func normalizeServices(units []ServiceUnit) []ServiceUnit {
+	filtered := make([]ServiceUnit, 0, len(units))
+	seen := make(map[string]bool, len(units))
+	for _, unit := range units {
+		unit.Name = strings.TrimSpace(unit.Name)
+		unit.Status = strings.TrimSpace(unit.Status)
+		if unit.Name == "" || seen[unit.Name] {
+			continue
+		}
+		seen[unit.Name] = true
+		filtered = append(filtered, unit)
+	}
+	if limit := maxSystemInventoryRows; len(filtered) > limit {
+		filtered = filtered[:limit]
+	}
+	return filtered
+}
+
+func normalizePorts(ports []OpenPort) []OpenPort {
+	for i := range ports {
+		ports[i].Protocol = strings.ToLower(strings.TrimSpace(ports[i].Protocol))
+		ports[i].Local = strings.TrimSpace(ports[i].Local)
+	}
+	filtered := make([]OpenPort, 0, len(ports))
+	for _, port := range ports {
+		// A port is only meaningful with a protocol and a number in range.
+		if port.Protocol == "" || port.Port <= 0 || port.Port > 65535 {
+			continue
+		}
+		filtered = append(filtered, port)
+	}
+	if limit := maxSystemInventoryRows; len(filtered) > limit {
+		filtered = filtered[:limit]
+	}
+	return filtered
 }
 
 // AppendTelemetry appends a raw telemetry payload.

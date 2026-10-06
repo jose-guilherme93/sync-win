@@ -1616,9 +1616,9 @@
             {:else if navState.section === 'processes'}
               <Processes device={modalDevice} />
             {:else if navState.section === 'packages'}
-              <Packages apps={deviceDetails[modalDevice.id]?.apps || modalDevice.apps || []} />
+              <Packages deviceId={modalDevice.id} />
             {:else if navState.section === 'services'}
-              <Services />
+              <Services deviceId={modalDevice.id} />
             {:else if navState.section === 'remote'}
               <RemoteActions device={modalDevice} />
             {:else if navState.section === 'settings'}

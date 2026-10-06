@@ -76,6 +76,48 @@ func TestLoadEmbeddedContract(t *testing.T) {
 	if !containsField(c.Telemetry.DiskPartitionDedup.ExemptFilesystems, "btrfs") {
 		t.Error("btrfs subvolumes must be exempt from the per-device dedup")
 	}
+	// The system inventory block exists so the agent has a bounded, declared
+	// budget for the systemd and listening-port passes. Without these checks a
+	// silent edit could uncap either collection.
+	if c.SystemInventory.RefreshIntervalSeconds <= 0 {
+		t.Error("system_inventory.refresh_interval_seconds must be positive")
+	}
+	if c.SystemInventory.Services.MaxUnits <= 0 || c.SystemInventory.Services.TimeoutSeconds <= 0 {
+		t.Error("system_inventory.services limits incomplete")
+	}
+	if len(c.SystemInventory.Services.States) == 0 || len(c.SystemInventory.Services.EnabledStates) == 0 {
+		t.Error("system_inventory.services must declare which states and enabled states it reports")
+	}
+	// The collector maps systemd onto exactly these buckets; a value the agent
+	// cannot produce would filter every unit out at runtime.
+	for _, status := range []string{"running", "failed", "stopped"} {
+		if !containsField(c.SystemInventory.Services.States, status) {
+			t.Errorf("system_inventory.services.states must include %q", status)
+		}
+	}
+	if c.SystemInventory.Ports.MaxPorts <= 0 || c.SystemInventory.Ports.TimeoutSeconds <= 0 {
+		t.Error("system_inventory.ports limits incomplete")
+	}
+	if len(c.SystemInventory.Ports.ListeningStates) == 0 {
+		t.Error("system_inventory.ports.listening_states required")
+	}
+	for _, state := range []string{"LISTEN", "UNCONN"} {
+		if !containsField(c.SystemInventory.Ports.ListeningStates, state) {
+			t.Errorf("system_inventory.ports.listening_states must include %q", state)
+		}
+	}
+	// The accessors fall back to their own defaults when the JSON is absent, so
+	// they are asserted directly rather than through the loaded contract.
+	empty := &Contract{}
+	if empty.MaxServiceUnits() != 400 || empty.MaxOpenPorts() != 200 {
+		t.Errorf("default inventory caps drifted: services=%d ports=%d", empty.MaxServiceUnits(), empty.MaxOpenPorts())
+	}
+	if empty.ServicesTimeout() != 10*time.Second || empty.PortsTimeout() != 10*time.Second {
+		t.Error("default inventory timeouts drifted")
+	}
+	if c.MaxServiceUnits() != c.SystemInventory.Services.MaxUnits || c.MaxOpenPorts() != c.SystemInventory.Ports.MaxPorts {
+		t.Error("accessors must report the values declared in the contract")
+	}
 }
 
 func containsField(list []string, want string) bool {

@@ -1,13 +1,45 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
+  import { apiFetch, apiURL } from '../../lib/api'
   import type { AppInfo } from '../../lib/types'
   import EmptyState from '../ui/EmptyState.svelte'
   import Skeleton from '../ui/Skeleton.svelte'
 
+  export let deviceId: string
   export let apps: AppInfo[] = []
-  export let loading = false
 
   let query = ''
   let source = 'all'
+  let loading = false
+  let error = ''
+  let loaded = false
+
+  // The app inventory is not part of /api/devices or /api/devices/{id}/detail:
+  // both omit it because it can be thousands of entries, and the summary carries
+  // only app_count. The screen therefore fetches its own list, the same way the
+  // Services screen does, rather than reading a field that is never populated.
+  onMount(load)
+
+  async function load() {
+    if (!deviceId) {
+      loaded = true
+      return
+    }
+    loading = true
+    error = ''
+    try {
+      const res = await apiFetch(apiURL(`/api/devices/${deviceId}/apps`))
+      if (!res.ok) throw new Error(`request failed (${res.status})`)
+      const payload = await res.json()
+      apps = Array.isArray(payload) ? payload : []
+    } catch (e: any) {
+      error = e?.message || 'Failed to load the package inventory'
+      apps = []
+    } finally {
+      loading = false
+      loaded = true
+    }
+  }
 
   $: sources = Array.from(new Set(apps.map((a) => a.source))).sort()
 
@@ -26,6 +58,13 @@
   $: visible = Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b))
 </script>
 
+{#if error}
+  <div class="error-banner" role="alert">
+    {error}
+    <button class="retry" on:click={load}>Retry</button>
+  </div>
+{/if}
+
 <section class="packages">
   <article class="card">
     <header class="card-head">
@@ -41,7 +80,7 @@
       </select>
     </div>
 
-    {#if loading}
+    {#if !loaded}
       <Skeleton variant="lines" rows={6} />
     {:else if apps.length === 0}
       <EmptyState

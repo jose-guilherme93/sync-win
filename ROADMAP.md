@@ -288,6 +288,32 @@ A funcionalidade P1 está concluída. A próxima etapa é uma nova priorização
 - [x] Session lifetime configurable via `SYNCWIN_SESSION_TTL_HOURS` (default 30 days)
 - [x] Fresh databases create the `logs`, `http_access` and `metrics` tables
 
+## FASE 23 — System Inventory (services e portas)
+- [x] contrato `system_inventory` v1.4.0: limites, estados e timeouts por seção
+- [x] agent collector: unidades systemd (`list-units` + `list-unit-files`) com status mapeado para `running`/`failed`/`stopped` e flag `enabled`
+- [x] agent collector: sockets em escuta via `ss -tulpnH`, com IPv6 entre colchetes, zone ID e coluna `state` opcional
+- [x] ferramenta ausente degrada para lista vazia sem virar erro de ciclo
+- [x] seção que falhou é omitida do payload; o server preserva o snapshot anterior
+- [x] armazenamento como colunas JSON no device (`services_json`, `ports_json`) com migração idempotente
+- [x] normalização no servidor: dedup, descarte de entradas inválidas e cap de 400
+- [x] `POST /api/devices/{id}/system-inventory` (device token) e `GET /services` + `GET /ports` (sessão do owner)
+- [x] dashboard: `Services.svelte` consome os dois endpoints, com estados distintos para "ainda não coletado", "coleção vazia" e "requisição falhou"
+- [x] testes de collector, parsing, filtros, cap, migração e isolamento entre owners
+
+## Pendências de backend conhecidas
+
+Fases ainda não implementadas, levantadas na auditoria do dashboard. Nenhuma
+existe no código; o dashboard mostra estado honesto "não coletado ainda" para cada
+uma e nomeia o endpoint que falta.
+
+- [ ] `GET /api/devices/{id}/smart` — saúde dos discos (SMART)
+- [ ] `GET /api/devices/{id}/updates` — pacotes com atualização pendente
+- [ ] `GET /api/alerts` + ack — alertas derivados do inventário
+- [ ] `PATCH /api/devices/{id}` — renomear e etiquetar device
+- [ ] `POST /api/devices/{id}/actions` — reboot, update-packages, restart-agent
+- [ ] campos de agente: clock da CPU (MHz) e tensão de core (V)
+- [ ] `agent/collectors/gpu_nvidia.go` — nvidia-smi: carga, potência, hotspot, memória, fan, clock, VRAM
+
 ## Regras do produto
 
 - salvar somente pequenos arquivos de texto e saves binários (base64)

@@ -41,16 +41,17 @@ var (
 var httpClient = &http.Client{Timeout: syncwinContract.HTTPTimeout()}
 
 type agentState struct {
-	DeviceID             string            `json:"device_id,omitempty"`
-	DeviceToken          string            `json:"device_token,omitempty"`
-	HardwareFingerprint  string            `json:"hardware_fingerprint,omitempty"`
-	LastSyncHashes       map[string]string `json:"last_sync_hashes"`
-	LastSaveSyncHashes   map[string]string `json:"last_save_sync_hashes"`
-	LastWorkspaceHashes  map[string]string `json:"last_workspace_hashes"`
-	LastPreferenceSync   time.Time         `json:"last_preference_sync"`
-	LastAppInventorySync time.Time         `json:"last_app_inventory_sync"`
-	LastSaveSync         time.Time         `json:"last_save_sync"`
-	LastWorkspaceSync    time.Time         `json:"last_workspace_sync"`
+	DeviceID                string            `json:"device_id,omitempty"`
+	DeviceToken             string            `json:"device_token,omitempty"`
+	HardwareFingerprint     string            `json:"hardware_fingerprint,omitempty"`
+	LastSyncHashes          map[string]string `json:"last_sync_hashes"`
+	LastSaveSyncHashes      map[string]string `json:"last_save_sync_hashes"`
+	LastWorkspaceHashes     map[string]string `json:"last_workspace_hashes"`
+	LastPreferenceSync      time.Time         `json:"last_preference_sync"`
+	LastAppInventorySync    time.Time         `json:"last_app_inventory_sync"`
+	LastSystemInventorySync time.Time         `json:"last_system_inventory_sync"`
+	LastSaveSync            time.Time         `json:"last_save_sync"`
+	LastWorkspaceSync       time.Time         `json:"last_workspace_sync"`
 }
 
 type preferencePayload struct {
@@ -514,6 +515,7 @@ func cmdDaemon(args []string) {
 	interval := fs.Duration("interval", 10*time.Second, "telemetry interval")
 	preferenceInterval := fs.Duration("preference-interval", time.Duration(syncwinContract.PreferencesSync.IntervalSecondsDefault)*time.Second, "preference sync interval")
 	appsInterval := fs.Duration("apps-interval", time.Duration(syncwinContract.AppsInventory.RefreshIntervalSeconds)*time.Second, "application inventory interval")
+	systemInterval := fs.Duration("system-interval", time.Duration(syncwinContract.SystemInventory.RefreshIntervalSeconds)*time.Second, "systemd unit and listening port inventory interval")
 	savesInterval := fs.Duration("saves-interval", time.Duration(syncwinContract.PreferencesSync.IntervalSecondsDefault)*time.Second, "save game sync interval")
 	workspaceInterval := fs.Duration("workspace-interval", time.Duration(syncwinContract.PreferencesSync.IntervalSecondsDefault)*time.Second, "workspace config sync interval")
 	if err := fs.Parse(args); err != nil {
@@ -524,6 +526,9 @@ func cmdDaemon(args []string) {
 	}
 	if *appsInterval <= 0 {
 		*appsInterval = time.Duration(syncwinContract.AppsInventory.RefreshIntervalSeconds) * time.Second
+	}
+	if *systemInterval <= 0 {
+		*systemInterval = time.Duration(syncwinContract.SystemInventory.RefreshIntervalSeconds) * time.Second
 	}
 	if *savesInterval <= 0 {
 		*savesInterval = time.Duration(syncwinContract.PreferencesSync.IntervalSecondsDefault) * time.Second
@@ -582,6 +587,7 @@ func cmdDaemon(args []string) {
 	lastStateJSON := ""
 	lastPreferenceAttempt := time.Time{}
 	lastAppInventoryAttempt := time.Time{}
+	lastSystemInventoryAttempt := time.Time{}
 	lastSaveAttempt := time.Time{}
 	lastWorkspaceAttempt := time.Time{}
 
@@ -606,6 +612,14 @@ func cmdDaemon(args []string) {
 				hadError = true
 			} else if err := sendAppInventory(*serverURL, *deviceID, *deviceToken, state, apps); err != nil {
 				log.Printf("application inventory sync failed: %v", err)
+				hadError = true
+			}
+		}
+
+		if lastSystemInventoryAttempt.IsZero() || now.Sub(lastSystemInventoryAttempt) >= *systemInterval {
+			lastSystemInventoryAttempt = now
+			if err := syncSystemInventory(*serverURL, *deviceID, *deviceToken, state); err != nil {
+				log.Printf("system inventory sync failed: %v", err)
 				hadError = true
 			}
 		}
@@ -2217,6 +2231,59 @@ func syncPreferences(serverURL, deviceID, deviceToken string, st *agentState) er
 	st.LastPreferenceSync = time.Now().UTC()
 	st.save()
 	log.Printf("preference sync completed candidates=%d saved=%d rejected=%d", len(payloads), len(response.Saved), len(response.Rejected))
+	return nil
+}
+
+// systemInventoryRequest mirrors the server payload. A section that could not be
+// collected is omitted entirely rather than sent empty, so a broken systemctl
+// never erases the inventory the dashboard is currently showing.
+type systemInventoryRequest struct {
+	DeviceToken string                   `json:"device_token,omitempty"`
+	Services    []collectors.ServiceUnit `json:"services,omitempty"`
+	Ports       []collectors.OpenPort    `json:"ports,omitempty"`
+}
+
+// syncSystemInventory collects and uploads the systemd unit list and the
+// listening sockets. The two sections are collected independently: one failing
+// tool must not cost the other section's upload.
+func syncSystemInventory(serverURL, deviceID, deviceToken string, st *agentState) error {
+	inventory := syncwinContract.SystemInventory
+	req := systemInventoryRequest{DeviceToken: deviceToken}
+
+	// A missing tool yields an empty slice with no error, which the server reads
+	// as "this device reports no services". Only a real failure is an error.
+	services, err := collectors.CollectServices(
+		inventory.Services.States,
+		inventory.Services.EnabledStates,
+		syncwinContract.MaxServiceUnits(),
+		syncwinContract.ServicesTimeout(),
+	)
+	if err != nil {
+		log.Printf("systemd unit collection failed, keeping last inventory: %v", err)
+	} else {
+		req.Services = services
+	}
+
+	ports, err := collectors.CollectOpenPorts(
+		inventory.Ports.ListeningStates,
+		syncwinContract.MaxOpenPorts(),
+		syncwinContract.PortsTimeout(),
+	)
+	if err != nil {
+		log.Printf("listening port collection failed, keeping last inventory: %v", err)
+	} else {
+		req.Ports = ports
+	}
+
+	if req.Services == nil && req.Ports == nil {
+		return fmt.Errorf("no system inventory section could be collected")
+	}
+	if err := postJSON(serverURL+"/api/devices/"+deviceID+"/system-inventory", deviceToken, req); err != nil {
+		return err
+	}
+	st.LastSystemInventorySync = time.Now().UTC()
+	st.save()
+	log.Printf("system inventory sync completed services=%d ports=%d", len(req.Services), len(req.Ports))
 	return nil
 }
 

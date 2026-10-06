@@ -65,6 +65,20 @@ type Contract struct {
 		Sources                []string `json:"sources"`
 		RefreshIntervalSeconds int      `json:"refresh_interval_seconds"`
 	} `json:"apps_inventory"`
+	SystemInventory struct {
+		RefreshIntervalSeconds int `json:"refresh_interval_seconds"`
+		Services               struct {
+			MaxUnits       int      `json:"max_units"`
+			TimeoutSeconds int      `json:"timeout_seconds"`
+			States         []string `json:"states"`
+			EnabledStates  []string `json:"enabled_states"`
+		} `json:"services"`
+		Ports struct {
+			MaxPorts        int      `json:"max_ports"`
+			TimeoutSeconds  int      `json:"timeout_seconds"`
+			ListeningStates []string `json:"listening_states"`
+		} `json:"ports"`
+	} `json:"system_inventory"`
 	PreferencesSync struct {
 		IntervalSecondsDefault int    `json:"interval_seconds_default"`
 		StatePath              string `json:"state_path"`
@@ -206,4 +220,36 @@ func (c *Contract) LynisTimeout() time.Duration {
 		return time.Duration(c.SecurityAudit.LynisTimeoutSeconds) * time.Second
 	}
 	return 600 * time.Second
+}
+
+// ServicesTimeout bounds one `systemctl` enumeration pass.
+func (c *Contract) ServicesTimeout() time.Duration {
+	if c.SystemInventory.Services.TimeoutSeconds > 0 {
+		return time.Duration(c.SystemInventory.Services.TimeoutSeconds) * time.Second
+	}
+	return 10 * time.Second
+}
+
+// PortsTimeout bounds one `ss` snapshot.
+func (c *Contract) PortsTimeout() time.Duration {
+	if c.SystemInventory.Ports.TimeoutSeconds > 0 {
+		return time.Duration(c.SystemInventory.Ports.TimeoutSeconds) * time.Second
+	}
+	return 10 * time.Second
+}
+
+// MaxServiceUnits caps how many systemd units a single collection may report.
+func (c *Contract) MaxServiceUnits() int {
+	if c.SystemInventory.Services.MaxUnits > 0 {
+		return c.SystemInventory.Services.MaxUnits
+	}
+	return 400
+}
+
+// MaxOpenPorts caps how many listening sockets a single collection may report.
+func (c *Contract) MaxOpenPorts() int {
+	if c.SystemInventory.Ports.MaxPorts > 0 {
+		return c.SystemInventory.Ports.MaxPorts
+	}
+	return 200
 }
