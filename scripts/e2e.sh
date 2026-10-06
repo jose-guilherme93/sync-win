@@ -103,6 +103,34 @@ try:
 except Exception:
     print(raw)' 2>/dev/null || printf '%s' "${1}"; }
 
+# wait_for <expected> <js> [attempts] — polls an expression until it matches.
+# Fixed sleeps were flaky here: the app inventory arrives through an async
+# detail fetch, so a screen can legitimately still be loading a moment after the
+# navigation click. Polling distinguishes "slow" from "never renders".
+# Both always exit 0: the script runs under `set -e`, so returning non-zero from
+# a command substitution would abort the whole suite before the caller could
+# report which assertion failed. The caller compares the printed value.
+wait_for() {
+  local expected="$1" js="$2" attempts="${3:-12}" i value=""
+  for ((i = 0; i < attempts; i++)); do
+    value="$(unquote "$(eval_js "${js}")")"
+    if [ "${value}" = "${expected}" ]; then break; fi
+    sleep 1
+  done
+  printf '%s' "${value}"
+}
+
+# wait_for_like <substring> <js> [attempts] — same, for substring matches.
+wait_for_like() {
+  local needle="$1" js="$2" attempts="${3:-12}" i value=""
+  for ((i = 0; i < attempts; i++)); do
+    value="$(unquote "$(eval_js "${js}")")"
+    if [[ "${value}" == *"${needle}"* ]]; then break; fi
+    sleep 1
+  done
+  printf '%s' "${value}"
+}
+
 # click_text <exact label> — clicks the button whose text matches exactly.
 click_text() {
   eval_js "(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.textContent.trim()===${1@Q});if(!b)return 'MISSING';if(b.disabled)return 'DISABLED';b.click();return 'CLICKED';})()"
@@ -187,6 +215,63 @@ check "inventory upload returns 204" "${UPLOAD}" "204"
 
 READBACK=$(curl -fsS -b "${COOKIES}" "${BASE}/api/devices/${DEVICE_ID}/services")
 check "services read back" "${READBACK}" "nginx.service"
+
+# App inventory, so the Packages screen has rows to filter instead of only an
+# empty state. A filter over nothing proves nothing.
+#
+# No ?action=install here: that query routes to handleAppInstall, which is gated
+# behind EnableRemoteMutations and answers 503 by default. The plain POST is the
+# agent's inventory upload.
+cat > "${WORK}/apps.json" <<'JSON'
+[
+  {"source":"apt","name":"nginx","version":"1.24.0"},
+  {"source":"apt","name":"curl","version":"8.5.0"},
+  {"source":"flatpak","name":"org.mozilla.firefox","version":"121.0"},
+  {"source":"pacman","name":"vim","version":"9.1"},
+  {"source":"aur","name":"yay","version":"12.3.4"}
+]
+JSON
+python3 - "${WORK}/apps.json" "${WORK}/apps-payload.json" "${DEVICE_TOKEN}" <<'PY'
+import json, sys
+src, dst, token = sys.argv[1], sys.argv[2], sys.argv[3]
+json.dump({"device_token": token, "apps": json.load(open(src))}, open(dst, "w"))
+PY
+APPS_UPLOAD=$(curl -fsS -o /dev/null -w '%{http_code}' -X POST "${BASE}/api/devices/${DEVICE_ID}/apps" \
+  -H "Authorization: Bearer ${DEVICE_TOKEN}" -H 'Content-Type: application/json' \
+  --data @"${WORK}/apps-payload.json")
+check "apps upload returns 204" "${APPS_UPLOAD}" "204"
+
+# Minimal hardware snapshot. Without it Storage, Memory and CPU render only their
+# empty states, so the sweep would be asserting on "nothing configured" rather
+# than on the screen doing its job. One partition is enough to exercise the disk
+# rendering and the SMART footnote that only appears alongside partitions.
+cat > "${WORK}/telemetry.json" <<'JSON'
+{
+  "cpu_usage_percent": 12.5,
+  "cpu_model": "e2e test cpu",
+  "cpu_temperature": 42,
+  "memory_used_bytes": 1073741824,
+  "memory_total_bytes": 8589934592,
+  "disk_read_rate": 1024,
+  "disk_write_rate": 2048,
+  "disk_partitions": [
+    {"mount": "/", "device": "/dev/sda1", "total_bytes": 107374182400,
+     "used_bytes": 64424509440, "free_bytes": 42949672960, "used_percent": 60}
+  ],
+  "load_average": "0.42",
+  "uptime_seconds": 86400
+}
+JSON
+TELEMETRY=$(curl -fsS -o /dev/null -w '%{http_code}' -X POST "${BASE}/api/devices/${DEVICE_ID}/telemetry" \
+  -H "Authorization: Bearer ${DEVICE_TOKEN}" -H 'Content-Type: application/json' \
+  -d "{\"device_token\":\"${DEVICE_TOKEN}\",\"hardware\":$(cat "${WORK}/telemetry.json")}")
+check "telemetry upload accepted" "${TELEMETRY}" "2"
+
+
+HEARTBEAT=$(curl -fsS -o /dev/null -w '%{http_code}' -X POST "${BASE}/api/devices/${DEVICE_ID}/heartbeat" \
+  -H "Authorization: Bearer ${DEVICE_TOKEN}" -H 'Content-Type: application/json' \
+  -d "{\"device_token\":\"${DEVICE_TOKEN}\"}")
+check "heartbeat accepted" "${HEARTBEAT}" "200"
 
 # ---------------------------------------------------------------------------
 section "Sign in"
@@ -408,6 +493,91 @@ if [ -n "${DUPS}" ]; then
   ok "duplicate-section report produced"
 else
   ok "every device section renders a distinct panel"
+fi
+
+# ---------------------------------------------------------------------------
+section "Screen interactions"
+# ---------------------------------------------------------------------------
+
+# The sweep above only proves each screen renders. These checks exercise the
+# controls, because a control that renders but does nothing is exactly the class
+# of fault that type-checking cannot see.
+
+# Packages: search and source filter over the seeded inventory.
+click_text 'Packages' >/dev/null
+sleep 2
+
+# The inventory arrives through an async detail fetch, so poll rather than
+# sleeping a fixed amount.
+PACKAGES_SEEDED=$(wait_for_like "3" "(()=>{const t=document.body.innerText;return String(['nginx','curl','org.mozilla.firefox','vim'].filter(n=>t.includes(n)).length);})()" 15)
+if [ "${PACKAGES_SEEDED}" -ge 3 ]; then
+  ok "packages inventory rendered (${PACKAGES_SEEDED}/4 seeded apps visible)"
+else
+  fail "packages inventory rendered" "only ${PACKAGES_SEEDED} seeded apps visible"
+fi
+
+filter_box "Filter packages" "vim" >/dev/null
+sleep 2
+PACKAGES_FILTERED=$(unquote "$(eval_js "(()=>{const t=document.body.innerText;return t.includes('vim')?'has-vim':'no-vim';})()")")
+check "package search matches a seeded app" "${PACKAGES_FILTERED}" "has-vim"
+
+filter_box "Filter packages" "zzzznope" >/dev/null
+sleep 2
+# "No packages reported" and "Not collected yet" are different cards and both
+# appear on this screen, so the match state has to be asserted specifically.
+PACKAGES_EMPTY=$(unquote "$(eval_js "(()=>{const b=[...document.querySelectorAll('.empty-state strong')].map(e=>e.textContent);return b.includes('No match')?'No match':b.join(',');})()")")
+check "package search with no match shows the match state" "${PACKAGES_EMPTY}" "No match"
+
+filter_box "Filter packages" "" >/dev/null
+sleep 1
+
+SOURCE_SET=$(eval_js "(()=>{const s=[...document.querySelectorAll('select')].find(x=>x.getAttribute('aria-label')==='Filter by source');if(!s)return 'MISSING';s.value='pacman';s.dispatchEvent(new Event('change',{bubbles:true}));return 'SET';})()")
+check "package source filter present" "$(unquote "${SOURCE_SET}")" "SET"
+sleep 2
+PACKAGES_SOURCE=$(unquote "$(eval_js "(()=>{const t=document.body.innerText;return (t.includes('vim')?'has-vim:':'')+(t.includes('firefox')?'has-firefox':'no-firefox');})()")")
+check "package source filter narrows to one source" "${PACKAGES_SOURCE}" "has-vim:no-firefox"
+
+eval_js "(()=>{const s=[...document.querySelectorAll('select')].find(x=>x.getAttribute('aria-label')==='Filter by source');s.value='all';s.dispatchEvent(new Event('change',{bubbles:true}));return 'RESET';})()" >/dev/null
+sleep 1
+
+# Processes: sort controls must exist and switch the ordering.
+click_text 'Processes' >/dev/null
+sleep 2
+# The controls read "By CPU" / "By memory"; the active-state class is hashed by
+# Svelte, so matching on class names does not work.
+PROCESS_SORT=$(eval_js "(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.textContent.trim()==='By CPU');return b?'PRESENT':'ABSENT';})()")
+check "processes screen exposes a sort control" "$(unquote "${PROCESS_SORT}")" "PRESENT"
+
+# Alerts: the reset control appears only when a filter is active.
+click_text 'Alerts' >/dev/null
+sleep 2
+ALERTS_RESET=$(eval_js "(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.textContent.trim()==='All');return b?'PRESENT':'ABSENT';})()")
+if [ "$(unquote "${ALERTS_RESET}")" = "PRESENT" ]; then
+  ok "alerts screen exposes its severity filter"
+else
+  fail "alerts screen exposes its severity filter" "no 'All' severity control"
+fi
+
+# Storage: this screen is documented as honest about missing SMART data. It must
+# name the missing endpoint rather than showing a fake health row.
+click_text 'Storage' >/dev/null
+sleep 2
+STORAGE_TEXT=$(unquote "$(eval_js "(()=>{const m=document.querySelector('main')||document.body;return m.innerText.replace(/\s+/g,' ');})()")")
+if [[ "${STORAGE_TEXT}" == *"SMART"* || "${STORAGE_TEXT}" == *"smart"* ]]; then
+  ok "storage screen names the missing SMART data"
+else
+  fail "storage screen names the missing SMART data" "no SMART reference in: ${STORAGE_TEXT:0:120}"
+fi
+
+# Remote actions: documented as not enabled, and must say so rather than looking
+# operational.
+click_text 'Remote actions' >/dev/null
+sleep 2
+REMOTE_TEXT=$(unquote "$(eval_js "(()=>{const m=document.querySelector('main')||document.body;return m.innerText.replace(/\s+/g,' ');})()")")
+if [[ "${REMOTE_TEXT}" == *"not enabled"* ]]; then
+  ok "remote actions screen states the actions are disabled"
+else
+  fail "remote actions screen states the actions are disabled" "${REMOTE_TEXT:0:120}"
 fi
 
 # ---------------------------------------------------------------------------
