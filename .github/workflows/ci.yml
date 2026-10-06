@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, develop]
   pull_request:
-    branches: [main, master]
+    branches: [main, master, develop]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -139,3 +139,68 @@ jobs:
           sleep 5
           curl -fs http://localhost:8080/health || (docker logs sync-win-test && exit 1)
           docker stop sync-win-test
+
+  # ---------------------------------------------------------------------------
+  # Browser end-to-end
+  # ---------------------------------------------------------------------------
+  # Unit tests, `vite build` and `svelte-check` all passed while the dashboard
+  # had a dead Packages screen and had never been opened. This job runs the one
+  # check that sees layout and the assembled request path.
+  #
+  # It builds and starts the dev stack, which is the same one `make dev-d` uses,
+  # so it exercises the real Vite proxy rather than a test harness.
+  e2e:
+    name: Browser end-to-end
+    runs-on: ubuntu-latest
+    # The dev stack brings up Postgres-free SQLite and the Vite dev server; the
+    # suite drives a real Chrome over CDP.
+    timeout-minutes: 30
+    needs: [web]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install agent-browser and Chrome
+        run: |
+          npm i -g agent-browser
+          agent-browser install --with-deps
+
+      - name: Start the dev stack
+        # data-dev is gitignored, so a fresh checkout does not have it. The
+        # Makefile creates it before `up` for the same reason; letting Docker
+        # create a missing bind-mount source is a needless difference from the
+        # local workflow.
+        run: |
+          mkdir -p data-dev
+          docker compose -f compose.dev.yaml up -d --build
+
+      - name: Wait for the server and dashboard
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 60); do
+            if curl -fs http://localhost:8088/health >/dev/null 2>&1 \
+               && curl -fs http://localhost:5173/ >/dev/null 2>&1; then
+              echo "Stack ready."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Stack did not become ready in time." >&2
+          docker compose -f compose.dev.yaml logs --no-color
+          exit 1
+
+      - name: Run the browser suite
+        run: scripts/e2e.sh
+
+      # Container logs are the only place a server-side 5xx or a proxy error will
+      # show up, and they are gone once the job ends.
+      - name: Dump stack logs on failure
+        if: failure()
+        run: docker compose -f compose.dev.yaml logs --no-color
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f compose.dev.yaml down -v
