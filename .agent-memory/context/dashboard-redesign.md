@@ -70,7 +70,11 @@ cd web && npx vite build && npm run check && npx vitest run
 ## Known gaps (not defects, deliberate)
 
 - `cpu`, `memory`, `network`, `sensors` all render the same `DeviceOverview`.
-  The plan wants per-section views.
+  The plan wants per-section views. **Confirmed in a real browser**:
+  `scripts/e2e.sh` reports that Overview, CPU & Thermal, Memory, Network and All
+  sensors produce byte-identical panels. `findings` duplicates `alerts` too.
+  Still needs a product decision: give each section a screen, or drop the
+  redundant sidebar entries.
 - `containers`, `logs`, `security` resolve to `DeviceModal` tabs (page variant,
   not popups).
 - Four screens show "not collected yet" states for parts with no API:
@@ -83,10 +87,10 @@ cd web && npx vite build && npm run check && npx vitest run
 
 Ordered. Each is independent enough to be its own commit or PR.
 
-1. **Open the dashboard in a browser.** Not yet done, and the largest unknown:
-   ten screens compile and pass every check but none has been seen running.
-   `make dev`, then click through every sidebar entry. Layout and runtime faults
-   that type-check cleanly only surface here.
+1. ~~Open the dashboard in a browser.~~ Done for the Services screen and every
+   section's render path. `make test-e2e` runs 46 checks against a real browser
+   (`scripts/e2e.sh`). Still not covered: responsive breakpoints, and interaction
+   on the eight screens that have no assertions beyond "renders content".
 2. ~~Finish the memory/docs handoff.~~ Done: this file and the redesign session
    are both referenced from `index.yaml`.
 3. **Per-section device views.** `cpu`, `memory`, `network` and `sensors` all

@@ -53,6 +53,40 @@ Three states are now distinct on the screen: never reported, reported nothing,
 and request failed. Conflating the last two would let a 500 read as "this device
 has no services".
 
+## Browser verification
+
+`scripts/e2e.sh` (`make test-e2e`), 46 checks. It seeds an account, device and
+inventory through the real API, then drives a real browser. Requires `make dev-d`
+running and `agent-browser` installed.
+
+Two earlier claims from this work were wrong and are corrected here, because both
+came from reading a screenshot instead of measuring:
+
+- The "Without Lynis" card on the fleet view does **not** overflow its grid row.
+  All five cards have identical `bottom` and `height`. The amber `.kpi.warn`
+  border was misread as a layout fault. The suite now asserts shared bottom
+  edges so the question cannot come up again.
+- The sidebar buttons were never stuck `disabled`. The fleet row was not clicked;
+  the status filter button was.
+
+The suite's own selector choices are deliberate, because getting them wrong
+silently tests the wrong thing:
+
+- Element refs go stale on every re-render, and a stale ref silently clicked
+  Overview instead of Services. All clicks select the target by its own text
+  inside the page.
+- `querySelector('input[type=search]')` matches the device search box, which
+  appears earlier in the DOM than the screen filters. Filters are addressed by
+  `aria-label`.
+- `agent-browser eval` prints JSON-encoded output, so `unquote` is applied before
+  comparing results.
+
+Verified to actually catch regressions: mutating the screen to render raw
+`active_state` instead of the mapped status made two assertions fail.
+
+The suite also reports, without failing, that Overview, CPU, Memory, Network and
+All sensors render byte-identical panels. That is the known debt below.
+
 ## Verification
 
 ```
