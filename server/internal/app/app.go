@@ -903,6 +903,18 @@ func (s *Server) handleDeviceDetail(w http.ResponseWriter, r *http.Request) {
 		s.handleApps(w, r, parts[0])
 		return
 	}
+	if len(parts) == 2 && parts[1] == "system-inventory" {
+		s.handleSystemInventory(w, r, parts[0])
+		return
+	}
+	if len(parts) == 2 && parts[1] == "services" {
+		s.handleDeviceServices(w, r, parts[0])
+		return
+	}
+	if len(parts) == 2 && parts[1] == "ports" {
+		s.handleDevicePorts(w, r, parts[0])
+		return
+	}
 	if len(parts) == 2 && parts[1] == "sync" {
 		s.handleSync(w, r, parts[0])
 		return
@@ -1248,6 +1260,120 @@ func (s *Server) handleRestoreSaves(w http.ResponseWriter, r *http.Request, devi
 		"game_name":     req.GameName,
 		"target_device": target.Hostname,
 	})
+}
+
+// systemInventoryRequest is the agent upload. Both sections are pointers so an
+// omitted section is distinguishable from an empty one: the agent omits a
+// section it could not collect, and the server must keep the previous snapshot
+// for it rather than recording a device that suddenly reports nothing.
+type systemInventoryRequest struct {
+	DeviceToken string               `json:"device_token"`
+	Services    *[]store.ServiceUnit `json:"services,omitempty"`
+	Ports       *[]store.OpenPort    `json:"ports,omitempty"`
+}
+
+// handleSystemInventory accepts the agent's systemd and port snapshots.
+func (s *Server) handleSystemInventory(w http.ResponseWriter, r *http.Request, deviceID string) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var req systemInventoryRequest
+	if !s.decodeBody(w, r, &req) {
+		return
+	}
+	if !s.validDeviceTokenValue(deviceID, req.DeviceToken) {
+		s.writeError(w, http.StatusUnauthorized, errors.New("invalid device token"))
+		return
+	}
+	if req.Services == nil && req.Ports == nil {
+		s.writeError(w, http.StatusBadRequest, errors.New("no system inventory section in payload"))
+		return
+	}
+	if err := s.store.UpdateSystemInventory(deviceID, req.Services, req.Ports); err != nil {
+		s.writeError(w, http.StatusNotFound, err)
+		return
+	}
+	s.log.Info(logging.CatSystem, logging.EventSystemInventory,
+		"system inventory updated", map[string]any{
+			"device_id": deviceID,
+			"services":  inventoryCount(req.Services),
+			"ports":     inventoryPortCount(req.Ports),
+		})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func inventoryCount(services *[]store.ServiceUnit) int {
+	if services == nil {
+		return -1
+	}
+	return len(*services)
+}
+
+func inventoryPortCount(ports *[]store.OpenPort) int {
+	if ports == nil {
+		return -1
+	}
+	return len(*ports)
+}
+
+// handleDeviceServices serves the last services snapshot to the dashboard. The
+// session owner must match the device owner; the device token is never accepted
+// here, because this endpoint exists for the panel and not for the agent.
+func (s *Server) handleDeviceServices(w http.ResponseWriter, r *http.Request, deviceID string) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireOwnedDevice(w, r, deviceID) {
+		return
+	}
+	units, err := s.store.GetServices(deviceID)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(units)
+}
+
+// handleDevicePorts serves the last listening socket snapshot.
+func (s *Server) handleDevicePorts(w http.ResponseWriter, r *http.Request, deviceID string) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireOwnedDevice(w, r, deviceID) {
+		return
+	}
+	ports, err := s.store.GetPorts(deviceID)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(ports)
+}
+
+// requireOwnedDevice resolves the session owner and fails the request unless it
+// owns the device. A device that does not exist is reported as not found so the
+// endpoint does not confirm the existence of another owner's device.
+func (s *Server) requireOwnedDevice(w http.ResponseWriter, r *http.Request, deviceID string) bool {
+	owner := s.ownerID(r)
+	if owner == "" {
+		s.writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
+		return false
+	}
+	device, err := s.store.GetDevice(deviceID)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
+		return false
+	}
+	if device.OwnerID != owner {
+		s.writeError(w, http.StatusForbidden, errors.New("not authorized"))
+		return false
+	}
+	return true
 }
 
 func (s *Server) handleApps(w http.ResponseWriter, r *http.Request, deviceID string) {

@@ -138,6 +138,51 @@ Fontes: `/proc/stat`, `/proc/meminfo`, `/proc/diskstats`, `/proc/uptime`, `/proc
 
 Fontes: `apt-mark showmanual`, `flatpak --user list`, `pacman -Qqe` (menos `-Qmq`), `paru/yay -Qmq`, AppImages em `~/Applications` e `~/.local/bin`. Campos: `{name, version?, source, path?}` com `source ∈ {apt, flatpak, pacman, aur, appimage}`. Atualiza a cada 5 min junto do ciclo de preferências.
 
+## Inventário de sistema (`POST /api/devices/{id}/system-inventory`)
+
+Duas seções independentes, ambas declaradas em `system_inventory` no
+`contract.json`: unidades systemd e sockets em escuta. Intervalo padrão 300 s.
+
+Fontes: `systemctl list-units --type=service --all` +
+`systemctl list-unit-files --type=service` para as unidades, `ss -tulpnH` para os
+sockets. Cada comando é limitado por timeout (`services.timeout_seconds`,
+`ports.timeout_seconds`) e a saída é cortada em `max_units` / `max_ports`.
+
+### Unidades systemd
+
+Campos: `{name, status, load_state, active_state, sub_state?, unit_file_state?, description?, enabled}`.
+`status` é o balde que o dashboard colore (`running`, `failed`, `stopped`), não o
+valor cru do systemd — um serviço saudável reporta `ACTIVE=active` e
+`SUB=running`, e a coluna `ACTIVE` sozinha não diz nada a quem lê. As colunas
+crus seguem no payload. Só entram unidades cujo `status` esteja em `states`.
+
+`enabled` é verdadeiro quando o unit file state está em `enabled_states`. A
+listagem de unit files é uma segunda chamada: se ela falhar, o snapshot sobe sem
+a flag, e não é perdido.
+
+As unidades são ordenadas por `failed`, `running`, `stopped` e depois por nome, de
+modo que uma unidade quebrada não fique enterrada entre centenas de unidades
+paradas.
+
+### Sockets em escuta
+
+Campos: `{protocol, local_address, port, process?, pid?}`. Só o nome do processo e
+o pid são reportados — nunca a linha de comando, que poderia conter segredo. O
+`ss` traz uma coluna `state` que alguns builds omitem em sockets de datagrama, e
+endereços IPv6 vêm entre colchetes, às vezes com zone ID (`[::%eth0]:22`,
+`127.0.0.53%lo:53`). O parser trata os dois casos e normaliza o wildcard para
+endereço vazio.
+
+### Ferramenta ausente não é falha
+
+`systemctl` ou `ss` ausentes retornam lista vazia sem erro: o agent roda também em
+sistemas sem systemd e um binário faltando não pode virar erro de ciclo a cada
+5 minutos. Já um comando presente que falha é erro — a seção correspondente é
+omitida do payload e o server preserva o snapshot anterior dela.
+
+O payload aceita `services` e `ports` ausentes. Uma seção omitida preserva o
+último valor; um array vazio é um relatório real e substitui o snapshot.
+
 ## Heartbeat (`POST /api/devices/{id}/heartbeat`)
 
 Corpo: `{"device_token": "..."}` — zera contador de falhas e marca online. O server deriva status: online (<30 s), stale (>30 s), offline (>5 min), error (último erro mais novo que último seen).

@@ -409,6 +409,63 @@ Submit installed application inventory from the agent.
 
 **Response:** `200 OK`
 
+### System Inventory
+
+#### `POST /api/devices/{id}/system-inventory`
+
+Submit the systemd service and listening socket snapshots from the agent. Called
+by the agent, authenticated with the device token.
+
+Both sections are optional and independent. An omitted section keeps the last
+stored snapshot; an explicit empty array replaces it.
+
+**Request:**
+```json
+{
+  "device_token": "device-secret-token",
+  "services": [
+    {
+      "name": "nginx.service",
+      "status": "failed",
+      "load_state": "loaded",
+      "active_state": "failed",
+      "sub_state": "failed",
+      "unit_file_state": "enabled-runtime",
+      "description": "A high performance web server",
+      "enabled": true
+    }
+  ],
+  "ports": [
+    {
+      "protocol": "tcp",
+      "local_address": "",
+      "port": 22,
+      "process": "sshd",
+      "pid": 812
+    }
+  ]
+}
+```
+
+`status` is the dashboard bucket (`running`, `failed`, `stopped`), not the raw
+systemd column. `local_address` is empty for a wildcard listener.
+
+**Response:** `204 No Content`, or `400` when neither section is present, `401`
+for an invalid device token.
+
+#### `GET /api/devices/{id}/services`
+
+Last systemd service snapshot. Session auth, owner scoped. The device token is
+not accepted here: this endpoint exists for the dashboard.
+
+**Response:** `200 OK` (array of `ServiceUnit`, empty when the device never reported)
+
+#### `GET /api/devices/{id}/ports`
+
+Last listening socket snapshot. Session auth, owner scoped.
+
+**Response:** `200 OK` (array of `OpenPort`, empty when the device never reported)
+
 ### Commands
 
 #### `GET /api/devices/{id}/commands`
