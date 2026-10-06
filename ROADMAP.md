@@ -297,6 +297,7 @@ A funcionalidade P1 está concluída. A próxima etapa é uma nova priorização
 - [x] armazenamento como colunas JSON no device (`services_json`, `ports_json`) com migração idempotente
 - [x] normalização no servidor: dedup, descarte de entradas inválidas e cap de 400
 - [x] `POST /api/devices/{id}/system-inventory` (device token) e `GET /services` + `GET /ports` (sessão do owner)
+- [x] dashboard: `Services.svelte` consome os dois endpoints, com estados distintos para "ainda não coletado", "coleção vazia" e "requisição falhou"
 - [x] testes de collector, parsing, filtros, cap, migração e isolamento entre owners
 
 ## Pendências de backend conhecidas

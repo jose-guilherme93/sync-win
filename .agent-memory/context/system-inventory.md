@@ -35,6 +35,24 @@ and the raw columns are kept alongside it.
 Units sort `failed` → `running` → `stopped` before name order, otherwise a broken
 unit is buried among hundreds of stopped ones.
 
+## The screen was never wired up
+
+The backend landed first and the screen was still showing its "not collected
+yet" state, which named the two endpoints as missing. Two things had to change in
+the dashboard for the feature to actually reach a user:
+
+- `App.svelte` rendered `<Services />` with no props. Without a `deviceId` the
+  screen had no way to call an endpoint, so it could only ever show sample data
+  or an empty state. This was the real blocker, not the missing backend.
+- `flags.ts` lost `services` and `ports`. `smart` remains, still without an
+  endpoint. `RemoteActions.svelte` had been using `MOCK.services` to decide
+  whether to warn that its actions are unimplemented — an unrelated coupling,
+  now removed.
+
+Three states are now distinct on the screen: never reported, reported nothing,
+and request failed. Conflating the last two would let a 500 read as "this device
+has no services".
+
 ## Verification
 
 ```
@@ -47,6 +65,10 @@ Go is not installed on the host; `docker run golang:1.25` is the only runner.
 All three suites pass: 7 new handler tests, 6 new store tests, 9 new collector
 tests, and `contract_test.go` now covers the `system_inventory` block, which
 previously had no test at all.
+
+The web suite is 63 tests (54 before this change, plus 9 for `Services.svelte`).
+That screen is the first of the redesign's ten screens to have any tests. It
+still has not been opened in a browser.
 
 ## Still open
 
