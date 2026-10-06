@@ -12,6 +12,9 @@ entries:
   - id: context/dashboard-redesign
     path: context/dashboard-redesign.md
     type: context
+  - id: context/system-inventory
+    path: context/system-inventory.md
+    type: context
   - id: decisions/security-hardening
     path: decisions/security-hardening.md
     type: decision
@@ -26,4 +29,7 @@ entries:
     type: session
   - id: sessions/261005-dashboard-redesign
     path: sessions/261005-dashboard-redesign.md
+    type: session
+  - id: sessions/261006-system-inventory
+    path: sessions/261006-system-inventory.md
     type: session

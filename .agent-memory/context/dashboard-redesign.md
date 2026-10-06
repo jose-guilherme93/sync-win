@@ -1,6 +1,7 @@
 # Context: dashboard redesign (Rigsight)
 
-Status: frontend complete and verified on `feat/rigsight-dashboard`. Backend not started.
+Status: frontend complete and verified on `feat/rigsight-dashboard`. Backend
+started — services and ports are implemented; see `system-inventory.md`.
 
 ## What this work is
 
@@ -86,9 +87,8 @@ Ordered. Each is independent enough to be its own commit or PR.
    ten screens compile and pass every check but none has been seen running.
    `make dev`, then click through every sidebar entry. Layout and runtime faults
    that type-check cleanly only surface here.
-2. **Finish the memory/docs handoff.** This file is written but
-   `.agent-memory/index.yaml` does not reference it, there is no
-   `sessions/` entry for the redesign, and the working plan file is stale.
+2. ~~Finish the memory/docs handoff.~~ Done: this file and the redesign session
+   are both referenced from `index.yaml`.
 3. **Per-section device views.** `cpu`, `memory`, `network` and `sensors` all
    fall through to `DeviceOverview`. Give each its own screen, or remove the
    redundant sidebar entries.
@@ -98,14 +98,19 @@ Ordered. Each is independent enough to be its own commit or PR.
 5. **Tests for the new screens.** Only `format`, `insights`, `api`,
    `telemetry-store` and `telemetry-cache` have unit tests. The ten screens have
    none.
-6. **Backend — separate branch, not started.** All of these need
-   `COLLECTION-CONTRACT.md` + `DATA-MODEL.md` updates and tests per `AGENTS.md`:
-   - endpoints: `GET /services`, `GET /ports`, `GET /smart`,
-     `GET /updates`, `GET /alerts` (+ ack), `PATCH /devices/{id}` (rename/tags),
-     `POST /devices/{id}/actions`
+6. **Backend — services and ports done, rest pending.** Implemented in
+   `34e9f15`; details in `system-inventory.md`. Still missing, all tracked in
+   `ROADMAP.md` under "Pendências de backend conhecidas":
+   - endpoints: `GET /smart`, `GET /updates`, `GET /alerts` (+ ack),
+     `PATCH /devices/{id}` (rename/tags), `POST /devices/{id}/actions`
    - agent fields: CPU clock (MHz) and core voltage (V)
    - new collector: `agent/collectors/gpu_nvidia.go` (nvidia-smi: load, power,
      hotspot, memory junction, fan RPM, core clock, VRAM)
+
+   Consequence for this branch: `Services.svelte` still renders its "not
+   collected yet" state and names `/services` and `/ports` as missing. Both now
+   exist, so the screen has to consume them and `VITE_MOCK_SERVICES` /
+   `VITE_MOCK_PORTS` lose their reason to exist.
 7. **Optional UI honesty check.** `telemetry-store.ts` still caps at
    `MAX_POINTS = 120`. `DeviceOverview` now fetches real history for the longer
    ranges, so the cap only affects the live 5-minute view — confirm that reads
