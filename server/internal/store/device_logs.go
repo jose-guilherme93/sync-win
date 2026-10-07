@@ -64,6 +64,10 @@ type DeviceLogPage struct {
 	Limit     int              `json:"limit"`
 	Offset    int              `json:"offset"`
 	Truncated bool             `json:"truncated"`
+	// Status is the agent's last explanation for reporting no logs, or empty
+	// when it reported none successfully. A non-empty value means the Logs
+	// screen should say why it is empty rather than showing a blank list.
+	Status string `json:"status,omitempty"`
 }
 
 // AppendDeviceLogs ingests a batch of agent-reported lines.
@@ -187,6 +191,13 @@ func (s *Store) ListDeviceLogs(deviceID string, q DeviceLogQuery) (DeviceLogPage
 	}
 	if rowsErr := rows.Err(); rowsErr != nil {
 		return page, rowsErr
+	}
+
+	// The agent's explanation travels with the page so an empty list is never
+	// ambiguous. Read from the latest telemetry sample rather than the log table,
+	// which holds nothing when collection is failing.
+	if device, deviceErr := s.getDeviceLocked(deviceID); deviceErr == nil {
+		page.Status = device.Hardware.LogsStatus
 	}
 
 	// Counts ignore the level filter on purpose: the toolbar shows how many

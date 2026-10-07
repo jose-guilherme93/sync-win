@@ -598,6 +598,44 @@ start_service() {
     fi
 }
 
+# verify_agent_readiness checks the two things that silently break the dashboard
+# without breaking the service: the unit missing systemd-journal (no device logs
+# anywhere) and the update timer not running (no agent ever receives a fix).
+# Both used to be a warning nobody saw, which is how a broken Logs screen looked
+# identical to a healthy one.
+verify_agent_readiness() {
+    local unit_file="/etc/systemd/system/${SYNCWIN_SERVICE_NAME}"
+    local problems=0
+
+    if [ -f "$unit_file" ] && ! grep -q "systemd-journal" "$unit_file"; then
+        warn "The agent unit lacks 'systemd-journal'; the Logs screen will stay empty."
+        warn "Adding it now."
+        if sed -i 's/^SupplementaryGroups=.*/SupplementaryGroups=docker systemd-journal/' "$unit_file"; then
+            systemctl daemon-reload
+            systemctl restart "$SYNCWIN_SERVICE_NAME" >/dev/null 2>&1
+            success "Added systemd-journal to the agent unit and restarted"
+        else
+            problems=$((problems + 1))
+        fi
+    fi
+
+    if ! systemctl is-enabled --quiet "$SYNCWIN_UPDATE_TIMER_NAME" 2>/dev/null; then
+        warn "The auto-update timer is not enabled; this agent will never receive fixes."
+        if systemctl enable --now "$SYNCWIN_UPDATE_TIMER_NAME" >/dev/null 2>&1; then
+            success "Enabled ${SYNCWIN_UPDATE_TIMER_NAME} (checks every 15 minutes)"
+        else
+            problems=$((problems + 1))
+            warn "Could not enable ${SYNCWIN_UPDATE_TIMER_NAME}."
+            warn "Enable it manually: systemctl enable --now ${SYNCWIN_UPDATE_TIMER_NAME}"
+        fi
+    fi
+
+    if [ "$problems" -gt 0 ]; then
+        warn "$problems agent readiness problem(s) could not be fixed automatically."
+        warn "The dashboard's Logs screen will not work until these are resolved."
+    fi
+}
+
 print_summary() {
     local current_user="${SUDO_USER:-}"
     printf "\n"
@@ -658,6 +696,7 @@ main() {
     configure_service
     start_service
     install_auto_update
+    verify_agent_readiness
     print_summary
 }
 
