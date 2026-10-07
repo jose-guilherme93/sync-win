@@ -130,8 +130,11 @@
       <li><span>Memory</span><b>warn &gt; {THRESHOLDS.ramWarn}%</b><b class="crit">crit &gt; {THRESHOLDS.ramCrit}%</b></li>
       <li><span>Temperature</span><b>warn &gt; {THRESHOLDS.tempWarn}°C</b><b class="crit">crit &gt; {THRESHOLDS.tempCrit}°C</b></li>
       <li><span>Disk</span><b>warn &gt; {THRESHOLDS.diskWarn}%</b><b class="crit">crit &gt; {THRESHOLDS.diskCrit}%</b></li>
-      <li><span>Offline</span><b>crit &gt; 5 min silent</b></li>
     </ul>
+    <p class="rules-note">
+      Device-state findings (offline, stale, sync error, duplicate identity, missing Lynis, outdated agent)
+      live on the <b>Findings</b> screen.
+    </p>
   </article>
 </section>
 

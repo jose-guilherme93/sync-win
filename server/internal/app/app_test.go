@@ -11,6 +11,7 @@ import (
 	"net/textproto"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -766,6 +767,235 @@ func newAuthedDevice(t *testing.T, s *Server, email string) (ownerID, token, dev
 	return user.ID, session.Token, device.ID
 }
 
+func TestCommandStatusAllowsOwnerAndDeviceToken(t *testing.T) {
+	s := newTestServer(t)
+	ownerID, sessionToken, _ := newAuthedDevice(t, s, "command-owner@example.com")
+	device, err := s.store.RegisterDevice("command-pc", "", ownerID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err := s.store.QueueCommand(device.ID, "lynis_audit", "", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name  string
+		token string
+	}{
+		{name: "owner session", token: sessionToken},
+		{name: "device token", token: device.DeviceToken},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/devices/"+device.ID+"/commands/"+command.ID, nil)
+			req.Header.Set("Authorization", "Bearer "+test.token)
+			rec := httptest.NewRecorder()
+			s.handleCommandStatus(rec, req, device.ID, command.ID)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+			}
+			var got store.DeviceCommand
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.ID != command.ID || got.Status != "queued" {
+				t.Fatalf("unexpected command status: %+v", got)
+			}
+		})
+	}
+
+	otherUser, err := s.store.CreateUser("other-command-owner@example.com", "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherSession, err := s.store.CreateSession(otherUser.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/devices/"+device.ID+"/commands/"+command.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+otherSession.Token)
+	rec := httptest.NewRecorder()
+	s.handleCommandStatus(rec, req, device.ID, command.ID)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("foreign owner status = %d, want 401", rec.Code)
+	}
+}
+
+func TestLynisCommandCompletesOnlyAfterReportIsSaved(t *testing.T) {
+	s := newTestServer(t)
+	ownerID, sessionToken, _ := newAuthedDevice(t, s, "lynis-command@example.com")
+	device, err := s.store.RegisterDevice("lynis-pc", "", ownerID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err := s.store.QueueCommand(device.ID, "lynis_audit", "", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report := `{"hardening_index":72,"total_warnings":1,"total_suggestions":2,"total_tests":10,"tests_passed":8,"lynis_version":"3.1","os":"Linux","kernel":"6.1"}`
+	body, _ := json.Marshal(commandResultRequest{DeviceToken: device.DeviceToken, Status: "completed", Message: report})
+	req := httptest.NewRequest(http.MethodPost, "/api/devices/"+device.ID+"/commands/"+command.ID, bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	s.handleCommandResult(rec, req, device.ID, command.ID)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("result status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	statusReq := httptest.NewRequest(http.MethodGet, "/api/devices/"+device.ID+"/commands/"+command.ID, nil)
+	statusReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	statusRec := httptest.NewRecorder()
+	s.handleCommandStatus(statusRec, statusReq, device.ID, command.ID)
+	var got store.DeviceCommand
+	if err := json.Unmarshal(statusRec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "completed" {
+		t.Fatalf("command status = %q, want completed", got.Status)
+	}
+	audits, err := s.store.GetSecurityAudits(device.ID, 1)
+	if err != nil || len(audits) != 1 || audits[0].HardeningIndex != 72 {
+		t.Fatalf("saved audits = %+v, err = %v", audits, err)
+	}
+}
+
+func TestInvalidLynisReportDoesNotCompleteCommand(t *testing.T) {
+	s := newTestServer(t)
+	ownerID, _, _ := newAuthedDevice(t, s, "lynis-invalid@example.com")
+	device, err := s.store.RegisterDevice("lynis-invalid-pc", "", ownerID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err := s.store.QueueCommand(device.ID, "lynis_audit", "", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(commandResultRequest{DeviceToken: device.DeviceToken, Status: "completed", Message: "not-json"})
+	req := httptest.NewRequest(http.MethodPost, "/api/devices/"+device.ID+"/commands/"+command.ID, bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	s.handleCommandResult(rec, req, device.ID, command.ID)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("result status = %d, want 500", rec.Code)
+	}
+	got, err := s.store.GetCommand(command.ID, device.ID)
+	if err != nil || got.Status != "queued" {
+		t.Fatalf("command after invalid report = %+v, err = %v", got, err)
+	}
+	audits, err := s.store.GetSecurityAudits(device.ID, 1)
+	if err != nil || len(audits) != 0 {
+		t.Fatalf("saved audits = %+v, err = %v", audits, err)
+	}
+}
+
+func TestDeviceSettingsOwnerAndAgentFlows(t *testing.T) {
+	s := newTestServer(t)
+	ownerID, sessionToken, _ := newAuthedDevice(t, s, "device-settings@example.com")
+	device, err := s.store.RegisterDevice("settings-pc", "", ownerID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	patch := func(token, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPatch, "/api/devices/"+device.ID, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		s.handleDeviceDetail(rec, req)
+		return rec
+	}
+
+	rec := patch(sessionToken, `{"display_name":"Main PC","tags":["gaming","work"],"collection_interval_seconds":30}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("owner PATCH = %d: %s", rec.Code, rec.Body.String())
+	}
+	var settings store.DeviceSettings
+	if err := json.Unmarshal(rec.Body.Bytes(), &settings); err != nil {
+		t.Fatal(err)
+	}
+	if settings.DisplayName != "Main PC" || settings.CollectionIntervalSeconds != 30 || len(settings.Tags) != 2 {
+		t.Fatalf("PATCH response = %+v", settings)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/devices/"+device.ID+"/settings", nil)
+	getReq.Header.Set("Authorization", "Bearer "+device.DeviceToken)
+	getRec := httptest.NewRecorder()
+	s.handleDeviceDetail(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("agent GET = %d: %s", getRec.Code, getRec.Body.String())
+	}
+	var agentSettings store.DeviceSettings
+	if err := json.Unmarshal(getRec.Body.Bytes(), &agentSettings); err != nil {
+		t.Fatal(err)
+	}
+	if agentSettings.DisplayName != settings.DisplayName || agentSettings.CollectionIntervalSeconds != settings.CollectionIntervalSeconds || !reflect.DeepEqual(agentSettings.Tags, settings.Tags) {
+		t.Fatalf("agent settings = %+v, want %+v", agentSettings, settings)
+	}
+
+	if rec := patch(sessionToken, `{"display_name":"bad","tags":[],"collection_interval_seconds":15}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid interval PATCH = %d, want 400", rec.Code)
+	}
+	if rec := patch(device.DeviceToken, `{"display_name":"agent","tags":[],"collection_interval_seconds":10}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("device-token PATCH = %d, want 403", rec.Code)
+	}
+
+	otherUser, err := s.store.CreateUser("foreign-settings@example.com", "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherSession, err := s.store.CreateSession(otherUser.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := patch(otherSession.Token, `{"display_name":"foreign","tags":[],"collection_interval_seconds":10}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("foreign owner PATCH = %d, want 403", rec.Code)
+	}
+}
+
+func TestDeviceActionsQueueOnlyExplicitOwnerCommands(t *testing.T) {
+	s := newTestServer(t)
+	ownerID, sessionToken, _ := newAuthedDevice(t, s, "remote-actions@example.com")
+	device, err := s.store.RegisterDevice("actions-pc", "", ownerID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(token, action string) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]string{"action": action})
+		req := httptest.NewRequest(http.MethodPost, "/api/devices/"+device.ID+"/actions", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		s.handleDeviceDetail(rec, req)
+		return rec
+	}
+
+	if rec := request(sessionToken, "restart_agent"); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("disabled mutations status = %d, want 503", rec.Code)
+	}
+	s.flags.EnableRemoteMutations = true
+	for _, action := range []string{"restart_agent", "update_packages", "reboot_device"} {
+		rec := request(sessionToken, action)
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("queue %s = %d: %s", action, rec.Code, rec.Body.String())
+		}
+		var command store.DeviceCommand
+		if err := json.Unmarshal(rec.Body.Bytes(), &command); err != nil {
+			t.Fatal(err)
+		}
+		if command.Type != action || command.Status != "queued" {
+			t.Fatalf("queued action = %+v, want %s", command, action)
+		}
+		if duplicate := request(sessionToken, action); duplicate.Code != http.StatusConflict {
+			t.Fatalf("duplicate %s = %d, want 409", action, duplicate.Code)
+		}
+	}
+	if rec := request(sessionToken, "run arbitrary command"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("unsupported action status = %d, want 400", rec.Code)
+	}
+	if rec := request(device.DeviceToken, "reboot_device"); rec.Code != http.StatusNotFound {
+		t.Fatalf("device-token action status = %d, want 404", rec.Code)
+	}
+}
+
 // TestAttachmentHtmlCannotExecuteInline ensures an uploaded HTML payload is
 // stored/served as an opaque download, never as executable inline content.
 func TestAttachmentHtmlCannotExecuteInline(t *testing.T) {
@@ -832,6 +1062,67 @@ func TestAttachmentImageServedInline(t *testing.T) {
 	}
 	if cd := dlRec.Header().Get("Content-Disposition"); !strings.HasPrefix(cd, "inline") {
 		t.Fatalf("download disposition = %q, want inline", cd)
+	}
+}
+
+// TestAgentDownloadStreamsBinaryWithLengthAndRange proves the agent download
+// sends a correct Content-Length and honors Range requests, so a transfer cut
+// by a restart can be resumed instead of restarting from zero.
+func TestAgentDownloadStreamsBinaryWithLengthAndRange(t *testing.T) {
+	s := newTestServer(t)
+	payload := bytes.Repeat([]byte("sync-win-agent-binary-"), 4096)
+	binaryPath := filepath.Join(t.TempDir(), "sync-win-agent")
+	if err := os.WriteFile(binaryPath, payload, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SYNCWIN_AGENT_BINARY", binaryPath)
+
+	handler := gzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.handleAgentDownload(w, r)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/agent/download", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if enc := rec.Header().Get("Content-Encoding"); enc != "" {
+		t.Fatalf("binary download must not be gzipped, got Content-Encoding %q", enc)
+	}
+	if got := rec.Header().Get("Content-Length"); got != fmt.Sprintf("%d", len(payload)) {
+		t.Fatalf("Content-Length = %q, want %d", got, len(payload))
+	}
+	if !bytes.Equal(rec.Body.Bytes(), payload) {
+		t.Fatalf("downloaded %d bytes, want %d", rec.Body.Len(), len(payload))
+	}
+
+	rangeReq := httptest.NewRequest(http.MethodGet, "/api/agent/download", nil)
+	rangeReq.Header.Set("Range", "bytes=0-9")
+	rangeRec := httptest.NewRecorder()
+	handler.ServeHTTP(rangeRec, rangeReq)
+	if rangeRec.Code != http.StatusPartialContent {
+		t.Fatalf("range status = %d, want 206", rangeRec.Code)
+	}
+	if !bytes.Equal(rangeRec.Body.Bytes(), payload[:10]) {
+		t.Fatalf("range body = %q", rangeRec.Body.Bytes())
+	}
+}
+
+// TestGzipMiddlewareStillCompressesJSON guards the compressible-type check so
+// JSON APIs keep their gzip savings.
+func TestGzipMiddlewareStillCompressesJSON(t *testing.T) {
+	handler := gzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/api/thing", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if enc := rec.Header().Get("Content-Encoding"); enc != "gzip" {
+		t.Fatalf("JSON response should be gzipped, got Content-Encoding %q", enc)
 	}
 }
 

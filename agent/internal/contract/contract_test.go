@@ -16,11 +16,21 @@ func TestLoadEmbeddedContract(t *testing.T) {
 	if c.Collection.MaxFileBytes <= 0 || len(c.Collection.DefaultFiles) == 0 {
 		t.Fatal("collection rules incomplete")
 	}
+	allowedIntervals := map[int]bool{}
+	for _, seconds := range c.Telemetry.IntervalSecondsAllowed {
+		allowedIntervals[seconds] = true
+	}
+	if !allowedIntervals[c.Telemetry.IntervalSecondsDefault] || len(allowedIntervals) != 4 {
+		t.Fatal("telemetry interval defaults and allowed values are incomplete")
+	}
 	if !c.Collection.RejectedContentRules.BinaryOrInvalidUTF8 || len(c.Collection.RejectedContentRules.SecretPatterns) == 0 {
 		t.Fatal("rejection rules incomplete")
 	}
 	if len(c.AppsInventory.Sources) == 0 || c.AppsInventory.RefreshIntervalSeconds <= 0 {
 		t.Fatal("application inventory rules incomplete")
+	}
+	if c.AppsInventory.PendingUpdates.RefreshIntervalSeconds <= 0 || c.AppsInventory.PendingUpdates.TimeoutSeconds <= 0 || c.AppsInventory.PendingUpdates.MaxOutputBytes <= 0 {
+		t.Fatal("pending update query limits incomplete")
 	}
 	if len(c.Collection.Workspace.Files) == 0 || c.Collection.Workspace.MaxFileBytes <= 0 || c.Collection.Workspace.MaxTotalBytes <= 0 {
 		t.Fatal("workspace configuration rules incomplete")
@@ -41,6 +51,21 @@ func TestLoadEmbeddedContract(t *testing.T) {
 	}
 	if c.Commands.OutputCapBytes <= 0 || c.Commands.PolicyPath == "" || !c.Commands.PolicyDefaults.AllowDockerRead || c.Commands.PolicyDefaults.AllowDockerExec {
 		t.Fatal("command limits or safe policy defaults incomplete")
+	}
+	if c.Commands.PolicyDefaults.AllowRestartAgent || c.Commands.PolicyDefaults.AllowPackageUpdates || c.Commands.PolicyDefaults.AllowRebootDevice {
+		t.Fatal("remote system actions must be disabled by default")
+	}
+	for _, action := range []string{"restart_agent", "update_packages", "reboot_device"} {
+		found := false
+		for _, supported := range c.Commands.SupportedTypes {
+			if supported == action {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("command contract does not declare %q", action)
+		}
 	}
 	if c.ServerLimitsMirrored.MaxFileBytesServer <= 0 || c.ServerLimitsMirrored.MaxRequestBytes <= 0 {
 		t.Fatal("mirrored server limits incomplete")
@@ -172,6 +197,9 @@ func TestDurationHelpers(t *testing.T) {
 				AllowExcludeFile      bool `json:"allow_exclude_file"`
 				AllowRestoreSaves     bool `json:"allow_restore_saves"`
 				AllowLynisAudit       bool `json:"allow_lynis_audit"`
+				AllowRestartAgent     bool `json:"allow_restart_agent"`
+				AllowPackageUpdates   bool `json:"allow_package_updates"`
+				AllowRebootDevice     bool `json:"allow_reboot_device"`
 				AllowDockerRead       bool `json:"allow_docker_read"`
 				AllowDockerLifecycle  bool `json:"allow_docker_lifecycle"`
 				AllowDockerExec       bool `json:"allow_docker_exec"`

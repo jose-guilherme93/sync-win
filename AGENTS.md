@@ -134,6 +134,24 @@ Never bump versions or create tags by hand — use the right commit type instead
 - The contract (`COLLECTION-CONTRACT.md` + `agent/internal/contract/contract.json`) is the single source of truth for what the agent collects and sends.
 - Use the Makefile for environment work: `make dev` (containers, server hot-reload + web HMR, data in `data-dev/`), `make prod` (containers, built image, data in `data/`), `make help` for the rest. `compose.yaml` is the simple single-server stack.
 
+## Parallel agents
+
+Two agents must never share a working directory. The git index is shared, so
+`git add -A` stages another agent's uncommitted work. This has happened: a
+`docs(memory)` commit absorbed eight files of in-flight work, was pushed, and
+left `develop` failing lint on a mid-edit snapshot.
+
+- One `git worktree add ../sync-win-<topic> -b <branch>` per concurrent task,
+  including two tasks by the same agent.
+- In a shared directory, stage explicit paths and never `git add -A` or
+  `git commit -a`.
+- Run `git status --short` before staging and read every entry. A path that is
+  not yours means stop.
+- Remove the worktree when the task lands: `git worktree remove <path>`.
+
+See `.agent-memory/decisions/parallel-agents.md` for the full incident and the
+worktree mechanics.
+
 ## How to run tests
 
 From the repository root:

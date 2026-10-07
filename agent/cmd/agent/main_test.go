@@ -35,7 +35,7 @@ func TestLocalPolicyControlsCommands(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
 
 	policy := loadLocalPolicy()
-	if policy.AllowInstallApp || policy.AllowExcludeFile || policy.AllowDockerExec || policy.AllowDockerPrune {
+	if policy.AllowInstallApp || policy.AllowExcludeFile || policy.AllowDockerExec || policy.AllowDockerPrune || policy.AllowRestartAgent || policy.AllowPackageUpdates || policy.AllowRebootDevice {
 		t.Fatalf("defaults must be safe, got %#v", policy)
 	}
 
@@ -43,12 +43,15 @@ func TestLocalPolicyControlsCommands(t *testing.T) {
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(configDir, "policy.json"), []byte(`{"allow_install_app":false,"allow_exclude_file":true}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(configDir, "policy.json"), []byte(`{"allow_install_app":false,"allow_exclude_file":true,"allow_restart_agent":true,"allow_package_updates":true,"allow_reboot_device":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	policy = loadLocalPolicy()
 	if policy.AllowInstallApp {
 		t.Fatal("policy must disable install_app")
+	}
+	if !policy.AllowRestartAgent || !policy.AllowPackageUpdates || !policy.AllowRebootDevice {
+		t.Fatalf("policy action flags not loaded: %+v", policy)
 	}
 
 	if err := os.WriteFile(filepath.Join(configDir, "policy.json"), []byte(`{not json`), 0o600); err != nil {
@@ -71,6 +74,14 @@ func TestDockerPolicyDefaults(t *testing.T) {
 		if dockerRequestAllowed(policy, reqType) {
 			t.Errorf("%s should be disabled by default", reqType)
 		}
+	}
+}
+
+func TestLynisAuditReportsMissingBinary(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	result := executeLynisAuditWithTimeout(time.Second)
+	if result.Status != "failed" || !strings.Contains(result.Message, "Lynis is not installed") {
+		t.Fatalf("missing Lynis result = %+v", result)
 	}
 }
 
@@ -120,6 +131,175 @@ func TestRunCommandLimits(t *testing.T) {
 	}
 	if int64(len(output)) > maxOutputBytes {
 		t.Fatalf("output cap exceeded: %d > %d", len(output), maxOutputBytes)
+	}
+}
+
+func TestFetchCollectionInterval(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/devices/device-1/settings" {
+			t.Errorf("settings path = %q", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer device-token" {
+			t.Errorf("authorization = %q", r.Header.Get("Authorization"))
+		}
+		_, _ = w.Write([]byte(`{"collection_interval_seconds":30}`))
+	}))
+	defer server.Close()
+
+	got, err := fetchCollectionInterval(server.URL, "device-1", "device-token")
+	if err != nil || got != 30*time.Second {
+		t.Fatalf("interval = %s, err = %v", got, err)
+	}
+
+	invalid := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"collection_interval_seconds":45}`))
+	}))
+	defer invalid.Close()
+	if _, err := fetchCollectionInterval(invalid.URL, "device-1", "device-token"); err == nil {
+		t.Fatal("unsupported interval should be rejected")
+	}
+}
+
+func TestSendPendingUpdatesPostsExplicitStatusAndRows(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/devices/device-1/updates" || r.Method != http.MethodPost {
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer token" {
+			t.Errorf("authorization = %q", r.Header.Get("Authorization"))
+		}
+		var payload struct {
+			Status  string `json:"status"`
+			Updates []struct {
+				Name string `json:"name"`
+			} `json:"updates"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Error(err)
+		}
+		if payload.Status != "ready" || len(payload.Updates) != 1 || payload.Updates[0].Name != "vim" {
+			t.Errorf("payload = %+v", payload)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	report := collectors.UpdateInventory{
+		Status:    "ready",
+		CheckedAt: time.Now().UTC().Format(time.RFC3339),
+		Updates:   []collectors.PendingUpdate{{Source: "apt", Name: "vim", CurrentVersion: "1", NewVersion: "2"}},
+	}
+	if err := sendPendingUpdates(server.URL, "device-1", "token", report); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPackageUpdatePlanIsFixedAndUsesInstalledManagers(t *testing.T) {
+	installed := map[string]bool{"apt-get": true, "flatpak": true, "pacman": true, "yay": true}
+	plan, err := packageUpdatePlan(func(name string) (string, error) {
+		if installed[name] {
+			return "/usr/bin/" + name, nil
+		}
+		return "", os.ErrNotExist
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"apt-get update",
+		"apt-get upgrade -y",
+		"flatpak update --user --noninteractive --assumeyes",
+		"flatpak update --system --noninteractive --assumeyes",
+		"yay -Syu --noconfirm",
+	}
+	if len(plan) != len(want) {
+		t.Fatalf("update plan = %+v", plan)
+	}
+	for i, command := range plan {
+		got := command.program + " " + strings.Join(command.args, " ")
+		if got != want[i] {
+			t.Errorf("plan[%d] = %q, want %q", i, got, want[i])
+		}
+	}
+	if _, err := packageUpdatePlan(func(string) (string, error) { return "", os.ErrNotExist }); err == nil {
+		t.Fatal("missing package managers should fail explicitly")
+	}
+}
+
+func TestRemoteActionsFailClosedAndRebootUsesFixedArgs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("INVOCATION_ID", "")
+	for _, action := range []string{"restart_agent", "update_packages", "reboot_device"} {
+		result := executeCommand(agentCommand{Type: action}, "", "", "")
+		if result.Status != "failed" || result.Message != "command disabled by local policy" {
+			t.Errorf("default policy for %s = %+v", action, result)
+		}
+	}
+
+	configDir := filepath.Join(home, ".config", "sync-win")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "policy.json"), []byte(`{"allow_reboot_device":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "shutdown-args")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$SHUTDOWN_LOG\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "shutdown"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sudoStub := "#!/bin/sh\n[ \"$1\" = -n ] && shift\nexec \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "sudo"), []byte(sudoStub), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	t.Setenv("SHUTDOWN_LOG", logPath)
+	result := executeCommand(agentCommand{Type: "reboot_device"}, "", "", "")
+	if result.Status != "completed" || !strings.Contains(result.Message, "one minute") {
+		t.Fatalf("reboot result = %+v", result)
+	}
+	args, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(args), "-r\n+1\n"; got != want {
+		t.Fatalf("shutdown args = %q, want %q", got, want)
+	}
+}
+
+func TestRestartAgentReportsBeforeExitingForSystemd(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("INVOCATION_ID", "test-invocation")
+	configDir := filepath.Join(home, ".config", "sync-win")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "policy.json"), []byte(`{"allow_restart_agent":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resultPosted := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`[{"id":"cmd-1","type":"restart_agent"}]`))
+			return
+		}
+		var result map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&result); err != nil {
+			t.Error(err)
+		}
+		resultPosted = result["status"] == "completed"
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	err := processCommands(server.URL, "device-1", "device-token")
+	if err != errAgentRestartRequested || !resultPosted {
+		t.Fatalf("processCommands err=%v, resultPosted=%v", err, resultPosted)
 	}
 }
 

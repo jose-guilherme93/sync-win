@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -119,6 +120,141 @@ func TestRegisterDeviceAndSync(t *testing.T) {
 	}
 	if len(files) != 1 {
 		t.Fatalf("expected 1 file entry, got %d", len(files))
+	}
+}
+
+func TestDeviceSettingsPersistAndValidate(t *testing.T) {
+	root := t.TempDir()
+	s, err := NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	device, err := s.RegisterDevice("settings-pc", "user", "owner", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaults, err := s.GetDeviceSettings(device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaults.CollectionIntervalSeconds != 10 || len(defaults.Tags) != 0 {
+		t.Fatalf("default settings = %+v", defaults)
+	}
+
+	settings := DeviceSettings{
+		DisplayName:               " Gaming PC ",
+		Tags:                      []string{" gaming ", "work", "gaming"},
+		CollectionIntervalSeconds: 30,
+	}
+	if err := s.UpdateDeviceSettings(device.ID, settings); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := s.GetDeviceSettings(device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.DisplayName != "Gaming PC" || saved.CollectionIntervalSeconds != 30 || !reflect.DeepEqual(saved.Tags, []string{"gaming", "work"}) {
+		t.Fatalf("saved settings = %+v", saved)
+	}
+	full, err := s.GetDevice(device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if full.DisplayName != saved.DisplayName || full.CollectionIntervalSeconds != saved.CollectionIntervalSeconds || !reflect.DeepEqual(full.Tags, saved.Tags) {
+		t.Fatalf("device settings did not flow through device model: %+v", full)
+	}
+	summaries, err := s.ListDeviceSummariesForOwner("owner")
+	if err != nil || len(summaries) != 1 {
+		t.Fatalf("summaries = %+v, err = %v", summaries, err)
+	}
+	if summaries[0].DisplayName != saved.DisplayName || summaries[0].CollectionIntervalSeconds != 30 || !reflect.DeepEqual(summaries[0].Tags, saved.Tags) {
+		t.Fatalf("summary settings = %+v", summaries[0])
+	}
+
+	for _, invalid := range []DeviceSettings{
+		{CollectionIntervalSeconds: 15},
+		{DisplayName: strings.Repeat("x", 65), CollectionIntervalSeconds: 10},
+		{Tags: []string{strings.Repeat("x", 33)}, CollectionIntervalSeconds: 10},
+		{Tags: []string{"bad,tag"}, CollectionIntervalSeconds: 10},
+	} {
+		if err := s.UpdateDeviceSettings(device.ID, invalid); err == nil {
+			t.Errorf("invalid settings were accepted: %+v", invalid)
+		}
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Startup migration is safe to run repeatedly against the same database.
+	s, err = NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	reloaded, err := s.GetDeviceSettings(device.ID)
+	if err != nil || !reflect.DeepEqual(reloaded, saved) {
+		t.Fatalf("reloaded settings = %+v, err = %v", reloaded, err)
+	}
+}
+
+func TestPendingUpdatesPersistWithExplicitEmptyAndErrorStates(t *testing.T) {
+	root := t.TempDir()
+	s, err := NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	device, err := s.RegisterDevice("updates-pc", "user", "owner", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	initial, err := s.GetPendingUpdates(device.ID)
+	if err != nil || initial.Status != "not_reported" || len(initial.Updates) != 0 {
+		t.Fatalf("initial update inventory = %+v, err = %v", initial, err)
+	}
+	if err := s.UpdatePendingUpdates(device.ID, UpdateInventory{Status: "ready", Updates: []PendingUpdate{{
+		Source: "apt", Name: "vim", CurrentVersion: "9.1", NewVersion: "9.2",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	ready, err := s.GetPendingUpdates(device.ID)
+	if err != nil || ready.Status != "ready" || ready.CheckedAt == "" || len(ready.Updates) != 1 || ready.Updates[0].NewVersion != "9.2" {
+		t.Fatalf("ready update inventory = %+v, err = %v", ready, err)
+	}
+	if err := s.UpdatePendingUpdates(device.ID, UpdateInventory{Status: "ready", Updates: []PendingUpdate{}}); err != nil {
+		t.Fatal(err)
+	}
+	empty, err := s.GetPendingUpdates(device.ID)
+	if err != nil || empty.Status != "ready" || len(empty.Updates) != 0 {
+		t.Fatalf("empty update inventory = %+v, err = %v", empty, err)
+	}
+	if err := s.UpdatePendingUpdates(device.ID, UpdateInventory{Status: "error", Message: "pacman query failed"}); err != nil {
+		t.Fatal(err)
+	}
+	failed, err := s.GetPendingUpdates(device.ID)
+	if err != nil || failed.Status != "error" || failed.Message != "pacman query failed" {
+		t.Fatalf("failed update inventory = %+v, err = %v", failed, err)
+	}
+	for _, invalid := range []UpdateInventory{
+		{Status: "mystery"},
+		{Status: "ready", Updates: []PendingUpdate{{Source: "shell", Name: "bad", NewVersion: "1"}}},
+		{Status: "ready", Updates: []PendingUpdate{{Source: "apt", Name: "", NewVersion: "1"}}},
+	} {
+		if err := s.UpdatePendingUpdates(device.ID, invalid); err == nil {
+			t.Errorf("invalid update inventory accepted: %+v", invalid)
+		}
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	reloaded, err := s.GetPendingUpdates(device.ID)
+	if err != nil || reloaded.Status != failed.Status || reloaded.Message != failed.Message {
+		t.Fatalf("reloaded update inventory = %+v, err = %v", reloaded, err)
 	}
 }
 

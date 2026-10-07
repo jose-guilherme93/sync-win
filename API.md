@@ -217,7 +217,7 @@ generate a new enrollment token and enroll again.
 
 ### `GET /api/agent/download`
 
-Download the agent binary. No authentication required (protected by enrollment token in the install flow).
+Download the agent binary. No authentication required (protected by enrollment token in the install flow). Returns `Content-Length` and supports HTTP `Range`, so an interrupted transfer can be resumed instead of restarting. Binary responses are never gzipped.
 
 ### `GET /api/agent/install.sh`
 
@@ -273,6 +273,56 @@ state, per-core usage) for the detail modal. The device token is never returned.
 The app inventory is fetched separately via `GET /api/devices/{id}/apps`.
 
 **Response:** `200 OK` (device object with full `hardware`)
+
+### `PATCH /api/devices/{id}`
+
+Update the device display name, tags, and telemetry collection interval. Requires
+the owning session; device tokens cannot modify settings.
+
+**Request:**
+```json
+{
+  "display_name": "Gaming PC",
+  "tags": ["gaming", "workstation"],
+  "collection_interval_seconds": 30
+}
+```
+
+The interval must be one of `5`, `10`, `30`, or `60` seconds. Display names are
+limited to 64 characters; up to 20 tags of 32 characters each are accepted.
+**Response:** `200 OK` with the saved settings.
+
+### `GET /api/devices/{id}/settings`
+
+Read device settings. The owning dashboard session or the device token may
+authenticate. Agents use the device token to refresh the telemetry interval;
+the returned settings contain no credentials.
+
+**Response:** `200 OK` with `display_name`, `tags`, and
+`collection_interval_seconds`.
+
+### `GET /api/devices/{id}/updates`
+
+Pending package updates reported by the agent. Requires the owning session.
+The `status` field is one of `not_reported` (never collected), `ready`,
+`unsupported` (no supported package manager), or `error` (the check failed).
+
+**Response:** `200 OK`
+```json
+{
+  "status": "ready",
+  "checked_at": "2026-10-07T12:00:00Z",
+  "updates": [
+    { "source": "apt", "name": "vim", "current_version": "9.1", "new_version": "9.2" }
+  ]
+}
+```
+
+### `POST /api/devices/{id}/updates`
+
+Report the agent's pending-update snapshot. Called by the agent with the device
+token. `updates` is ignored unless `status` is `ready`; the server re-validates
+the status, sources, names and versions before storing.
 
 ### `DELETE /api/devices/{id}`
 
@@ -468,6 +518,18 @@ Last listening socket snapshot. Session auth, owner scoped.
 
 ### Commands
 
+#### `POST /api/devices/{id}/actions`
+
+Queue one of the fixed remote actions below. Requires the owning session and
+`SYNCWIN_ENABLE_REMOTE_MUTATIONS=true` on the server; the agent also enforces
+its own local policy.
+
+**Request:** `{"action":"restart_agent"}`, `{"action":"update_packages"}`,
+or `{"action":"reboot_device"}`. No command text or arguments are accepted.
+
+**Response:** `202 Accepted` (queued command object); `409 Conflict` if the same
+action is already queued; `503 Service Unavailable` if remote mutations are off.
+
 #### `GET /api/devices/{id}/commands`
 
 Poll for pending commands. Called by the agent.
@@ -487,7 +549,16 @@ Report command result. Called by the agent.
 }
 ```
 
-**Response:** `200 OK`
+**Response:** `204 No Content`
+
+#### `GET /api/devices/{id}/commands/{cmd_id}`
+
+Read command status. The owning dashboard session or the device token may
+authenticate this request. Agent-token authentication remains supported for
+clients; the dashboard uses the session and must own the device.
+
+**Response:** `200 OK` (command object with `queued`, `completed`, or `failed`
+status and the result message when present)
 
 ### Files
 
@@ -784,6 +855,10 @@ Queue a Lynis security audit for the device. Requires session token.
 **Response:** `200 OK` (command object)
 
 **Note:** Lynis must be installed on the device (`sudo apt install lynis`). If Lynis is not installed, the agent returns a failed command with instructions.
+
+The response contains the queued command ID. The dashboard polls
+`GET /api/devices/{id}/commands/{cmd_id}` and refreshes audit history only after
+the report has been persisted and the command is marked `completed`.
 
 #### `GET /api/devices/{id}/security/audits`
 

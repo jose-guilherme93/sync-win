@@ -387,13 +387,34 @@ func (g *gzipResponseWriter) WriteHeader(status int) {
 		return
 	}
 	g.wroteHeader = true
-	if status >= 200 && status != http.StatusNoContent && status != http.StatusNotModified {
+	if status >= 200 && status != http.StatusNoContent && status != http.StatusNotModified && compressibleContentType(g.Header().Get("Content-Type")) {
 		g.compress = true
 		g.Header().Del("Content-Length")
 		g.Header().Set("Content-Encoding", "gzip")
 		g.Header().Add("Vary", "Accept-Encoding")
 	}
 	g.ResponseWriter.WriteHeader(status)
+}
+
+// compressibleContentType reports whether a response body benefits from gzip.
+// Binary downloads (the agent binary, attachments) are already incompressible
+// and gzipping them wastes CPU and memory for no size win, so they pass
+// through untouched. JSON APIs, shell scripts and other text stay compressed.
+func compressibleContentType(contentType string) bool {
+	if contentType == "" {
+		return true
+	}
+	base := strings.ToLower(strings.TrimSpace(strings.SplitN(contentType, ";", 2)[0]))
+	if strings.HasPrefix(base, "text/") {
+		return true
+	}
+	switch base {
+	case "application/json", "application/javascript", "application/xml",
+		"application/x-sh", "application/x-shellscript":
+		return true
+	default:
+		return strings.HasSuffix(base, "+json") || strings.HasSuffix(base, "+xml")
+	}
 }
 
 func (g *gzipResponseWriter) Write(b []byte) (int, error) {
@@ -875,8 +896,20 @@ func (s *Server) handleDeviceDetail(w http.ResponseWriter, r *http.Request) {
 		s.handleHeartbeat(w, r, parts[0])
 		return
 	}
+	if len(parts) == 2 && parts[1] == "settings" {
+		s.handleDeviceSettings(w, r, parts[0])
+		return
+	}
+	if len(parts) == 2 && parts[1] == "updates" {
+		s.handleDeviceUpdates(w, r, parts[0])
+		return
+	}
 	if len(parts) == 2 && parts[1] == "commands" {
 		s.handleCommands(w, r, parts[0])
+		return
+	}
+	if len(parts) == 2 && parts[1] == "actions" {
+		s.handleDeviceAction(w, r, parts[0])
 		return
 	}
 	if len(parts) == 3 && parts[1] == "commands" {
@@ -893,6 +926,10 @@ func (s *Server) handleDeviceDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(parts) == 1 && parts[0] != "" && r.Method == http.MethodDelete {
 		s.handleDeviceDelete(w, r, parts[0])
+		return
+	}
+	if len(parts) == 1 && parts[0] != "" && r.Method == http.MethodPatch {
+		s.handleDeviceSettings(w, r, parts[0])
 		return
 	}
 	if len(parts) == 2 && parts[1] == "apps" {
@@ -1010,6 +1047,87 @@ func (s *Server) handleDeviceDetailFull(w http.ResponseWriter, r *http.Request, 
 	_ = json.NewEncoder(w).Encode(device)
 }
 
+func (s *Server) handleDeviceSettings(w http.ResponseWriter, r *http.Request, deviceID string) {
+	device, err := s.store.GetDevice(deviceID)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		if s.ownerID(r) != device.OwnerID && !s.validDeviceToken(r, deviceID) {
+			s.writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
+			return
+		}
+		settings, err := s.store.GetDeviceSettings(deviceID)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(settings)
+	case http.MethodPatch:
+		if s.ownerID(r) != device.OwnerID {
+			s.writeError(w, http.StatusForbidden, errors.New("not authorized"))
+			return
+		}
+		var settings store.DeviceSettings
+		if !s.decodeBody(w, r, &settings) {
+			return
+		}
+		if err := s.store.UpdateDeviceSettings(deviceID, settings); err != nil {
+			s.writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		updated, err := s.store.GetDeviceSettings(deviceID)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(updated)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleDeviceUpdates(w http.ResponseWriter, r *http.Request, deviceID string) {
+	switch r.Method {
+	case http.MethodGet:
+		if !s.requireOwnedDevice(w, r, deviceID) {
+			return
+		}
+		report, err := s.store.GetPendingUpdates(deviceID)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(report)
+	case http.MethodPost:
+		var req struct {
+			DeviceToken string                `json:"device_token"`
+			Status      string                `json:"status"`
+			CheckedAt   string                `json:"checked_at"`
+			Message     string                `json:"message"`
+			Updates     []store.PendingUpdate `json:"updates"`
+		}
+		if !s.decodeBody(w, r, &req) {
+			return
+		}
+		if !s.validDeviceTokenValue(deviceID, req.DeviceToken) {
+			s.writeError(w, http.StatusUnauthorized, errors.New("invalid device token"))
+			return
+		}
+		report := store.UpdateInventory{Status: req.Status, CheckedAt: req.CheckedAt, Message: req.Message, Updates: req.Updates}
+		if err := s.store.UpdatePendingUpdates(deviceID, report); err != nil {
+			s.writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
 func (s *Server) handleAppInstall(w http.ResponseWriter, r *http.Request, deviceID string) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -1037,6 +1155,54 @@ func (s *Server) handleAppInstall(w http.ResponseWriter, r *http.Request, device
 		s.writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	_ = json.NewEncoder(w).Encode(command)
+}
+
+func (s *Server) handleDeviceAction(w http.ResponseWriter, r *http.Request, deviceID string) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.flags.EnableRemoteMutations {
+		s.writeError(w, http.StatusServiceUnavailable, errors.New("remote mutations are disabled"))
+		return
+	}
+	device, err := s.store.GetDevice(deviceID)
+	if err != nil || device.OwnerID != s.ownerID(r) {
+		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
+		return
+	}
+	var req struct {
+		Action string `json:"action"`
+	}
+	if !s.decodeBody(w, r, &req) {
+		return
+	}
+	commandType := ""
+	switch req.Action {
+	case "restart_agent", "update_packages", "reboot_device":
+		commandType = req.Action
+	default:
+		s.writeError(w, http.StatusBadRequest, errors.New("unsupported device action"))
+		return
+	}
+	pending, err := s.store.GetPendingCommands(deviceID)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	for _, command := range pending {
+		if command.Type == commandType {
+			s.writeError(w, http.StatusConflict, errors.New("this action is already queued"))
+			return
+		}
+	}
+	command, err := s.store.QueueCommand(deviceID, commandType, "", "", "", "")
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(command)
 }
 
@@ -1101,7 +1267,7 @@ func (s *Server) handleFileDelete(w http.ResponseWriter, r *http.Request, device
 
 func isRemoteMutationCommand(cmdType string) bool {
 	switch cmdType {
-	case "install_app", "restore_saves", "exclude_file":
+	case "install_app", "restore_saves", "exclude_file", "restart_agent", "update_packages", "reboot_device":
 		return true
 	default:
 		return false
@@ -1140,12 +1306,13 @@ func (s *Server) handleCommandStatus(w http.ResponseWriter, r *http.Request, dev
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	// Accept device token (stable, per-device) - this is the only auth needed
-	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if token == "" {
-		token = r.URL.Query().Get("device_token")
+	device, err := s.store.GetDevice(deviceID)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
+		return
 	}
-	if !s.validDeviceTokenValue(deviceID, token) {
+	ownerID := s.ownerID(r)
+	if ownerID != device.OwnerID && !s.validDeviceToken(r, deviceID) {
 		s.writeError(w, http.StatusUnauthorized, errors.New("invalid device token"))
 		return
 	}
@@ -1179,25 +1346,24 @@ func (s *Server) handleCommandResult(w http.ResponseWriter, r *http.Request, dev
 		return
 	}
 
-	// Look up command type before completing (for special post-processing)
+	// Persist a Lynis report before exposing the command as completed. The
+	// dashboard uses command completion as the signal to refresh audit history.
 	cmdType, _ := s.store.GetCommandType(commandID, deviceID)
+	if cmdType == "lynis_audit" && req.Status == "completed" {
+		device, err := s.store.GetDevice(deviceID)
+		if err != nil {
+			s.writeError(w, http.StatusNotFound, errors.New("device not found"))
+			return
+		}
+		if _, err := s.store.SaveSecurityAudit(deviceID, device.OwnerID, req.Message); err != nil {
+			s.writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to save security audit: %w", err))
+			return
+		}
+	}
 
 	if err := s.store.CompleteCommand(commandID, deviceID, req.Status, req.Message); err != nil {
 		s.writeError(w, http.StatusNotFound, err)
 		return
-	}
-
-	// If this was a successful lynis_audit, save the report
-	if cmdType == "lynis_audit" && req.Status == "completed" && req.Message != "" {
-		device, err := s.store.GetDevice(deviceID)
-		if err == nil {
-			if _, err := s.store.SaveSecurityAudit(deviceID, device.OwnerID, req.Message); err != nil {
-				s.log.Warn(logging.CatDevice, logging.EventAppError,
-					"failed to save security audit",
-					map[string]any{"device_id": deviceID, "error": err.Error()},
-				)
-			}
-		}
 	}
 
 	s.log.Info(logging.CatCommand, logging.EventCommandResult, "command completed", map[string]any{"command_id": commandID, "device_id": deviceID, "status": req.Status})
@@ -1549,6 +1715,25 @@ func (s *Server) handleTelemetryHistoryV2(w http.ResponseWriter, r *http.Request
 	}
 
 	if resolution == "auto" {
+		if store.ResolutionForInterval(from, to) == "raw" {
+			points, err := s.store.GetTelemetryHistoryRaw(deviceID, from, to)
+			if err != nil {
+				s.writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+			if len(points) > 0 {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"device_id":  deviceID,
+					"resolution": "raw",
+					"from":       from.Format(time.RFC3339),
+					"to":         to.Format(time.RFC3339),
+					"points":     points,
+					"count":      len(points),
+				})
+				return
+			}
+		}
 		points, res, err := s.store.GetBestHistory(deviceID, from, to)
 		if err != nil {
 			s.writeError(w, http.StatusInternalServerError, err)
@@ -1820,14 +2005,25 @@ func (s *Server) handleAgentDownload(w http.ResponseWriter, r *http.Request) {
 	if binaryPath == "" {
 		binaryPath = "/app/sync-win-agent"
 	}
-	data, err := os.ReadFile(binaryPath)
+	// ServeContent streams the file with a correct Content-Length and supports
+	// HTTP Range, so a cut transfer can be resumed instead of restarting from
+	// zero. Reading the whole binary into memory first made a dropped
+	// connection lose the entire download and left the client with no length to
+	// verify against.
+	file, err := os.Open(binaryPath)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, fmt.Errorf("read agent binary: %w", err))
 		return
 	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, fmt.Errorf("stat agent binary: %w", err))
+		return
+	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", "attachment; filename=sync-win-agent")
-	_, _ = w.Write(data)
+	http.ServeContent(w, r, "sync-win-agent", info.ModTime(), file)
 }
 
 func (s *Server) handleAgentInstallScript(w http.ResponseWriter, r *http.Request) {

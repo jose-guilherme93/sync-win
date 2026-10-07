@@ -187,17 +187,47 @@ O payload aceita `services` e `ports` ausentes. Uma seção omitida preserva o
 
 Corpo: `{"device_token": "..."}` — zera contador de falhas e marca online. O server deriva status: online (<30 s), stale (>30 s), offline (>5 min), error (último erro mais novo que último seen).
 
+## Atualizações pendentes
+
+O agente consulta atualizações disponíveis apenas com comandos de leitura:
+`apt list --upgradable`, `flatpak remote-ls --updates`, `pacman -Qu` e
+`paru/yay -Qua`. Nenhum desses comandos instala ou baixa algo. O resultado é
+enviado em `POST /api/devices/{id}/updates` com um estado explícito:
+
+| Estado | Significado |
+|---|---|
+| `ready` | A consulta rodou; `updates` lista o que está pendente (pode ser vazio) |
+| `unsupported` | Nenhum gerenciador suportado está instalado |
+| `error` | Um gerenciador instalado falhou ou excedeu tempo/saída |
+
+O servidor rejeita fontes, nomes e versões fora do contrato e nunca guarda
+`updates` quando o estado não é `ready`, para que uma falha não seja lida como
+"sem atualizações". A tela `Packages` mostra os quatro estados.
+
+## Configuração do dispositivo
+
+O dashboard atualiza nome de exibição, tags e intervalo de telemetria em
+`PATCH /api/devices/{id}` (somente sessão do proprietário). O agente consulta
+`GET /api/devices/{id}/settings` com o token do dispositivo após enviar
+telemetria; o intervalo retornado passa a valer para o próximo ciclo. São aceitos
+5, 10, 30 ou 60 segundos. Se a consulta falhar ou retornar valor inválido, o
+agente mantém o intervalo atual. Os intervalos de sync de preferências, saves e
+inventário continuam independentes.
+
 ## Comandos (pull via `GET /api/devices/{id}/commands`, resultado via `POST .../commands/{cmd}`)
 
 | Tipo | Ação local | Validações do agent |
 |---|---|---|
 | `install_app` | apt-get/flatpak/pacman/paru/yay install | nome validado (charset restrito), fonte conhecida, **timeout** configurável (padrão 900 s), saída limitada a 64 KiB, executado apenas com `allow_install_app=true` na policy |
 | `exclude_file` | adiciona linha em excluded-files | caminho relativo, sem `..`; idempotente |
-| `lynis_audit` | executa `lynis audit system --cronjob --no-colors` | Lynis deve estar instalado; timeout 120 s; parseia `lynis-report.dat` em JSON estruturado (hardening_index, warnings, suggestions, categories); resultado armazenado no servidor em `security_audits` |
+| `lynis_audit` | executa `lynis audit system --cronjob --no-colors` | Lynis deve estar instalado; timeout 600 s; parseia `lynis-report.dat` em JSON estruturado (hardening_index, warnings, suggestions, categories); resultado armazenado no servidor em `security_audits` |
+| `restart_agent` | encerra o daemon após reportar o resultado; systemd reinicia o serviço | requer `allow_restart_agent=true` e serviço systemd (Restart=always) |
+| `update_packages` | atualiza APT, Flatpak, Pacman ou AUR pelos executáveis fixos | requer `allow_package_updates=true`; timeout local configurado; APT/Pacman/system Flatpak exigem root ou `sudo -n` |
+| `reboot_device` | agenda `shutdown -r +1` | requer `allow_reboot_device=true` e root ou `sudo -n`; resultado enviado antes do reboot |
 
 `install_app` usa apenas comandos fixos por fonte. Flatpak e AUR rodam no user service; APT e Pacman exigem root ou `sudo -n` configurado. AppImage é recusado porque não há fonte.download confiável. A feature flag `SYNCWIN_ENABLE_REMOTE_MUTATIONS` também precisa estar habilitada no servidor.
 
-- **Policy local** (`~/.config/sync-win/policy.json`, criada pelo operador): `{"allow_install_app": false, "allow_exclude_file": false, "allow_restore_saves": false, "allow_lynis_audit": true, "allow_docker_read": true, "allow_docker_lifecycle": false, "allow_docker_exec": false, "allow_docker_prune": false, "allow_docker_compose": false, "command_timeout_seconds": 900}`. Arquivo ausente ou inválido usa esses defaults fail-closed. Comando recusado é reportado ao servidor com motivo — nada executa sem consentimento local.
+- **Policy local** (`~/.config/sync-win/policy.json`, criada pelo operador): `{"allow_install_app": false, "allow_exclude_file": false, "allow_restore_saves": false, "allow_lynis_audit": true, "allow_restart_agent": false, "allow_package_updates": false, "allow_reboot_device": false, "allow_docker_read": true, "allow_docker_lifecycle": false, "allow_docker_exec": false, "allow_docker_prune": false, "allow_docker_compose": false, "command_timeout_seconds": 900}`. Arquivo ausente ou inválido usa defaults fail-closed. Comando recusado é reportado ao servidor com motivo — nada executa sem consentimento local.
 - **Docker**: IDs de container/exec são validados, requests têm deadline, respostas são limitadas e compose aceita apenas filenames/roots aprovados sem symlink escape. Results são vinculados ao device que os solicitou.
 - Transporte: token via header `Authorization: Bearer`; polling apenas; o servidor nunca empurra nada.
 

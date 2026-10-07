@@ -10,7 +10,7 @@ import (
 // Aggregation thresholds: how many raw points to buffer before aggregating.
 const (
 	rawPer1m = 6  // 6 × 10s = 60s → 1-minute aggregate
-	rawPer5m = 30 // 30 × 1m = 30m → 5-minute aggregate (but we use 1m points)
+	rawPer5m = 5  // 5 × 1m = 5-minute aggregate
 	rawPer1h = 12 // 12 × 5m = 60m → 1-hour aggregate
 )
 
@@ -47,11 +47,10 @@ type rawSample struct {
 
 // DeviceAggState tracks aggregation counters per device.
 type DeviceAggState struct {
-	mu      sync.Mutex
-	rawBuf  []rawSample // buffer for raw → 1m aggregation
-	count1m int         // count of 1m points buffered → 5m
-	buf5m   []TelemetryDownsampled
-	count5h int // count of 5m points buffered → 1h
+	mu     sync.Mutex
+	rawBuf []rawSample
+	buf5m  []TelemetryDownsampled
+	buf1h  []TelemetryDownsampled
 }
 
 // Aggregator manages per-device aggregation state.
@@ -97,7 +96,6 @@ func (a *Aggregator) FeedRaw(deviceID string, payload []byte, ts time.Time) {
 		_ = a.store.AppendTelemetryDownsampled(agg)
 		state.rawBuf = state.rawBuf[:0]
 
-		state.count1m++
 		state.buf5m = append(state.buf5m, agg)
 
 		// Aggregate 1m → 5m when buffer is full
@@ -107,19 +105,14 @@ func (a *Aggregator) FeedRaw(deviceID string, payload []byte, ts time.Time) {
 			agg5m.Resolution = "5m"
 			_ = a.store.AppendTelemetryDownsampled(agg5m)
 			state.buf5m = state.buf5m[:0]
+			state.buf1h = append(state.buf1h, agg5m)
 
-			state.count5h++
-			// Aggregate 5m → 1h every rawPer1h cycles
-			if state.count5h >= rawPer1h {
-				// Fetch last 12 5m points from DB for accurate 1h aggregation
-				points, err := a.store.GetDownsampledRange(deviceID, "5m", time.Now().UTC().Add(-2*time.Hour), time.Now().UTC())
-				if err == nil && len(points) >= rawPer1h {
-					agg1h := aggregateDownsampled(points)
-					agg1h.DeviceID = deviceID
-					agg1h.Resolution = "1h"
-					_ = a.store.AppendTelemetryDownsampled(agg1h)
-				}
-				state.count5h = 0
+			if len(state.buf1h) >= rawPer1h {
+				agg1h := aggregateDownsampled(state.buf1h)
+				agg1h.DeviceID = deviceID
+				agg1h.Resolution = "1h"
+				_ = a.store.AppendTelemetryDownsampled(agg1h)
+				state.buf1h = state.buf1h[:0]
 			}
 		}
 	}

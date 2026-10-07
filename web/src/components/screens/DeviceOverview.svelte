@@ -48,6 +48,7 @@
     { id: 'day', label: 'Day', ms: 24 * 60 * 60_000, live: false }
   ]
   let period = '1h'
+  let historyRequest = 0
 
   // history-v2 returns either downsampled aggregates (cpu_avg, mem_avg, …) or
   // raw payloads, depending on the window. Normalising here keeps the chart
@@ -64,7 +65,7 @@
         temp: raw.temp_avg ?? raw.temp_max ?? null
       }
     }
-    let hw = raw.payload
+    let hw = raw.payload ?? raw
     if (typeof hw === 'string') {
       try { hw = JSON.parse(hw) } catch { return null }
     }
@@ -93,9 +94,11 @@
 
     loadingHistory = true
     historyError = ''
+    const request = ++historyRequest
     try {
       const to = new Date()
       const from = new Date(to.getTime() - option.ms)
+      if (period === 'day') from.setHours(0, 0, 0, 0)
       const query = new URLSearchParams({
         from: from.toISOString(),
         to: to.toISOString(),
@@ -110,13 +113,15 @@
       const points: ChartPoint[] = Array.isArray(payload?.points)
         ? payload.points.map(normalizePoint).filter((p: ChartPoint | null): p is ChartPoint => p != null)
         : []
-      serverHistory = points
+      if (request === historyRequest) serverHistory = points
     } catch (err) {
       // Keep whatever we had; a failed fetch must not blank the chart.
-      serverHistory = []
-      historyError = err instanceof Error ? err.message : 'history unavailable'
+      if (request === historyRequest) {
+        serverHistory = []
+        historyError = err instanceof Error ? err.message : 'history unavailable'
+      }
     } finally {
-      loadingHistory = false
+      if (request === historyRequest) loadingHistory = false
     }
   }
 
@@ -126,8 +131,13 @@
 
   $: windowed = PERIODS.find((p) => p.id === period)?.live ? liveHistory : serverHistory
 
-  function seriesOf(key: 'cpu' | 'memory' | 'temp' | 'netRx' | 'netTx'): number[] {
-    return windowed.map((p) => (p[key] as number) ?? 0).filter((v) => Number.isFinite(v))
+  // windowed must be passed in explicitly: Svelte's reactive analysis does not
+  // see a dependency that is only read inside a called function, so
+  // `seriesOf('cpu')` would be evaluated once (while windowed was still empty)
+  // and never re-run. That left the History chart and the overview sparklines
+  // permanently blank.
+  function seriesOf(values: ChartPoint[], key: 'cpu' | 'memory' | 'temp' | 'netRx' | 'netTx'): number[] {
+    return values.map((p) => (p[key] as number) ?? 0).filter((v) => Number.isFinite(v))
   }
 
   function minOf(values: number[]): number | null {
@@ -147,11 +157,11 @@
     .filter((i) => (i.rx_rate || 0) > 0 || (i.tx_rate || 0) > 0 || i.rx_errors > 0 || i.tx_errors > 0)
     .slice(0, 4)
 
-  $: cpuSeries = seriesOf('cpu')
-  $: memSeries = seriesOf('memory')
-  $: tempSeries = seriesOf('temp')
-  $: rxSeries = seriesOf('netRx')
-  $: txSeries = seriesOf('netTx')
+  $: cpuSeries = seriesOf(windowed, 'cpu')
+  $: memSeries = seriesOf(windowed, 'memory')
+  $: tempSeries = seriesOf(windowed, 'temp')
+  $: rxSeries = seriesOf(windowed, 'netRx')
+  $: txSeries = seriesOf(windowed, 'netTx')
 
   // Agent impact is the footprint of the SyncWin agent itself, which the user
   // cares about because it is the one process this project is responsible for.

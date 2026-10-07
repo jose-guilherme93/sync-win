@@ -18,11 +18,17 @@ entries:
   - id: context/ci-cd
     path: context/ci-cd.md
     type: context
+  - id: context/dashboard-functionality
+    path: context/dashboard-functionality.md
+    type: context
   - id: decisions/security-hardening
     path: decisions/security-hardening.md
     type: decision
   - id: decisions/project-memory
     path: decisions/project-memory.md
+    type: decision
+  - id: decisions/parallel-agents
+    path: decisions/parallel-agents.md
     type: decision
   - id: sessions/260925-p0-start
     path: sessions/260925-p0-start.md
@@ -38,4 +44,7 @@ entries:
     type: session
   - id: sessions/261007-ci-cd
     path: sessions/261007-ci-cd.md
+    type: session
+  - id: sessions/261007-dashboard-functionality
+    path: sessions/261007-dashboard-functionality.md
     type: session

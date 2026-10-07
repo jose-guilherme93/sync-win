@@ -59,6 +59,10 @@ Fields:
 - ports_json: JSON array with latest listening socket snapshot (OpenPort)
 - status: derived from last_seen_at (online <30s, stale >30s, offline >5min, error, duplicate)
 - hardware_fingerprint: internal hardware metadata only; never an authentication credential or reconnect secret
+- display_name: optional dashboard label; empty means use hostname
+- tags_json: JSON array of owner-defined device tags
+- collection_interval_seconds: telemetry cycle interval; allowed values are 5, 10, 30, and 60
+- updates_json: JSON snapshot of pending package updates (`{status, checked_at, message?, updates[]}`); status is `not_reported`, `ready`, `unsupported`, or `error`
 - created_at: creation timestamp
 - updated_at: modification timestamp
 

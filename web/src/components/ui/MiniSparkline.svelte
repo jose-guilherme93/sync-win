@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { resolveCssColor } from '../../lib/color'
 
   // A minimal canvas sparkline that takes plain numbers. The existing
   // components/Sparkline.svelte is bound to the shared device telemetry store
@@ -11,6 +12,7 @@
   export let color = 'var(--accent)'
   export let height = 28
   export let fill = true
+  export let label = ''
 
   let canvas: HTMLCanvasElement | null = null
 
@@ -26,6 +28,10 @@
     if (!ctx) return
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, width, h)
+
+    // Resolve "var(--…)" to a concrete colour: the canvas API ignores custom
+    // properties and would otherwise keep the context's default black.
+    const stroke = resolveCssColor(color)
 
     let lo = Infinity
     let hi = -Infinity
@@ -57,7 +63,7 @@
       ctx.lineTo(0, h)
       ctx.closePath()
       ctx.globalAlpha = 0.12
-      ctx.fillStyle = color
+      ctx.fillStyle = stroke
       ctx.fill()
       ctx.restore()
     }
@@ -69,7 +75,7 @@
       if (i === 0) ctx.moveTo(x, yy)
       else ctx.lineTo(x, yy)
     })
-    ctx.strokeStyle = color
+    ctx.strokeStyle = stroke
     ctx.lineWidth = 1.5
     ctx.lineJoin = 'round'
     ctx.stroke()
@@ -79,7 +85,7 @@
   onMount(draw)
 </script>
 
-<canvas bind:this={canvas} style="height: {height}px"></canvas>
+<canvas bind:this={canvas} style="height: {height}px" role={label ? 'img' : undefined} aria-label={label || undefined}></canvas>
 
 <style>
   canvas {

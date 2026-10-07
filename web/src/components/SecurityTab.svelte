@@ -52,6 +52,7 @@
   export let authHeaders: Record<string, string> = {}
   export let lynisAvailable: boolean = false
   export let lynisInstallCmd: string = ''
+  export let agentStatus: string = 'unknown'
 
   let audits: SecurityAudit[] = []
   let latestReport: LynisReport | null = null
@@ -61,6 +62,9 @@
   let runMessage = ''
   let expandedAuditId: string | null = null
   let installCopied = false
+  let destroyed = false
+  let pollTimer: ReturnType<typeof setTimeout> | null = null
+  let cancelPollDelay: (() => void) | null = null
 
   async function apiCall(method: string, path: string, body?: any): Promise<any> {
     const opts: RequestInit = { method, headers: { ...authHeaders } }
@@ -110,8 +114,8 @@
     try {
       const result = await apiCall('POST', `/api/devices/${deviceId}/security/audit`)
       queuedCmdId = result.id
-      runMessage = 'Audit queued. Waiting for agent to complete...'
-      // Poll for completion by checking command status AND audit list
+      if (!queuedCmdId) throw new Error('Server did not return an audit command ID')
+      runMessage = 'Audit queued. Waiting for the agent...'
       await pollForCompletion(queuedCmdId)
     } catch (e: any) {
       error = e.message || 'Failed to queue audit'
@@ -119,28 +123,53 @@
     }
   }
 
-  async function pollForCompletion(_cmdId: string, maxAttempts = 60) {
+  async function pollForCompletion(cmdId: string, maxAttempts = 60) {
+    let lastPollError = ''
     for (let i = 0; i < maxAttempts; i++) {
-      await new Promise(r => setTimeout(r, 3000))
+      if (destroyed) return
       try {
-        // Poll the audit list directly: a completed Lynis run appends a new
-        // audit record, which is the authoritative completion signal.
-        const newAudits = await apiCall('GET', `/api/devices/${deviceId}/security/audits?limit=1`)
-        if (newAudits && newAudits.length > 0) {
-          const latest = newAudits[0]
-          if (audits.length === 0 || latest.id !== audits[0].id) {
-            audits = newAudits.concat(audits)
-            parseLatestReport(latest)
-            running = false
-            runMessage = 'Audit completed!'
-            setTimeout(() => { runMessage = '' }, 3000)
-            return
+        const command = await apiCall('GET', `/api/devices/${deviceId}/commands/${cmdId}`)
+        lastPollError = ''
+        if (command.status === 'completed') {
+          const savedAudits: SecurityAudit[] = await apiCall('GET', `/api/devices/${deviceId}/security/audits?limit=20`)
+          if (!savedAudits.length) {
+            error = 'Audit command completed, but no saved report was found.'
+          } else {
+            audits = [...savedAudits]
+            parseLatestReport(savedAudits[0])
+            runMessage = 'Audit completed and report saved.'
           }
+          running = false
+          return
         }
-      } catch { /* continue polling */ }
+        if (command.status === 'failed') {
+          error = command.message || 'Lynis audit failed.'
+          running = false
+          return
+        }
+        runMessage = agentStatus === 'online'
+          ? 'Audit queued. Waiting for the agent...'
+          : `Audit queued; device is ${agentStatus}. It will run when the agent reconnects.`
+      } catch (e: any) {
+        lastPollError = e.message || 'Unable to check audit status'
+      }
+      if (i < maxAttempts - 1) {
+        await new Promise<void>(resolve => {
+          const finish = () => {
+            if (pollTimer) clearTimeout(pollTimer)
+            pollTimer = null
+            cancelPollDelay = null
+            resolve()
+          }
+          cancelPollDelay = finish
+          pollTimer = setTimeout(finish, 3000)
+        })
+      }
     }
+    if (destroyed) return
     running = false
-    runMessage = 'Audit timed out. The agent may be offline or using an older version.'
+    if (lastPollError) error = `Unable to check audit status: ${lastPollError}`
+    else runMessage = 'Audit is still queued. The agent may be offline; the command remains available for it to run later.'
   }
 
   async function deleteAudit(auditId: string) {
@@ -208,6 +237,11 @@
   onMount(() => {
     loadAudits()
   })
+
+  onDestroy(() => {
+    destroyed = true
+    cancelPollDelay?.()
+  })
 </script>
 
 <div class="security-tab">
@@ -231,7 +265,7 @@
   </div>
 
   {#if runMessage}
-    <div class="info-banner">{runMessage}</div>
+    <div class="info-banner" aria-live="polite">{runMessage}</div>
   {/if}
 
   {#if error}

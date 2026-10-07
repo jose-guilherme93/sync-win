@@ -127,11 +127,24 @@ func upsertDeviceInTx(tx *sql.Tx, device Device) error {
 	if err != nil {
 		return err
 	}
+	tags := device.Tags
+	if tags == nil {
+		tags = []string{}
+	}
+	tagsJSON, err := json.Marshal(tags)
+	if err != nil {
+		return err
+	}
+	interval := device.CollectionIntervalSeconds
+	if interval != 5 && interval != 10 && interval != 30 && interval != 60 {
+		interval = 10
+	}
 	_, err = tx.Exec(
-		"INSERT OR REPLACE INTO devices ("+deviceColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		"INSERT OR REPLACE INTO devices ("+deviceColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		device.ID, device.UserID, device.OwnerID, device.Hostname, persistedDeviceToken(device.DeviceToken),
 		timeText(device.LastSeenAt), timeText(device.LastSyncAt), device.SyncFailures, device.LastError, timeText(device.LastErrorAt),
 		string(hardwareJSON), string(appsJSON), device.Status, timeText(device.CreatedAt), timeText(device.UpdatedAt), device.HardwareFingerprint,
+		device.DisplayName, string(tagsJSON), interval,
 	)
 	return err
 }
