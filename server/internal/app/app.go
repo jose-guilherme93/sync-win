@@ -1290,7 +1290,7 @@ func (s *Server) handleSystemInventory(w http.ResponseWriter, r *http.Request, d
 		s.writeError(w, http.StatusBadRequest, errors.New("no system inventory section in payload"))
 		return
 	}
-	if err := s.store.UpdateSystemInventory(deviceID, req.Services, req.Ports); err != nil {
+	if err := s.store.UpdateSystemInventory(r.Context(), deviceID, req.Services, req.Ports); err != nil {
 		s.writeError(w, http.StatusNotFound, err)
 		return
 	}
@@ -1328,7 +1328,7 @@ func (s *Server) handleDeviceServices(w http.ResponseWriter, r *http.Request, de
 	if !s.requireOwnedDevice(w, r, deviceID) {
 		return
 	}
-	units, err := s.store.GetServices(deviceID)
+	units, err := s.store.GetServices(r.Context(), deviceID)
 	if err != nil {
 		s.writeError(w, http.StatusNotFound, err)
 		return
@@ -1346,7 +1346,7 @@ func (s *Server) handleDevicePorts(w http.ResponseWriter, r *http.Request, devic
 	if !s.requireOwnedDevice(w, r, deviceID) {
 		return
 	}
-	ports, err := s.store.GetPorts(deviceID)
+	ports, err := s.store.GetPorts(r.Context(), deviceID)
 	if err != nil {
 		s.writeError(w, http.StatusNotFound, err)
 		return
