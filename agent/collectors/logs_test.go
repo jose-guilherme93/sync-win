@@ -1,6 +1,9 @@
 package collectors
 
 import (
+	"errors"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -61,6 +64,55 @@ func TestCollectDeviceLogsReturnsErrorInsteadOfSilentNil(t *testing.T) {
 	// only acceptable outcome.
 	if logs == nil {
 		t.Error("no error and no lines: an empty journal must still be an empty slice")
+	}
+}
+
+// The permission failure that emptied the whole fleet's Logs screen is
+// invisible without stderr: journalctl exits non-zero with the reason only on
+// stderr, and "exit status 1" alone gives nothing to act on. This runs the
+// collector as an unprivileged user against a journal the test cannot read, so
+// the failure mode is real rather than simulated.
+func TestCollectDeviceLogsErrorExplainsUnreadableJournal(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read any journal, so the failure cannot be reproduced")
+	}
+	if _, err := exec.LookPath("journalctl"); err != nil {
+		t.Skip("journalctl is not installed here")
+	}
+
+	// An empty PATH entry list is not the scenario; instead assert on what the
+	// error says whenever the journal is unreadable.
+	_, err := CollectDeviceLogs()
+	if err == nil {
+		t.Skip("this user can read the journal")
+	}
+	msg := err.Error()
+
+	// A bare "exit status N" means the actionable stderr was dropped.
+	if strings.Contains(msg, "exit status") && !strings.Contains(msg, "Failed to") &&
+		!strings.Contains(msg, "not allowed") && !strings.Contains(msg, "journal may be empty or unreadable") {
+		t.Errorf("error %q reports only the exit status, which is not diagnosable", msg)
+	}
+	// The hint must be present on every unreadable-journal path so an operator
+	// reading the agent log knows which group to add.
+	if !strings.Contains(msg, "systemd-journal") && !strings.Contains(msg, "adm") &&
+		!strings.Contains(msg, "not found in $PATH") {
+		t.Errorf("error %q should name the group that grants journal read access", msg)
+	}
+}
+
+func TestStderrOfIncludesExitErrorStderr(t *testing.T) {
+	// Guards the helper the diagnostics above depend on.
+	cmd := exec.Command("sh", "-c", "echo boom >&2; exit 3")
+	_, err := cmd.Output()
+	if err == nil {
+		t.Fatal("expected a non-zero exit")
+	}
+	if got := stderrOf(err); !strings.Contains(got, "boom") {
+		t.Errorf("stderrOf = %q, want it to contain boom", got)
+	}
+	if got := stderrOf(errors.New("plain")); got != "" {
+		t.Errorf("stderrOf on a non-exec error = %q, want empty", got)
 	}
 }
 

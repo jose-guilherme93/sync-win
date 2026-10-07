@@ -135,6 +135,20 @@ Interfaces reais e túneis deliberados são mantidos: `eth0`, `wlan0`, `enp3s0`,
 journal a cada 6 ciclos (cerca de 60 s no intervalo padrão de 10 s) porque
 `journalctl` é a coleta mais pesada do ciclo.
 
+> **Requisito de permissão.** O agente roda como `sync-win` e **precisa** ser
+> membro de `systemd-journal` (ou `adm`) para ler o journal. Os arquivos do
+> journal são `0640 root:systemd-journal`, então um agente fora desse grupo leva
+> `Permission denied` do `journalctl` e a tela de Logs fica vazia em todos os
+> dispositivos, sem erro visível. A unit já declara
+> `SupplementaryGroups=docker systemd-journal`; o script de instalação escreve a
+> mesma linha. Em caso de tela vazia, confira
+> `grep Groups /proc/$(pidof sync-win-agent)/status` — se `systemd-journal` não
+> estiver listado, a unit não foi atualizada.
+
+O agent também distingue **journal vazio** de **journal ilegível**: um
+`journalctl` que sai com status 0 e nenhuma saída gera erro explícito, porque
+`--quiet` com journal inacessível pode terminar em 0 sem ter lido nada.
+
 O server **persiste** essas linhas em `device_logs`. Isso é o que permite a tela
 mostrar histórico: `hardware_json` é sobrescrito inteiro a cada post de
 telemetria, então um lote só sobrevive até o próximo ciclo que não traz logs.
@@ -156,7 +170,8 @@ telemetria, então um lote só sobrevive até o próximo ciclo que não traz log
 - **Falha de leitura é reportada, não silenciosa.** O agent roda como usuário de
   serviço sem privilégio, então um journal ilegível é um resultado real de
   implantação (sem journald, sem permissão, host sem systemd). `CollectDeviceLogs`
-  retorna o erro e o agent o registra no próprio journal — que é justamente o
+  retorna o erro — incluindo o **stderr** do `journalctl`, que é onde aparece a
+  causa acionável — e o agent o registra no próprio journal, que é justamente o
   journal que a tela tenta ler.
 
 ### Partições de disco são reportadas uma vez por device

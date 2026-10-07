@@ -13,7 +13,11 @@ RestartSec=5
 
 User=sync-win
 Group=sync-win
-SupplementaryGroups=docker
+# systemd-journal (or adm) is what makes the device Logs screen work: journal
+# files are mode 0640 root:systemd-journal, so an agent outside that group gets
+# a permission error from journalctl and reports no logs at all. docker is for
+# the container collectors.
+SupplementaryGroups=docker systemd-journal
 
 NoNewPrivileges=yes
 ProtectSystem=strict

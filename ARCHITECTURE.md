@@ -216,6 +216,26 @@ The current project intentionally does not include:
   overlapping windows an agent re-ships cost one `INSERT OR IGNORE` per line and
   rows are aged out after 7 days.
 
+### Device log storage requires a journal group
+
+The Logs screen depends on the agent being able to read the journal, and that is
+a permission the unit has to grant explicitly. Journal files are
+`0640 root:systemd-journal`, so an agent running as `sync-win` without
+membership of `systemd-journal` (or `adm`) gets `Permission denied` from
+`journalctl` and reports nothing.
+
+The failure is silent from the dashboard's point of view: the agent looks
+healthy, telemetry keeps flowing, and the screen shows "no logs yet" for every
+device at once. It was misread as a server-side storage bug during this work —
+the `device_logs` table was empty with online devices reporting, and the
+telemetry payload had no `logs` key at all, which pointed at the agent rather
+than the server.
+
+So: `SupplementaryGroups=docker systemd-journal` in both
+`server/sync-win-agent.service` and the unit `scripts/install.sh` writes, and
+`CollectDeviceLogs` reports the `journalctl` stderr instead of just an exit
+status. `COLLECTION-CONTRACT.md` records how to check a running agent.
+
 ### Device log storage
 
 The Logs screen could not be built on `hardware_json`. That column is replaced
