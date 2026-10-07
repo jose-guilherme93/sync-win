@@ -320,6 +320,27 @@ func Run() error {
 		}
 	}()
 
+	// Device log retention. Ingestion is append-only, so without this the table
+	// grows forever. Runs once on startup after a short grace period, then daily
+	// alongside the server log retention.
+	go func() {
+		timer := time.NewTimer(60 * time.Second)
+		defer timer.Stop()
+		for {
+			select {
+			case <-timer.C:
+				if deleted, err := dataStore.CleanupOldDeviceLogs(store.DeviceLogRetentionDays); err != nil {
+					structLogger.Error(logging.CatSystem, logging.EventAppError, "device log retention cleanup failed", map[string]any{"error": err.Error()})
+				} else if deleted > 0 {
+					structLogger.Info(logging.CatSystem, logging.EventAppStarted, "device log retention cleanup completed", map[string]any{"deleted": deleted})
+				}
+				timer.Reset(24 * time.Hour)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	select {
 	case err := <-serveErr:
 		return err
@@ -985,6 +1006,12 @@ func (s *Server) handleDeviceDetail(w http.ResponseWriter, r *http.Request) {
 		s.handleSecurityAudit(w, r, parts[0])
 		return
 	}
+	// Device log history. Separate from the fleet-wide /api/logs, which is the
+	// server's own log.
+	if len(parts) == 2 && parts[1] == "logs" && r.Method == http.MethodGet {
+		s.handleDeviceLogs(w, r, parts[0])
+		return
+	}
 	if len(parts) == 3 && parts[1] == "security" && parts[2] == "audits" && r.Method == http.MethodGet {
 		s.handleSecurityAudits(w, r, parts[0])
 		return
@@ -1045,6 +1072,67 @@ func (s *Server) handleDeviceDetailFull(w http.ResponseWriter, r *http.Request, 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(device)
+}
+
+// handleDeviceLogs returns a device's stored journal history. This is a separate
+// endpoint from /detail on purpose: the detail payload carries the newest
+// telemetry sample, whose log batch is only present on the cycles the agent
+// sampled the journal, so it could not back a log viewer. Lines are persisted
+// as they arrive and queried here.
+//
+// Query parameters: level, source, search, since (RFC3339), limit, offset.
+func (s *Server) handleDeviceLogs(w http.ResponseWriter, r *http.Request, deviceID string) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	device, err := s.store.GetDevice(deviceID)
+	if err != nil || device.OwnerID != s.ownerID(r) {
+		// Same response as a missing device: a foreign device must not be
+		// distinguishable from a nonexistent one.
+		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
+		return
+	}
+
+	query := r.URL.Query()
+	limit := 100
+	if l := query.Get("limit"); l != "" {
+		if v, err := strconv.Atoi(l); err == nil && v > 0 && v <= 1000 {
+			limit = v
+		}
+	}
+	offset := 0
+	if o := query.Get("offset"); o != "" {
+		if v, err := strconv.Atoi(o); err == nil && v >= 0 {
+			offset = v
+		}
+	}
+
+	var since time.Time
+	if raw := query.Get("since"); raw != "" {
+		parsed, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, errors.New("since must be an RFC3339 timestamp"))
+			return
+		}
+		since = parsed
+	}
+
+	page, err := s.store.ListDeviceLogs(deviceID, store.DeviceLogQuery{
+		Level:  query.Get("level"),
+		Source: query.Get("source"),
+		Search: query.Get("search"),
+		Since:  since,
+		Limit:  limit,
+		Offset: offset,
+	})
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(page)
 }
 
 func (s *Server) handleDeviceSettings(w http.ResponseWriter, r *http.Request, deviceID string) {
@@ -1622,6 +1710,20 @@ func (s *Server) handleTelemetry(w http.ResponseWriter, r *http.Request, deviceI
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
+	}
+	// Journal samples ride along with telemetry. Persist them separately: the
+	// hardware_json blob above is overwritten on every cycle, so a batch is only
+	// visible there until the next telemetry post erases it.
+	if len(req.Hardware.Logs) > 0 {
+		if inserted, lerr := s.store.AppendDeviceLogs(deviceID, updated.OwnerID, req.Hardware.Logs); lerr != nil {
+			// A log ingest failure must not fail the heartbeat; the telemetry
+			// above is the important part of this request.
+			s.log.Warn(logging.CatSync, logging.EventSyncError, "device log ingest failed",
+				map[string]any{"device_id": deviceID, "error": lerr.Error()})
+		} else if inserted > 0 {
+			s.log.Debug(logging.CatSync, logging.EventSyncComplete, "device logs stored",
+				map[string]any{"device_id": deviceID, "inserted": inserted})
+		}
 	}
 	// Append to telemetry history for chart data
 	if payload, err := json.Marshal(req.Hardware); err == nil {
