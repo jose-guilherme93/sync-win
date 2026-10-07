@@ -134,7 +134,7 @@ not need CORS.
 ### Local policy
 
 - The agent enforces local policy via `~/.config/sync-win/policy.json`.
-- Missing or malformed policy files use safe defaults: read-only Docker and Lynis audit are allowed; install, exclude, restore, lifecycle, exec, prune, and compose mutations are disabled.
+- Missing or malformed policy files use safe defaults: read-only Docker and Lynis audit are allowed; install, exclude, restore, lifecycle, exec, prune, compose, agent restart, package updates, and reboot are disabled.
 - Any command type can be disabled locally.
 - Disabled commands are reported back to the server with a reason.
 - The server never forces execution of disabled commands.
@@ -145,6 +145,8 @@ not need CORS.
 - Output is capped at 64 KB.
 - Docker exec commands have a 30-second timeout.
 - Package names are validated against a restricted charset.
+- Remote package updates use fixed package-manager argument lists; reboot uses fixed `shutdown -r +1` arguments and requires root or passwordless `sudo -n`.
+- Restarting the agent requires a systemd-managed service and reports command completion before exiting, so systemd can restart it without re-running the queued command.
 - Path traversal (`../`) is rejected.
 
 ### File collection
