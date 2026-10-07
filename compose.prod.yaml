@@ -1,9 +1,20 @@
 # =============================================================================
 # SyncWin — production stack
 # =============================================================================
-# Single built image serving both the API and the compiled dashboard.
-# Universal: works with plain Docker Compose, Dokploy, Coolify or any platform
-# that runs a Compose file.
+# Single image serving both the API and the compiled dashboard, published by the
+# Release workflow to GitHub Container Registry. Universal: works with plain
+# Docker Compose, Dokploy, Coolify or any platform that runs a Compose file.
+#
+# The deployment follows the Git tag, and the Release workflow publishes the
+# image before creating that tag, so a tag always has a matching image.
+#
+# ghcr.io is the default because the Release workflow authenticates with the
+# automatic GITHUB_TOKEN: no registry password exists in this repository to leak
+# or rotate. Pulling a private package needs a token with read:packages, set as
+# IMAGE_NAME credentials by the platform (Dokploy/Coolify registry settings).
+#
+# The `build:` section stays so `make prod` works from a checkout without a
+# registry. A platform that only pulls from a registry can drop it.
 #
 # Data is kept in the named volume "sync-win-data" so it survives redeploys.
 # Set SYNCWIN_DATA_PATH=./data to use a host bind mount instead (matching the
@@ -16,7 +27,7 @@
 # =============================================================================
 services:
   server:
-    image: ${IMAGE_NAME:-sync-win}:${IMAGE_TAG:-latest}
+    image: ${IMAGE_NAME:-ghcr.io/jose-guilherme93/sync-win}:${IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: docker/Dockerfile.server
@@ -47,7 +58,8 @@ services:
     volumes:
       - ${SYNCWIN_DATA_PATH:-sync-win-data}:/data
     healthcheck:
-      test: ["CMD", "curl", "-fs", "http://localhost:8080/health"]
+      # wget is part of busybox in the image; curl is deliberately not installed.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/health"]
       interval: 30s
       timeout: 5s
       start_period: 10s
