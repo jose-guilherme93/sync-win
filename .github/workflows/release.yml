@@ -109,10 +109,6 @@ jobs:
       # Publish the image FIRST. Nothing below may run if this fails, so the
       # tag can never advertise an image that does not exist.
       # ------------------------------------------------------------------
-      - name: Set up QEMU
-        if: steps.version.outputs.exists == 'false'
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         if: steps.version.outputs.exists == 'false'
         uses: docker/setup-buildx-action@v3
@@ -131,9 +127,10 @@ jobs:
         with:
           context: .
           file: docker/Dockerfile.server
-          # The runtime is a static Go binary on Alpine, and the dashboard is a
-          # static asset bundle, so both build stages cross-compile cleanly.
-          platforms: linux/amd64,linux/arm64
+          # Single architecture on purpose. See the note at the bottom of this
+          # file: adding arm64 here without native runners makes the release
+          # path take half an hour.
+          platforms: linux/amd64
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
@@ -191,3 +188,25 @@ jobs:
           tag_name: ${{ steps.version.outputs.tag }}
           name: ${{ steps.version.outputs.tag }}
           generate_release_notes: true
+
+# -----------------------------------------------------------------------------
+# Why this builds linux/amd64 only
+# -----------------------------------------------------------------------------
+# Adding linux/arm64 here looks harmless and is not. GitHub's amd64 runners have
+# no arm64 hardware, so buildx runs the arm64 stages under QEMU emulation. The
+# Go stages survive that (about 8s each, Go cross-compiles natively with
+# CGO_ENABLED=0), but the web stage runs `npm ci` under emulation and took over
+# 20 minutes on its own. A release is not the place for that: the deployment is
+# x86_64 and needs exactly one architecture.
+#
+# The web stage produces a static JS/CSS bundle and does not depend on the
+# target architecture at all. If arm64 is ever required, the fix is not to add
+# the platform here, it is one of:
+#
+#   1. Build the dashboard once on the runner and only cross-compile the Go
+#      binaries per platform (Go already handles this natively), or
+#   2. Use a native arm64 runner (GitHub's `ubuntu-24.04-arm`) and join the
+#      images with `docker buildx imagetools create`.
+#
+# Both avoid emulating Node entirely. Until there is a real arm64 target, the
+# added build cost buys nothing.
