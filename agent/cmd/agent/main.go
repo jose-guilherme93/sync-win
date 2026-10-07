@@ -360,50 +360,54 @@ func executeDockerRequest(req dockerRequest) dockerResult {
 }
 
 type telemetryStats struct {
-	CPUUsagePercent     float64           `json:"cpu_usage_percent"`
-	MemoryUsedBytes     uint64            `json:"memory_used_bytes"`
-	MemoryTotalBytes    uint64            `json:"memory_total_bytes"`
-	CPUTemperature      float64           `json:"cpu_temperature"`
-	GPUTemperature      float64           `json:"gpu_temperature_celsius,omitempty"`
-	PowerWatts          float64           `json:"power_watts"`
-	BatteryPercent      float64           `json:"battery_percent,omitempty"`
-	BatteryStatus       string            `json:"battery_status,omitempty"`
-	AgentCPUUsage       float64           `json:"agent_cpu_usage"`
-	AgentMemoryBytes    uint64            `json:"agent_memory_bytes,omitempty"`
-	AgentVersion        string            `json:"agent_version"`
-	OperatingSystem     string            `json:"operating_system"`
-	Architecture        string            `json:"architecture"`
-	CPUModel            string            `json:"cpu_model,omitempty"`
-	KernelVersion       string            `json:"kernel_version"`
-	DesktopEnvironment  string            `json:"desktop_environment"`
-	Locale              string            `json:"locale"`
-	Timezone            string            `json:"timezone,omitempty"`
-	BootTime            string            `json:"boot_time"`
-	UptimeSeconds       int64             `json:"uptime_seconds"`
-	LoadAverage         string            `json:"load_average,omitempty"`
-	NetworkIFaces       []networkIface    `json:"network_ifaces,omitempty"`
-	NetRxRate           float64           `json:"net_rx_rate,omitempty"`
-	NetTxRate           float64           `json:"net_tx_rate,omitempty"`
-	DiskReadBytes       uint64            `json:"disk_read_bytes,omitempty"`
-	DiskWriteBytes      uint64            `json:"disk_write_bytes,omitempty"`
-	DiskReadRate        float64           `json:"disk_read_rate,omitempty"`
-	DiskWriteRate       float64           `json:"disk_write_rate,omitempty"`
-	DiskPartitions      []diskPartition   `json:"disk_partitions,omitempty"`
-	SwapUsedBytes       uint64            `json:"swap_used_bytes,omitempty"`
-	SwapTotalBytes      uint64            `json:"swap_total_bytes,omitempty"`
-	MemoryBuffersBytes  uint64            `json:"memory_buffers_bytes,omitempty"`
-	MemoryCachedBytes   uint64            `json:"memory_cached_bytes,omitempty"`
-	CPUCoreUsage        []float64         `json:"cpu_core_usage,omitempty"`
-	TopCPUProcesses     []processInfo     `json:"top_cpu_processes,omitempty"`
-	TopMemProcesses     []processInfo     `json:"top_mem_processes,omitempty"`
-	DockerAvailable     bool              `json:"docker_available"`
-	DockerContainers    []dockerContainer `json:"docker_containers,omitempty"`
-	DockerInfo          *dockerInfo       `json:"docker_info,omitempty"`
-	LynisAvailable      bool              `json:"lynis_available"`
-	LynisInstallCmd     string            `json:"lynis_install_cmd,omitempty"`
-	Logs                []deviceLog       `json:"logs,omitempty"`
-	HardwareFingerprint string            `json:"hardware_fingerprint,omitempty"`
-	CollectedAt         string            `json:"collected_at,omitempty"`
+	CPUUsagePercent    float64           `json:"cpu_usage_percent"`
+	MemoryUsedBytes    uint64            `json:"memory_used_bytes"`
+	MemoryTotalBytes   uint64            `json:"memory_total_bytes"`
+	CPUTemperature     float64           `json:"cpu_temperature"`
+	GPUTemperature     float64           `json:"gpu_temperature_celsius,omitempty"`
+	PowerWatts         float64           `json:"power_watts"`
+	BatteryPercent     float64           `json:"battery_percent,omitempty"`
+	BatteryStatus      string            `json:"battery_status,omitempty"`
+	AgentCPUUsage      float64           `json:"agent_cpu_usage"`
+	AgentMemoryBytes   uint64            `json:"agent_memory_bytes,omitempty"`
+	AgentVersion       string            `json:"agent_version"`
+	OperatingSystem    string            `json:"operating_system"`
+	Architecture       string            `json:"architecture"`
+	CPUModel           string            `json:"cpu_model,omitempty"`
+	KernelVersion      string            `json:"kernel_version"`
+	DesktopEnvironment string            `json:"desktop_environment"`
+	Locale             string            `json:"locale"`
+	Timezone           string            `json:"timezone,omitempty"`
+	BootTime           string            `json:"boot_time"`
+	UptimeSeconds      int64             `json:"uptime_seconds"`
+	LoadAverage        string            `json:"load_average,omitempty"`
+	NetworkIFaces      []networkIface    `json:"network_ifaces,omitempty"`
+	NetRxRate          float64           `json:"net_rx_rate,omitempty"`
+	NetTxRate          float64           `json:"net_tx_rate,omitempty"`
+	DiskReadBytes      uint64            `json:"disk_read_bytes,omitempty"`
+	DiskWriteBytes     uint64            `json:"disk_write_bytes,omitempty"`
+	DiskReadRate       float64           `json:"disk_read_rate,omitempty"`
+	DiskWriteRate      float64           `json:"disk_write_rate,omitempty"`
+	DiskPartitions     []diskPartition   `json:"disk_partitions,omitempty"`
+	SwapUsedBytes      uint64            `json:"swap_used_bytes,omitempty"`
+	SwapTotalBytes     uint64            `json:"swap_total_bytes,omitempty"`
+	MemoryBuffersBytes uint64            `json:"memory_buffers_bytes,omitempty"`
+	MemoryCachedBytes  uint64            `json:"memory_cached_bytes,omitempty"`
+	CPUCoreUsage       []float64         `json:"cpu_core_usage,omitempty"`
+	TopCPUProcesses    []processInfo     `json:"top_cpu_processes,omitempty"`
+	TopMemProcesses    []processInfo     `json:"top_mem_processes,omitempty"`
+	DockerAvailable    bool              `json:"docker_available"`
+	DockerContainers   []dockerContainer `json:"docker_containers,omitempty"`
+	DockerInfo         *dockerInfo       `json:"docker_info,omitempty"`
+	LynisAvailable     bool              `json:"lynis_available"`
+	LynisInstallCmd    string            `json:"lynis_install_cmd,omitempty"`
+	Logs               []deviceLog       `json:"logs,omitempty"`
+	// LogsStatus explains a device with no logs. Without it an unreadable
+	// journal and a device that genuinely has nothing to report look identical
+	// on the dashboard, which is exactly the bug this field exists to prevent.
+	LogsStatus          string `json:"logs_status,omitempty"`
+	HardwareFingerprint string `json:"hardware_fingerprint,omitempty"`
+	CollectedAt         string `json:"collected_at,omitempty"`
 }
 
 type diskPartition struct {
@@ -683,13 +687,15 @@ func cmdDaemon(args []string) {
 			if logCycle >= logCollectCycles {
 				logCycle = 0
 				// A journal read failure is not fatal: telemetry continues with
-				// no lines. It is logged so the reason is diagnosable from the
-				// dashboard's log view instead of showing an empty screen.
+				// no lines. The reason travels back to the server so the Logs
+				// screen can say why it is empty instead of looking broken.
 				journal, jerr := collectors.CollectDeviceLogs()
 				if jerr != nil {
 					log.Printf("device log collection failed: %v", jerr)
+					stats.LogsStatus = jerr.Error()
 				} else {
 					stats.Logs = toDeviceLogs(journal)
+					stats.LogsStatus = ""
 				}
 			}
 			err = sendTelemetry(*serverURL, *deviceID, *deviceToken, stats)

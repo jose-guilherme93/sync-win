@@ -25,6 +25,9 @@
   let total = 0
   let counts: Record<string, number> = { error: 0, warn: 0, info: 0 }
   let sources: string[] = []
+  // The agent's reason for having no logs. Empty means it reported none
+  // successfully, which is different from collection failing.
+  let logStatus = ''
 
   let level: LevelFilter = 'all'
   let source = ''
@@ -91,6 +94,7 @@
       total = payload.total ?? entries.length
       counts = payload.counts || { error: 0, warn: 0, info: 0 }
       sources = Array.isArray(payload.sources) ? payload.sources : []
+      logStatus = typeof payload.status === 'string' ? payload.status : ''
       offset = nextOffset
       if (append) requestAnimationFrame(scrollToEnd)
     } catch (e) {
@@ -313,6 +317,18 @@
       </label>
     </div>
 
+    {#if logStatus}
+      <div class="warn-banner" role="status">
+        <strong>The agent cannot read the system journal.</strong>
+        <code>{logStatus}</code>
+        <span class="hint">
+          The agent needs membership of <code>systemd-journal</code> (or <code>adm</code>);
+          journal files are not world-readable. Re-running the installer, or enabling
+          <code>sync-win-agent-update.timer</code> so the unit is refreshed, fixes it.
+        </span>
+      </div>
+    {/if}
+
     {#if error}
       <div class="error-banner" role="alert">
         {error}
@@ -461,6 +477,19 @@
   .chip.active .num { color: var(--text-muted); }
   .spacer { flex: 1; }
   .toggle { display: flex; align-items: center; gap: 0.25rem; color: var(--text-faint); font-size: 0.71rem; cursor: pointer; }
+
+  .warn-banner {
+    display: grid; gap: 0.25rem; padding: 0.6rem 0.9rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--warn-dim); color: var(--warn); font-size: 0.75rem;
+  }
+  .warn-banner strong { font-size: 0.78rem; }
+  .warn-banner code {
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-size: 0.72rem; color: var(--text-muted); overflow-wrap: anywhere;
+  }
+  .warn-banner .hint { color: var(--text-faint); line-height: 1.45; }
+  .warn-banner .hint code { color: var(--text-muted); }
 
   .error-banner {
     display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0.75rem;

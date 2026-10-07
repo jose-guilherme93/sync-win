@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -432,5 +433,48 @@ func TestDeviceLogsSurviveTelemetryCyclesWithoutLogs(t *testing.T) {
 	}
 	if page.Entries[0].Message != "sampled once" {
 		t.Fatalf("kept %q, want the sampled line", page.Entries[0].Message)
+	}
+}
+
+// The whole point of the status field: a device whose journal is unreadable must
+// be distinguishable from one that simply has nothing to report.
+func TestListDeviceLogsSurfacesAgentStatus(t *testing.T) {
+	s := newLogStore(t)
+	device := registerLogDevice(t, s, "pc", "owner-1")
+
+	if _, err := s.UpdateHardwareStats(device.ID, HardwareStats{
+		LogsStatus: `journalctl: exit status 1: Failed to add match: Permission denied`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := s.ListDeviceLogs(device.ID, DeviceLogQuery{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 0 {
+		t.Fatalf("total = %d, want 0", page.Total)
+	}
+	if page.Status == "" {
+		t.Fatal("status is empty; the screen cannot explain the empty list")
+	}
+	if !strings.Contains(page.Status, "Permission denied") {
+		t.Errorf("status = %q, want the agent's own reason", page.Status)
+	}
+}
+
+func TestListDeviceLogsStatusEmptyOnHealthyDevice(t *testing.T) {
+	s := newLogStore(t)
+	device := registerLogDevice(t, s, "pc", "owner-1")
+	mustAppend(t, s, device.ID, device.OwnerID, []DeviceLog{
+		{Timestamp: "2026-10-07T12:00:00Z", Level: "info", Source: "systemd", Message: "Started unit"},
+	})
+
+	page, err := s.ListDeviceLogs(device.ID, DeviceLogQuery{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Status != "" {
+		t.Errorf("status = %q, want empty on a device that reported logs", page.Status)
 	}
 }

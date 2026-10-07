@@ -24,6 +24,10 @@ export type DeviceLogPage = {
   limit: number
   offset: number
   truncated: boolean
+  // The agent's own explanation for having no logs. Non-empty means collection
+  // is failing and the screen should say why rather than showing an empty list
+  // that reads like "nothing to report".
+  status?: string
 }
 
 export const LOG_LEVELS: DeviceLogLevel[] = ['error', 'warn', 'info']
