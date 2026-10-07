@@ -682,7 +682,15 @@ func cmdDaemon(args []string) {
 			logCycle++
 			if logCycle >= logCollectCycles {
 				logCycle = 0
-				stats.Logs = toDeviceLogs(collectors.CollectDeviceLogs())
+				// A journal read failure is not fatal: telemetry continues with
+				// no lines. It is logged so the reason is diagnosable from the
+				// dashboard's log view instead of showing an empty screen.
+				journal, jerr := collectors.CollectDeviceLogs()
+				if jerr != nil {
+					log.Printf("device log collection failed: %v", jerr)
+				} else {
+					stats.Logs = toDeviceLogs(journal)
+				}
 			}
 			err = sendTelemetry(*serverURL, *deviceID, *deviceToken, stats)
 		}

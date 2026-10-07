@@ -1,6 +1,7 @@
 package collectors
 
 import (
+	"fmt"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -40,11 +41,17 @@ func redactLogMessage(message string) string {
 }
 
 // CollectDeviceLogs reads recent system journal entries (last 150 lines).
-func CollectDeviceLogs() []DeviceLog {
+//
+// A failure is returned rather than swallowed. The agent runs as an
+// unprivileged service user, so an unreadable journal is a real deployment
+// outcome (no journald, missing read permission, a non-systemd host), and a
+// silent nil is indistinguishable from a device that has nothing to report —
+// which is how an empty log view became indistinguishable from a broken one.
+func CollectDeviceLogs() ([]DeviceLog, error) {
 	cmd := exec.Command("journalctl", "-n", "150", "--no-pager", "-o", "short-iso", "--quiet")
 	out, err := cmd.Output()
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("journalctl: %w", err)
 	}
 
 	var logs []DeviceLog
@@ -58,7 +65,7 @@ func CollectDeviceLogs() []DeviceLog {
 			logs = append(logs, log)
 		}
 	}
-	return logs
+	return logs, nil
 }
 
 func parseJournalLine(line string) DeviceLog {
@@ -68,12 +75,16 @@ func parseJournalLine(line string) DeviceLog {
 	parts := strings.SplitN(line, " ", 4)
 	if len(parts) >= 4 {
 		log.Timestamp = parts[0]
-		// parts[1] = hostname, parts[2] = service[pid]
+		// parts[1] = hostname, parts[2] = service[pid] followed by ':'.
+		// Lines from sources without a pid (kernel, systemd units in some
+		// formats) are written as "kernel:" with nothing in brackets, so the
+		// colon has to go too. Left attached it splits one service across two
+		// source buckets in the dashboard's source filter.
 		service := parts[2]
 		if idx := strings.Index(service, "["); idx > 0 {
 			service = service[:idx]
 		}
-		log.Source = service
+		log.Source = strings.TrimSuffix(service, ":")
 		msg := parts[3]
 		upper := strings.ToUpper(msg)
 		if strings.Contains(upper, "ERROR") || strings.Contains(upper, "FAIL") || strings.Contains(upper, "CRIT") {
