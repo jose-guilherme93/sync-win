@@ -2246,12 +2246,12 @@ func normalizeDeviceSettings(settings DeviceSettings) (DeviceSettings, string, e
 	return settings, string(tagsJSON), err
 }
 
-func (s *Store) GetDeviceSettings(deviceID string) (DeviceSettings, error) {
+func (s *Store) GetDeviceSettings(ctx context.Context, deviceID string) (DeviceSettings, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var settings DeviceSettings
 	var tagsJSON string
-	err := s.db.QueryRow(
+	err := s.db.QueryRowContext(ctx,
 		`SELECT display_name, COALESCE(tags_json, '[]'), collection_interval_seconds
 		 FROM devices WHERE id = ?`, deviceID,
 	).Scan(&settings.DisplayName, &tagsJSON, &settings.CollectionIntervalSeconds)
@@ -2267,14 +2267,14 @@ func (s *Store) GetDeviceSettings(deviceID string) (DeviceSettings, error) {
 	return settings, nil
 }
 
-func (s *Store) UpdateDeviceSettings(deviceID string, settings DeviceSettings) error {
+func (s *Store) UpdateDeviceSettings(ctx context.Context, deviceID string, settings DeviceSettings) error {
 	settings, tagsJSON, err := normalizeDeviceSettings(settings)
 	if err != nil {
 		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	result, err := s.db.Exec(
+	result, err := s.db.ExecContext(ctx,
 		`UPDATE devices SET display_name = ?, tags_json = ?, collection_interval_seconds = ?, updated_at = ?
 		 WHERE id = ?`,
 		settings.DisplayName, tagsJSON, settings.CollectionIntervalSeconds, timeText(time.Now().UTC()), deviceID,
@@ -2331,11 +2331,11 @@ func normalizeUpdateInventory(report UpdateInventory) (UpdateInventory, error) {
 	return report, nil
 }
 
-func (s *Store) GetPendingUpdates(deviceID string) (UpdateInventory, error) {
+func (s *Store) GetPendingUpdates(ctx context.Context, deviceID string) (UpdateInventory, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var raw string
-	if err := s.db.QueryRow(`SELECT COALESCE(updates_json, '{"status":"not_reported","updates":[]}') FROM devices WHERE id = ?`, deviceID).Scan(&raw); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(updates_json, '{"status":"not_reported","updates":[]}') FROM devices WHERE id = ?`, deviceID).Scan(&raw); err != nil {
 		return UpdateInventory{}, err
 	}
 	var report UpdateInventory
@@ -2348,7 +2348,7 @@ func (s *Store) GetPendingUpdates(deviceID string) (UpdateInventory, error) {
 	return report, nil
 }
 
-func (s *Store) UpdatePendingUpdates(deviceID string, report UpdateInventory) error {
+func (s *Store) UpdatePendingUpdates(ctx context.Context, deviceID string, report UpdateInventory) error {
 	report, err := normalizeUpdateInventory(report)
 	if err != nil {
 		return err
@@ -2359,7 +2359,7 @@ func (s *Store) UpdatePendingUpdates(deviceID string, report UpdateInventory) er
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	result, err := s.db.Exec(`UPDATE devices SET updates_json = ?, updated_at = ? WHERE id = ?`, string(data), timeText(time.Now().UTC()), deviceID)
+	result, err := s.db.ExecContext(ctx, `UPDATE devices SET updates_json = ?, updated_at = ? WHERE id = ?`, string(data), timeText(time.Now().UTC()), deviceID)
 	if err != nil {
 		return err
 	}
