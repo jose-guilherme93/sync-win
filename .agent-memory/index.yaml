@@ -24,6 +24,9 @@ entries:
   - id: decisions/project-memory
     path: decisions/project-memory.md
     type: decision
+  - id: decisions/parallel-agents
+    path: decisions/parallel-agents.md
+    type: decision
   - id: sessions/260925-p0-start
     path: sessions/260925-p0-start.md
     type: session
