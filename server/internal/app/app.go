@@ -1549,6 +1549,25 @@ func (s *Server) handleTelemetryHistoryV2(w http.ResponseWriter, r *http.Request
 	}
 
 	if resolution == "auto" {
+		if store.ResolutionForInterval(from, to) == "raw" {
+			points, err := s.store.GetTelemetryHistoryRaw(deviceID, from, to)
+			if err != nil {
+				s.writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+			if len(points) > 0 {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"device_id": deviceID,
+					"resolution": "raw",
+					"from": from.Format(time.RFC3339),
+					"to": to.Format(time.RFC3339),
+					"points": points,
+					"count": len(points),
+				})
+				return
+			}
+		}
 		points, res, err := s.store.GetBestHistory(deviceID, from, to)
 		if err != nil {
 			s.writeError(w, http.StatusInternalServerError, err)

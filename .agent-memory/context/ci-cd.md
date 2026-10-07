@@ -65,6 +65,24 @@ was vacuous rather than green — the first was `only-new-issues` on a
 workflow-only commit, and earlier `vite build` plus 63 unit tests on a Packages
 screen that rendered nothing.
 
+## Two deployment paths, both must always work
+
+A platform may trigger from the GitHub tag and build from the Dockerfile, or
+from the registry tag and pull. Neither path may replace the other, so the
+release publishes an image **and** the repository keeps a buildable
+`Dockerfile.server`.
+
+`compose.prod.yaml` carries both an `image:` reference and a `build:` section,
+so Compose builds when asked and pulls when asked. `make prod` builds,
+`make prod-pull` pulls, `make prod-verify` prints the reference. A CI step
+asserts both paths resolve.
+
+**Tag forms.** The image is published as `0.4.0`, `v0.4.0` and `latest` on the
+same digest. Docker convention drops the `v` while the Git tag keeps it. The
+release that produced `v0.3.1` published only the bare form, so a platform
+deriving the image tag from the Git ref would have failed on a pull — the exact
+failure mode this work removed.
+
 ## Known debt
 
 The full golangci-lint run reports **162 issues** in `server` (errcheck 49,
@@ -77,10 +95,21 @@ the `if err := ...` idiom, a false positive by design.
 
 ## Still open
 
-Whether the Dokploy deployment pulls the GHCR image or builds from source
-determines whether any of this changes its behaviour. If it builds locally, the
-original problem was the GitHub integration, not the missing image.
+Nothing blocks the pipeline. The remaining question is which path the platform
+actually uses: if it builds from the Dockerfile, the GitHub integration is what
+matters and the registry is unused; if it pulls, it needs `read:packages`
+credentials. Both are documented in `docs/DEPLOYMENT.md` and both work.
 
 `AGENT_UPDATE_KEY` must exist as a secret for signed agent updates. Without it
 the image still builds and the agent refuses auto-update, which is fail-closed
 by design.
+
+## Verified end to end
+
+- `v0.4.0` tagged at `754baad`, matching `origin/main`
+- image `ghcr.io/jose-guilherme93/sync-win` published as `0.4.0`, `v0.4.0` and
+  `latest`, all at `sha256:bf454b67…`
+- release run completed in 40s, against 28 minutes that never finished
+- step order in the log: image push, then tag, then GitHub Release
+- CI green on `main` and `develop`, including the browser end-to-end job and the
+  compose-path check

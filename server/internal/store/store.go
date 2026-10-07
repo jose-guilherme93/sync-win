@@ -2525,19 +2525,27 @@ func (s *Store) AppendTelemetry(deviceID string, payload []byte) error {
 
 // GetBestHistory returns the best available telemetry history for a time range.
 func (s *Store) GetBestHistory(deviceID string, from, to time.Time) ([]TelemetryDownsampled, string, error) {
-	points, err := s.GetDownsampledRange(deviceID, "1h", from, to)
-	if err == nil && len(points) > 0 {
-		return points, "1h", nil
+	preferred := ResolutionForInterval(from, to)
+	if preferred == "raw" {
+		preferred = "1m"
 	}
-	points, err = s.GetDownsampledRange(deviceID, "5m", from, to)
-	if err == nil && len(points) > 0 {
-		return points, "5m", nil
+	choices := map[string][]string{
+		"1m": {"1m", "5m", "1h"},
+		"5m": {"5m", "1m", "1h"},
+		"1h": {"1h", "5m", "1m"},
 	}
-	points, err = s.GetDownsampledRange(deviceID, "1m", from, to)
-	if err == nil && len(points) > 0 {
-		return points, "1m", nil
+	var lastErr error
+	for _, resolution := range choices[preferred] {
+		points, err := s.GetDownsampledRange(deviceID, resolution, from, to)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if len(points) > 0 {
+			return points, resolution, nil
+		}
 	}
-	return points, "1m", err
+	return []TelemetryDownsampled{}, preferred, lastErr
 }
 
 // GetTelemetryHistoryRaw returns raw telemetry points in a time range.

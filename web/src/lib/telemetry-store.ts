@@ -35,7 +35,9 @@ function pointFromHardware(hw: Record<string, any>, timestamp: string): ChartPoi
 export function addTelemetryPoint(deviceId: string, hw: Record<string, any>) {
   store.update((map) => {
     const existing = map.get(deviceId) || []
-    const updated = [...existing, pointFromHardware(hw, new Date().toISOString())]
+    const timestamp = hw.collected_at || new Date().toISOString()
+    if (existing.at(-1)?.timestamp === timestamp) return map
+    const updated = [...existing, pointFromHardware(hw, timestamp)]
     if (updated.length > MAX_POINTS) {
       updated.splice(0, updated.length - MAX_POINTS)
     }

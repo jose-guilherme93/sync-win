@@ -31,6 +31,9 @@
   const REFRESH_OPTIONS = [1000, 5000, 10000, 30000, 60000] as const
 
   let refreshInterval = 5000
+  let refreshTimer: ReturnType<typeof setInterval> | null = null
+  let refreshingTelemetry = false
+  let refreshError = ''
   let history: ChartPoint[] = []
   let loadingHistory = false
   let chartError = ''
@@ -343,13 +346,31 @@
   }
 
   async function pollTick() {
-    if (device.hardware) {
-      addTelemetryPoint(device.id, device.hardware)
+    if (refreshingTelemetry) return
+    refreshingTelemetry = true
+    try {
+      const response = await apiFetch(apiURL(`/api/devices/${device.id}/detail`), {
+        headers: authHeaders
+      })
+      if (!response.ok) throw new Error(`request failed (${response.status})`)
+      const payload = await response.json()
+      if (payload?.hardware) addTelemetryPoint(device.id, payload.hardware)
+      refreshError = ''
+    } catch (e) {
+      refreshError = e instanceof Error ? e.message : 'telemetry refresh failed'
+    } finally {
+      refreshingTelemetry = false
     }
+  }
+
+  function startTelemetryRefresh() {
+    if (refreshTimer) clearInterval(refreshTimer)
+    refreshTimer = setInterval(() => void pollTick(), refreshInterval)
   }
 
   function setRefresh(ms: number) {
     refreshInterval = ms
+    startTelemetryRefresh()
   }
 
   function memoryPercent(h?: HardwareStats) {
@@ -469,6 +490,7 @@
   $: insights = generateInsights(hw)
 
   onMount(() => {
+    startTelemetryRefresh()
     void loadInitialHistory().then(() => {
       if (history.length > 0 && !cpuChart) {
         scheduleBuild()
@@ -479,6 +501,7 @@
   onDestroy(() => {
     historyUnsub?.()
     if (buildTimer) clearTimeout(buildTimer)
+    if (refreshTimer) clearInterval(refreshTimer)
     destroyCharts()
   })
 </script>
@@ -518,6 +541,7 @@
       </div>
       {#if loadingHistory}<span class="loading-hint">loading...</span>{/if}
       {#if chartError}<span class="error-hint">{chartError}</span>{/if}
+      {#if refreshError}<span class="error-hint" role="alert">{refreshError}</span>{/if}
     </div>
 
     <div class="charts-grid">
