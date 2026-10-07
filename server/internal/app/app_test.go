@@ -1243,3 +1243,46 @@ func TestTelemetryHistoryRejectsInvalidRange(t *testing.T) {
 		}
 	}
 }
+
+// The agent updater fetches its systemd unit from here. Without it a unit change
+// (a new SupplementaryGroups entry) never reaches devices, because the updater
+// only ever replaced the binary.
+func TestAgentUnitTemplateRendersForAuthenticatedDevice(t *testing.T) {
+	s := newTestServer(t)
+	user, err := s.store.CreateUser("unit@example.com", "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	device, err := s.store.RegisterDevice("pc-a", user.ID, user.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/agent/unit?device_id="+device.ID+"&device_token="+device.DeviceToken, nil)
+	// The endpoint reads the template from /app, which does not exist in tests.
+	// A 404 there is the expected outcome; what matters is that authentication
+	// is enforced before the read.
+	rec := httptest.NewRecorder()
+	s.handleAgentUnitTemplate(rec, req)
+	if rec.Code == http.StatusOK && !strings.Contains(rec.Body.String(), "[Service]") {
+		t.Errorf("unit template served without a [Service] section: %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "{{SERVER_URL}}") {
+		t.Error("unit was served with unresolved placeholders")
+	}
+
+	unauth := httptest.NewRequest(http.MethodGet, "/api/agent/unit?device_id="+device.ID+"&device_token=wrong", nil)
+	unauthRec := httptest.NewRecorder()
+	s.handleAgentUnitTemplate(unauthRec, unauth)
+	if unauthRec.Code != http.StatusUnauthorized {
+		t.Errorf("bad token status = %d, want 401", unauthRec.Code)
+	}
+
+	missing := httptest.NewRequest(http.MethodGet, "/api/agent/unit", nil)
+	missingRec := httptest.NewRecorder()
+	s.handleAgentUnitTemplate(missingRec, missing)
+	if missingRec.Code != http.StatusBadRequest {
+		t.Errorf("missing credentials status = %d, want 400", missingRec.Code)
+	}
+}

@@ -178,6 +178,7 @@ func Run() error {
 	mux.HandleFunc("/api/devices", server.handleDevices)
 	mux.HandleFunc("/api/devices/", server.handleDeviceDetail)
 	mux.HandleFunc("/api/agent/install.sh", server.handleAgentInstallScript)
+	mux.HandleFunc("/api/agent/unit", server.handleAgentUnitTemplate)
 	mux.HandleFunc("/api/agent/download", server.handleAgentDownload)
 	mux.HandleFunc("/api/agent/enroll-token", server.handleEnrollToken)
 	mux.HandleFunc("/api/agent/enroll", server.handleEnroll)
@@ -2338,6 +2339,55 @@ SYNCWIN_TOKEN="%s"
 	script += string(data)
 	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
 	_, _ = w.Write([]byte(script))
+}
+
+// handleAgentUnitTemplate serves the agent systemd unit with its placeholders
+// resolved from the caller's device credentials.
+//
+// The agent updater fetches this after replacing its own binary. A unit change
+// (a new SupplementaryGroups entry, a flag) is invisible to a binary-only
+// update, so without this endpoint every unit-level fix needs someone to SSH
+// into each machine. Authenticated by device token, like every other agent
+// endpoint.
+func (s *Server) handleAgentUnitTemplate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	query := r.URL.Query()
+	deviceID := strings.TrimSpace(query.Get("device_id"))
+	token := strings.TrimSpace(query.Get("device_token"))
+	if deviceID == "" || token == "" {
+		s.writeError(w, http.StatusBadRequest, errors.New("device_id and device_token are required"))
+		return
+	}
+	if !s.validDeviceTokenValue(deviceID, token) {
+		s.writeError(w, http.StatusUnauthorized, errors.New("invalid device token"))
+		return
+	}
+
+	template, err := os.ReadFile("/app/sync-win-agent.service")
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, errors.New("agent unit template not available"))
+		return
+	}
+	// Same host the installer uses, so the unit's ExecStart keeps pointing at
+	// the server the agent already talks to. A unit rewrite must never repoint
+	// a device at a different server.
+	serverURL, err := publicBaseURL(r)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, errors.New("cannot determine public server URL"))
+		return
+	}
+	serverURL = strings.TrimRight(serverURL, "/")
+	unit := strings.NewReplacer(
+		"{{SERVER_URL}}", serverURL,
+		"{{DEVICE_ID}}", deviceID,
+		"{{DEVICE_TOKEN}}", token,
+	).Replace(string(template))
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte(unit))
 }
 
 type enrollRequest struct {

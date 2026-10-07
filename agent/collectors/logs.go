@@ -1,6 +1,7 @@
 package collectors
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -51,7 +52,16 @@ func CollectDeviceLogs() ([]DeviceLog, error) {
 	cmd := exec.Command("journalctl", "-n", "150", "--no-pager", "-o", "short-iso", "--quiet")
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("journalctl: %w", err)
+		// Stderr carries the actionable part. Without it an agent in the wrong
+		// group reports only "exit status 1", which is what left a whole fleet
+		// silently reporting no logs while looking healthy on the dashboard.
+		return nil, fmt.Errorf("journalctl: %w: %s", err, strings.TrimSpace(stderrOf(err)))
+	}
+	if len(out) == 0 {
+		// Success with no output is ambiguous: either the journal is genuinely
+		// empty or it is unreadable and journalctl exited 0 having read
+		// nothing. Say which, because the first is fine and the second is not.
+		return nil, errors.New("journalctl returned no output; the journal may be empty or unreadable by the agent user (needs membership of systemd-journal or adm)")
 	}
 
 	var logs []DeviceLog
@@ -66,6 +76,17 @@ func CollectDeviceLogs() ([]DeviceLog, error) {
 		}
 	}
 	return logs, nil
+}
+
+// stderrOf extracts the stderr text an *exec.ExitError carries. exec.Cmd.Output
+// puts stderr in ExitError.Stderr only when Stderr was left nil, which is the
+// case here.
+func stderrOf(err error) string {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return string(exitErr.Stderr)
+	}
+	return ""
 }
 
 func parseJournalLine(line string) DeviceLog {

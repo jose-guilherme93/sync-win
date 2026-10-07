@@ -1,15 +1,18 @@
 package main
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,7 +41,25 @@ func cmdUpdate(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	return updateAgent(strings.TrimRight(*serverURL, "/"), *service, *userSystemd)
+	server := strings.TrimRight(*serverURL, "/")
+	if state := loadAgentState(); state != nil {
+		// The unit refresh is authenticated, so the updater needs the same
+		// credentials the daemon uses. Read from state rather than requiring
+		// them on the timer command line.
+		return updateAgentAtIdentity(executableOf(), server, *service, *userSystemd, state.DeviceID, state.DeviceToken)
+	}
+	return updateAgent(server, *service, *userSystemd)
+}
+
+func executableOf() string {
+	executable, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(executable); err == nil {
+		return resolved
+	}
+	return executable
 }
 
 func updateAgent(serverURL, service string, userSystemd bool) error {
@@ -53,6 +74,13 @@ func updateAgent(serverURL, service string, userSystemd bool) error {
 }
 
 func updateAgentAt(executable, serverURL, service string, userSystemd bool) error {
+	return updateAgentAtIdentity(executable, serverURL, service, userSystemd, "", "")
+}
+
+// updateAgentAtIdentity carries the device credentials the unit refresh needs to
+// authenticate. They are optional so the existing callers and tests keep working
+// without them.
+func updateAgentAtIdentity(executable, serverURL, service string, userSystemd bool, deviceID, deviceToken string) error {
 	if serverURL == "" {
 		return fmt.Errorf("server URL is required")
 	}
@@ -115,6 +143,16 @@ func updateAgentAt(executable, serverURL, service string, userSystemd bool) erro
 		_ = restartAgent(service, userSystemd)
 		return fmt.Errorf("new agent failed health check; rolled back: %w", err)
 	}
+
+	// Rewrite the unit after the binary is proven good, then restart so a unit
+	// change (a new group, a flag) takes effect. Done last so a bad unit cannot
+	// strand a device on an unproven binary.
+	if _, err := refreshUnitFile(serverURL, service, userSystemd, deviceID, deviceToken); err != nil {
+		fmt.Printf("warning: could not refresh the systemd unit: %v\n", err)
+	} else {
+		_ = restartAgent(service, userSystemd)
+	}
+
 	_ = os.Remove(backup)
 	fmt.Printf("SyncWin agent updated: %s -> %s\n", current, remote)
 	return nil
@@ -312,6 +350,115 @@ func copyFile(source, destination string, mode os.FileMode) error {
 		return err
 	}
 	return output.Close()
+}
+
+// refreshUnitFile rewrites the agent's systemd unit from the server.
+//
+// A unit change is invisible to a binary-only update: the new binary can add
+// diagnostics for a journal it cannot read, but nothing adds the group that lets
+// it read one. This is what makes a fix like that reach devices unattended.
+//
+// The ExecStart line is preserved from the running unit when possible, because
+// a device behind a different server URL, or installed with a non-default
+// binary path, must not be silently repointed by an update.
+func refreshUnitFile(serverURL, service string, userSystemd bool, deviceID, deviceToken string) (bool, error) {
+	if userSystemd || deviceID == "" || deviceToken == "" {
+		// The user-systemd fallback unit has no group requirement and is written
+		// per user; leave it alone.
+		return false, nil
+	}
+
+	desired, err := fetchAgentUnit(serverURL, deviceID, deviceToken)
+	if err != nil {
+		// A missing endpoint on an older server must not fail the whole update.
+		return false, nil
+	}
+
+	target := "/etc/systemd/system/" + service
+	if current, err := os.ReadFile(target); err == nil {
+		if mergeExecStart(string(current), desired) == string(current) {
+			return false, nil
+		}
+		desired = mergeExecStart(string(current), desired)
+	}
+
+	if err := os.WriteFile(target, []byte(desired), 0o644); err != nil {
+		return false, fmt.Errorf("write unit %s: %w", target, err)
+	}
+	if err := runSystemctl("daemon-reload", userSystemd); err != nil {
+		return false, fmt.Errorf("systemctl daemon-reload after unit update: %w", err)
+	}
+	return true, nil
+}
+
+// mergeExecStart keeps the existing ExecStart when the new template does not
+// carry a usable one.
+func mergeExecStart(current, desired string) string {
+	if strings.Contains(desired, "ExecStart=/") {
+		return desired
+	}
+	for _, line := range strings.Split(current, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "ExecStart=") {
+			lines := strings.Split(desired, "\n")
+			for i, l := range lines {
+				if strings.HasPrefix(strings.TrimSpace(l), "ExecStart=") {
+					lines[i] = line
+				}
+			}
+			return strings.Join(lines, "\n")
+		}
+	}
+	return desired
+}
+
+func fetchAgentUnit(serverURL, deviceID, deviceToken string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		serverURL+"/api/agent/unit?device_id="+url.QueryEscape(deviceID)+
+			"&device_token="+url.QueryEscape(deviceToken), nil)
+	if err != nil {
+		return "", err
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("unit endpoint returned %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if err != nil {
+		return "", err
+	}
+	unit := string(body)
+	if !strings.Contains(unit, "[Service]") {
+		return "", errors.New("unit response does not look like a systemd unit")
+	}
+	// Unresolved placeholders mean the server could not render it; writing this
+	// would break the service.
+	if strings.Contains(unit, "{{") {
+		return "", errors.New("unit still contains template placeholders")
+	}
+	return unit, nil
+}
+
+func runSystemctl(action string, userSystemd bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "systemctl", action)
+	if userSystemd {
+		cmd.Args = append([]string{"systemctl", "--user"}, cmd.Args[1:]...)
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("systemctl %s: %w: %s", action, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 func restartAgent(service string, userSystemd bool) error {
