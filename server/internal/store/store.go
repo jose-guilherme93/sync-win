@@ -767,6 +767,23 @@ func (s *Store) initSchema() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_security_audits_device ON security_audits(device_id, created_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_security_audits_owner ON security_audits(owner_id, created_at DESC);
+	CREATE TABLE IF NOT EXISTS device_logs (
+		id         INTEGER PRIMARY KEY AUTOINCREMENT,
+		device_id  TEXT NOT NULL,
+		owner_id   TEXT NOT NULL DEFAULT '',
+		ts         TEXT NOT NULL,
+		level      TEXT NOT NULL DEFAULT 'info',
+		source     TEXT NOT NULL DEFAULT '',
+		message    TEXT NOT NULL DEFAULT ''
+	);
+	CREATE INDEX IF NOT EXISTS idx_device_logs_device_ts ON device_logs(device_id, ts DESC);
+	CREATE INDEX IF NOT EXISTS idx_device_logs_owner_ts ON device_logs(owner_id, ts DESC);
+	CREATE INDEX IF NOT EXISTS idx_device_logs_device_level_ts ON device_logs(device_id, level, ts DESC);
+	CREATE INDEX IF NOT EXISTS idx_device_logs_device_source_ts ON device_logs(device_id, source, ts DESC);
+	-- The agent re-ships overlapping journal windows every sample, so the same
+	-- line arrives many times. This unique key is what makes ingestion
+	-- idempotent; without it the table grows without bound.
+	CREATE UNIQUE INDEX IF NOT EXISTS idx_device_logs_dedupe ON device_logs(device_id, ts, source, message);
 	CREATE TABLE IF NOT EXISTS logs (
 		id             INTEGER PRIMARY KEY AUTOINCREMENT,
 		ts             TEXT NOT NULL,
@@ -2209,6 +2226,12 @@ func (s *Store) SetWorkspaceDirs(ownerID string, dirs []string) error {
 func (s *Store) DeleteDevice(deviceID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// device_logs has no foreign key, so the lines are removed explicitly here
+	// rather than relying on cascade. Done inline because the locked helper in
+	// device_logs.go would deadlock on this same mutex.
+	if _, err := s.db.ExecContext(context.Background(), "DELETE FROM device_logs WHERE device_id = ?", deviceID); err != nil {
+		return err
+	}
 	_, err := s.db.Exec("DELETE FROM devices WHERE id = ?", deviceID)
 	return err
 }

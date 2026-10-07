@@ -61,19 +61,21 @@ const initialFiles = [
 ]
 
 describe('DeviceModal logs tab', () => {
-  let detailCalls = 0
+  let logCalls = 0
 
   beforeEach(() => {
-    detailCalls = 0
+    logCalls = 0
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input)
-        if (url.includes('/detail')) {
-          detailCalls += 1
-          // Empty logs is exactly the case that used to retrigger the fetch
-          // forever through a self-referencing reactive statement.
-          return json({ id: 'dev-1', hardware: { logs: [] } })
+        // The tab renders DeviceLogs, which owns its own fetching and reads
+        // the device log endpoint rather than the telemetry detail payload.
+        if (url.includes('/logs')) {
+          logCalls += 1
+          // An empty page is the case that used to retrigger the fetch forever
+          // through a self-referencing reactive statement.
+          return json({ entries: [], total: 0, counts: {}, sources: [], limit: 200, offset: 0, truncated: false })
         }
         return json([])
       })
@@ -96,10 +98,11 @@ describe('DeviceModal logs tab', () => {
       await fireEvent.keyDown(filesTab, { key: 'ArrowRight' })
     }
 
-    await vi.waitFor(() => expect(detailCalls).toBeGreaterThanOrEqual(1))
+    await vi.waitFor(() => expect(logCalls).toBeGreaterThanOrEqual(1))
     // Give any runaway reactive refetch a chance to fire; the fix must keep it
-    // at exactly one request.
+    // at exactly one request. The component also polls, but on a 60s interval
+    // that no test can reach.
     await new Promise((resolve) => setTimeout(resolve, 80))
-    expect(detailCalls).toBe(1)
+    expect(logCalls).toBe(1)
   })
 })

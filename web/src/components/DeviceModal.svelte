@@ -3,6 +3,7 @@
   import SystemMetrics from './SystemMetrics.svelte'
   import DockerTab from './DockerTab.svelte'
   import SecurityTab from './SecurityTab.svelte'
+  import DeviceLogs from './screens/DeviceLogs.svelte'
   import { apiFetch, apiURL, serverBase } from '../lib/api'
   // Shared shapes so a Device passed from the shell type-checks against this
   // component. The fields this view reads are a subset of HardwareStats.
@@ -136,63 +137,7 @@
 
   $: insights = buildInsights(telemetry, device)
 
-  // Device logs. The agent samples journald on the machine and ships the last
-  // batch with telemetry, so this reads the detail payload rather than polling
-  // anything new.
-  type DeviceLog = { timestamp: string; level: string; source: string; message: string }
-  type LogLevel = 'all' | 'error' | 'warn' | 'info'
-  let deviceLogs: DeviceLog[] = []
-  let logsLoading = false
-  let logsLoaded = false
-  let logsError = ''
-  let logFilter: LogLevel = 'all'
-
-  async function loadDeviceLogs() {
-    logsLoading = true
-    logsError = ''
-    try {
-      const response = await apiFetch(apiURL(`/api/devices/${device.id}/detail`), { headers: authHeaders })
-      if (!response.ok) throw new Error(`request failed: ${response.status}`)
-      const data = await response.json()
-      deviceLogs = Array.isArray(data?.hardware?.logs) ? data.hardware.logs : []
-      logsLoaded = true
-    } catch (err) {
-      logsError = err instanceof Error ? err.message : 'Could not load device logs'
-    } finally {
-      logsLoading = false
-    }
-  }
-
-  $: logCounts = {
-    error: deviceLogs.filter((l) => String(l.level).toLowerCase().includes('err')).length,
-    warn: deviceLogs.filter((l) => String(l.level).toLowerCase().startsWith('warn')).length,
-    info: deviceLogs.filter((l) => String(l.level).toLowerCase().startsWith('info')).length
-  }
-
-  $: visibleLogs =
-    logFilter === 'all'
-      ? deviceLogs
-      : deviceLogs.filter((l) => {
-          const level = String(l.level).toLowerCase()
-          if (logFilter === 'error') return level.includes('err')
-          if (logFilter === 'warn') return level.startsWith('warn')
-          return level.startsWith('info')
-        })
-
-  function logTime(timestamp: string) {
-    if (!timestamp) return ''
-    const t = Date.parse(timestamp)
-    if (Number.isFinite(t)) return new Date(t).toLocaleString()
-    return timestamp.replace('T', ' ').substring(0, 19)
-  }
-
-  function levelClass(level: string) {
-    const l = String(level || '').toLowerCase()
-    if (l.includes('err') || l.includes('crit') || l.includes('fatal')) return 'log-crit'
-    if (l.startsWith('warn')) return 'log-warn'
-    if (l.startsWith('info') || l.startsWith('notice')) return 'log-info'
-    return ''
-  }
+  
   let filesLoading = false
   let appsLoading = false
   let savesLoading = false
@@ -311,7 +256,7 @@
       void loadNotes()
       void loadAttachments()
     }
-    if (tab === 'logs' && !logsLoaded) void loadDeviceLogs()
+    // The logs tab renders DeviceLogs, which loads and polls its own data.
   }
 
   function tabKeydown(event: KeyboardEvent) {
@@ -961,41 +906,7 @@
 
         {:else if activeTab === 'logs'}
           <div class="panel" role="tabpanel" id="panel-logs" aria-labelledby="tab-logs">
-            <div class="panel-toolbar">
-              <div class="log-filters">
-                {#each (['all', 'error', 'warn', 'info'] as LogLevel[]) as level}
-                  <button class:active={logFilter === level} on:click={() => (logFilter = level)}>
-                    {level}
-                    {#if level !== 'all'}<span class="filter-count">{logCounts[level as Exclude<LogLevel, 'all'>]}</span>{/if}
-                  </button>
-                {/each}
-              </div>
-              <button class="inline" on:click={loadDeviceLogs} disabled={logsLoading}>
-                {logsLoading ? 'Loading...' : 'Refresh'}
-              </button>
-            </div>
-            {#if logsError}
-              <p class="error-inline">{logsError} <button class="inline" on:click={loadDeviceLogs}>Retry</button></p>
-            {:else if logsLoading && deviceLogs.length === 0}
-              <p class="muted">Loading device logs...</p>
-            {:else if deviceLogs.length === 0}
-              <p class="muted">The agent has not reported any device logs yet. It samples the system journal every few minutes.</p>
-            {:else}
-              <ul class="log-list">
-                {#each visibleLogs as log, i (i)}
-                  <li class="log-row {levelClass(log.level)}">
-                    <span class="log-time">{logTime(log.timestamp)}</span>
-                    <span class="log-level">{log.level}</span>
-                    <span class="log-src">{log.source}</span>
-                    <span class="log-msg">{log.message}</span>
-                  </li>
-                {/each}
-                {#if visibleLogs.length === 0}
-                  <li class="muted">No {logFilter} entries in this batch.</li>
-                {/if}
-              </ul>
-              <p class="muted small">Showing {visibleLogs.length} of {deviceLogs.length} entries from the last agent sample.</p>
-            {/if}
+            <DeviceLogs deviceId={device.id} {authHeaders} />
           </div>
 
         {:else if activeTab === 'docker'}
@@ -1452,8 +1363,7 @@
   .file-list,
   .app-list,
   .saves-groups,
-  .notes-list,
-  .log-list {
+  .notes-list {
     list-style: none;
     padding: 0;
     margin: 0;
@@ -1474,85 +1384,8 @@
     flex-wrap: wrap;
   }
 
-  .log-filters {
-    display: flex;
-    gap: 0.2rem;
-  }
-
-  .log-filters button {
-    background: rgba(148, 163, 184, 0.1);
-    border: 1px solid rgba(148, 163, 184, 0.18);
-    border-radius: 6px;
-    padding: 0.25rem 0.55rem;
-    color: #94a3b8;
-    font-size: 0.8rem;
-    font-weight: 600;
-  }
-
-  .log-filters button.active {
-    background: rgba(59, 130, 246, 0.2);
-    border-color: rgba(96, 165, 250, 0.5);
-    color: #e2e8f0;
-  }
-
-  .filter-count {
-    margin-left: 0.3rem;
-    color: #64748b;
-    font-size: 0.7rem;
-  }
-
-  .log-row {
-    display: grid;
-    grid-template-columns: 11.5rem 4.5rem 7rem 1fr;
-    gap: 0.5rem;
-    align-items: baseline;
-    padding: 0.35rem 0.5rem;
-    border-left: 3px solid transparent;
-    border-radius: 0 6px 6px 0;
-    background: rgba(2, 6, 23, 0.45);
-    font-size: 0.8rem;
-  }
-
-  .log-row.log-crit {
-    border-left-color: #f87171;
-  }
-
-  .log-row.log-warn {
-    border-left-color: #fbbf24;
-  }
-
-  .log-row.log-info {
-    border-left-color: #3b82f6;
-  }
-
-  .log-time {
-    color: #64748b;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .log-level {
-    color: #cbd5e1;
-    font-weight: 600;
-    text-transform: uppercase;
-  }
-
-  .log-src {
-    color: #94a3b8;
-    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-    font-size: 0.74rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .log-msg {
-    color: #e2e8f0;
-    overflow-wrap: anywhere;
-  }
-
-  .muted.small {
-    font-size: 0.76rem;
-  }
+  /* The log list styles moved to screens/DeviceLogs.svelte, which owns the
+     whole log viewer now that both the tab and the sidebar section use it. */
 
   .file-list li {
     display: flex;

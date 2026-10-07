@@ -247,6 +247,36 @@ Rules:
 - attachments are owned by the same account that owns the device
 - the UI displays attachments in the device detail modal (Notes tab)
 
+## DeviceLog
+
+Journal lines sampled by the agent on a managed machine and kept server-side so
+the dashboard can show a device's recent history. Distinct from `ServerLog`,
+which records the server's own activity.
+
+Fields:
+
+- id: auto-increment identifier
+- device_id: device the line came from
+- owner_id: owner of that device, materialised on the row
+- ts: event time, RFC3339 UTC
+- level: normalised severity, one of `error`, `warn`, `info`
+- source: originating service or unit (`kernel`, `systemd`, `sshd`, ...)
+- message: the journal line, redacted and length-capped
+
+Rules:
+
+- the agent samples the journal roughly once a minute and ships the batch with
+  telemetry; the server persists it on arrival
+- ingestion is idempotent: `(device_id, ts, source, message)` is unique, so the
+  overlapping windows an agent re-ships are stored once
+- lines without a parseable timestamp are dropped rather than stored unqueryable
+- messages are truncated to 2000 bytes and pass through the agent's redaction
+- retained for 7 days, then deleted by the daily retention pass
+- deleting a device deletes its lines
+- served by `GET /api/devices/{id}/logs`, filtered by `level`, `source`,
+  `search`, `since`, `limit` and `offset`; a `%` in `search` is matched
+  literally
+
 ## ServerLog
 
 Represents a structured log entry for observability.
