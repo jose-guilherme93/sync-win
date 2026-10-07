@@ -1097,21 +1097,21 @@ func (s *Server) handleDeviceLogs(w http.ResponseWriter, r *http.Request, device
 	query := r.URL.Query()
 	limit := 100
 	if l := query.Get("limit"); l != "" {
-		if v, err := strconv.Atoi(l); err == nil && v > 0 && v <= 1000 {
+		if v, convErr := strconv.Atoi(l); convErr == nil && v > 0 && v <= 1000 {
 			limit = v
 		}
 	}
 	offset := 0
 	if o := query.Get("offset"); o != "" {
-		if v, err := strconv.Atoi(o); err == nil && v >= 0 {
+		if v, convErr := strconv.Atoi(o); convErr == nil && v >= 0 {
 			offset = v
 		}
 	}
 
 	var since time.Time
 	if raw := query.Get("since"); raw != "" {
-		parsed, err := time.Parse(time.RFC3339, raw)
-		if err != nil {
+		parsed, parseErr := time.Parse(time.RFC3339, raw)
+		if parseErr != nil {
 			s.writeError(w, http.StatusBadRequest, errors.New("since must be an RFC3339 timestamp"))
 			return
 		}

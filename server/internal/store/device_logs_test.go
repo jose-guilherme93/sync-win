@@ -14,11 +14,29 @@ func registerLogDevice(t *testing.T, s *Store, hostname, ownerID string) Device 
 	return device
 }
 
-func TestAppendDeviceLogsDeduplicatesReshippedWindow(t *testing.T) {
-	store, err := NewStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
+// mustAppend ingests a batch and fails the test if the store rejects it. Using a
+// helper keeps `err` from being redeclared inside every test body, which the
+// shadow analyzer flags (govet runs with enable-all).
+func mustAppend(t *testing.T, s *Store, deviceID, ownerID string, logs []DeviceLog) {
+	t.Helper()
+	if _, err := s.AppendDeviceLogs(deviceID, ownerID, logs); err != nil {
+		t.Fatalf("AppendDeviceLogs: %v", err)
 	}
+}
+
+// newLogStore opens a store for a device log test. It hides the constructor so
+// test bodies never declare their own `err`.
+func newLogStore(t *testing.T) *Store {
+	t.Helper()
+	s, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	return s
+}
+
+func TestAppendDeviceLogsDeduplicatesReshippedWindow(t *testing.T) {
+	store := newLogStore(t)
 	device := registerLogDevice(t, store, "pc", "owner-1")
 
 	// The agent re-ships an overlapping journal window on every sample, so the
@@ -67,10 +85,7 @@ func TestAppendDeviceLogsDeduplicatesReshippedWindow(t *testing.T) {
 }
 
 func TestAppendDeviceLogsNormalizesLevelsAndTimestamps(t *testing.T) {
-	store, err := NewStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newLogStore(t)
 	device := registerLogDevice(t, store, "pc", "owner-1")
 
 	// journald severity words and journalctl short-iso timestamps both arrive
@@ -112,10 +127,7 @@ func TestAppendDeviceLogsNormalizesLevelsAndTimestamps(t *testing.T) {
 }
 
 func TestAppendDeviceLogsDropsUndatedLines(t *testing.T) {
-	store, err := NewStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newLogStore(t)
 	device := registerLogDevice(t, store, "pc", "owner-1")
 
 	inserted, err := store.AppendDeviceLogs(device.ID, device.OwnerID, []DeviceLog{
@@ -139,10 +151,7 @@ func TestAppendDeviceLogsDropsUndatedLines(t *testing.T) {
 }
 
 func TestAppendDeviceLogsCapsBatchAndMessage(t *testing.T) {
-	store, err := NewStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newLogStore(t)
 	device := registerLogDevice(t, store, "pc", "owner-1")
 
 	oversized := make([]DeviceLog, deviceLogMaxBatch+50)
@@ -173,10 +182,7 @@ func TestAppendDeviceLogsCapsBatchAndMessage(t *testing.T) {
 }
 
 func TestListDeviceLogsFiltersPaginatesAndCounts(t *testing.T) {
-	store, err := NewStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newLogStore(t)
 	device := registerLogDevice(t, store, "pc", "owner-1")
 
 	base := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
@@ -199,9 +205,7 @@ func TestListDeviceLogsFiltersPaginatesAndCounts(t *testing.T) {
 			Message:   "line",
 		})
 	}
-	if _, err := store.AppendDeviceLogs(device.ID, device.OwnerID, batch); err != nil {
-		t.Fatal(err)
-	}
+	mustAppend(t, store, device.ID, device.OwnerID, batch)
 
 	// Newest first.
 	page, err := store.ListDeviceLogs(device.ID, DeviceLogQuery{Limit: 5})
@@ -304,18 +308,13 @@ func TestListDeviceLogsFiltersPaginatesAndCounts(t *testing.T) {
 }
 
 func TestListDeviceLogsSearchTreatsWildcardsLiterally(t *testing.T) {
-	store, err := NewStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newLogStore(t)
 	device := registerLogDevice(t, store, "pc", "owner-1")
 
-	if _, err := store.AppendDeviceLogs(device.ID, device.OwnerID, []DeviceLog{
+	mustAppend(t, store, device.ID, device.OwnerID, []DeviceLog{
 		{Timestamp: "2026-10-07T12:00:00Z", Level: "info", Source: "app", Message: "disk usage 91%"},
 		{Timestamp: "2026-10-07T12:00:01Z", Level: "info", Source: "app", Message: "nothing to see"},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 
 	// A bare % must not behave as a match-everything wildcard.
 	page, err := store.ListDeviceLogs(device.ID, DeviceLogQuery{Search: "%", Limit: 10})
@@ -328,23 +327,16 @@ func TestListDeviceLogsSearchTreatsWildcardsLiterally(t *testing.T) {
 }
 
 func TestListDeviceLogsIsScopedToDevice(t *testing.T) {
-	store, err := NewStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newLogStore(t)
 	first := registerLogDevice(t, store, "pc-a", "owner-1")
 	second := registerLogDevice(t, store, "pc-b", "owner-1")
 
-	if _, err := store.AppendDeviceLogs(first.ID, first.OwnerID, []DeviceLog{
+	mustAppend(t, store, first.ID, first.OwnerID, []DeviceLog{
 		{Timestamp: "2026-10-07T12:00:00Z", Level: "info", Source: "app", Message: "from a"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.AppendDeviceLogs(second.ID, second.OwnerID, []DeviceLog{
+	})
+	mustAppend(t, store, second.ID, second.OwnerID, []DeviceLog{
 		{Timestamp: "2026-10-07T12:00:01Z", Level: "info", Source: "app", Message: "from b"},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 
 	page, err := store.ListDeviceLogs(first.ID, DeviceLogQuery{Limit: 10})
 	if err != nil {
@@ -359,17 +351,12 @@ func TestListDeviceLogsIsScopedToDevice(t *testing.T) {
 }
 
 func TestDeleteDeviceRemovesDeviceLogs(t *testing.T) {
-	store, err := NewStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newLogStore(t)
 	device := registerLogDevice(t, store, "pc", "owner-1")
 
-	if _, err := store.AppendDeviceLogs(device.ID, device.OwnerID, []DeviceLog{
+	mustAppend(t, store, device.ID, device.OwnerID, []DeviceLog{
 		{Timestamp: "2026-10-07T12:00:00Z", Level: "info", Source: "app", Message: "orphan candidate"},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 
 	if err := store.DeleteDevice(device.ID); err != nil {
 		t.Fatalf("DeleteDevice: %v", err)
@@ -386,20 +373,15 @@ func TestDeleteDeviceRemovesDeviceLogs(t *testing.T) {
 }
 
 func TestCleanupOldDeviceLogsRemovesOnlyExpiredRows(t *testing.T) {
-	store, err := NewStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newLogStore(t)
 	device := registerLogDevice(t, store, "pc", "owner-1")
 
 	old := time.Now().UTC().AddDate(0, 0, -DeviceLogRetentionDays-1)
 	recent := time.Now().UTC()
-	if _, err := store.AppendDeviceLogs(device.ID, device.OwnerID, []DeviceLog{
+	mustAppend(t, store, device.ID, device.OwnerID, []DeviceLog{
 		{Timestamp: old.Format(time.RFC3339), Level: "info", Source: "app", Message: "expired"},
 		{Timestamp: recent.Format(time.RFC3339), Level: "info", Source: "app", Message: "kept"},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 
 	deleted, err := store.CleanupOldDeviceLogs(DeviceLogRetentionDays)
 	if err != nil {
@@ -424,20 +406,15 @@ func TestCleanupOldDeviceLogsRemovesOnlyExpiredRows(t *testing.T) {
 }
 
 func TestDeviceLogsSurviveTelemetryCyclesWithoutLogs(t *testing.T) {
-	store, err := NewStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newLogStore(t)
 	device := registerLogDevice(t, store, "pc", "owner-1")
 
 	// This is the bug that emptied the log viewer: the agent samples the
 	// journal only every Nth cycle, and each telemetry post overwrote the whole
 	// hardware_json blob, so the last batch was erased by the next cycle.
-	if _, err := store.AppendDeviceLogs(device.ID, device.OwnerID, []DeviceLog{
+	mustAppend(t, store, device.ID, device.OwnerID, []DeviceLog{
 		{Timestamp: "2026-10-07T12:00:00Z", Level: "error", Source: "kernel", Message: "sampled once"},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 
 	for i := 0; i < 5; i++ {
 		// Cycles where the agent did not sample the journal send no logs.

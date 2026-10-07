@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -47,7 +48,7 @@ type DeviceLogQuery struct {
 	// Search is a case-insensitive substring match on the message.
 	Search string
 	// Since, when set, drops anything older than this instant.
-	Since time.Time
+	Since  time.Time
 	Limit  int
 	Offset int
 }
@@ -86,30 +87,31 @@ func (s *Store) AppendDeviceLogs(deviceID, ownerID string, logs []DeviceLog) (in
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	tx, err := s.db.Begin()
+	ctx := context.Background()
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	stmt, err := tx.Prepare(
+	stmt, err := tx.PrepareContext(ctx,
 		`INSERT OR IGNORE INTO device_logs (device_id, owner_id, ts, level, source, message)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 	)
 	if err != nil {
 		return 0, err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	inserted := 0
 	for _, entry := range logs {
 		ts := normalizeDeviceLogTS(entry.Timestamp)
 		if ts == "" {
-			// Without a usable timestamp the line cannot be ordered, deduped or
-			// aged out. Drop it rather than storing something unqueryable.
+			// Without a usable timestamp the line cannot be ordered, deduplicated
+			// or aged out. Drop it rather than storing something unqueryable.
 			continue
 		}
-		res, err := stmt.Exec(
+		res, err := stmt.ExecContext(ctx,
 			deviceID, ownerID, ts,
 			normalizeDeviceLogLevel(entry.Level),
 			strings.TrimSpace(entry.Source),
@@ -134,6 +136,8 @@ func (s *Store) ListDeviceLogs(deviceID string, q DeviceLogQuery) (DeviceLogPage
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	ctx := context.Background()
+
 	limit := q.Limit
 	if limit <= 0 {
 		limit = 100
@@ -157,13 +161,13 @@ func (s *Store) ListDeviceLogs(deviceID string, q DeviceLogQuery) (DeviceLogPage
 	}
 
 	var total int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM device_logs WHERE `+where, args...).Scan(&total); err != nil {
-		return page, err
+	if scanErr := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM device_logs WHERE `+where, args...).Scan(&total); scanErr != nil {
+		return page, scanErr
 	}
 	page.Total = total
 	page.Truncated = offset+limit < total
 
-	rows, err := s.db.Query(
+	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, device_id, ts, level, source, message FROM device_logs
 		 WHERE `+where+`
 		 ORDER BY ts DESC, id DESC
@@ -173,40 +177,40 @@ func (s *Store) ListDeviceLogs(deviceID string, q DeviceLogQuery) (DeviceLogPage
 	if err != nil {
 		return page, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var e DeviceLogEntry
-		if err := rows.Scan(&e.ID, &e.DeviceID, &e.TS, &e.Level, &e.Source, &e.Message); err != nil {
-			return page, err
+		if scanErr := rows.Scan(&e.ID, &e.DeviceID, &e.TS, &e.Level, &e.Source, &e.Message); scanErr != nil {
+			return page, scanErr
 		}
 		page.Entries = append(page.Entries, e)
 	}
-	if err := rows.Err(); err != nil {
-		return page, err
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return page, rowsErr
 	}
 
 	// Counts ignore the level filter on purpose: the toolbar shows how many
 	// entries each level would yield, not how many match the active one.
 	countWhere, countArgs := deviceLogWhere(deviceID, DeviceLogQuery{Source: q.Source, Search: q.Search, Since: q.Since})
-	countRows, err := s.db.Query(`SELECT level, COUNT(*) FROM device_logs WHERE `+countWhere+` GROUP BY level`, countArgs...)
+	countRows, err := s.db.QueryContext(ctx, `SELECT level, COUNT(*) FROM device_logs WHERE `+countWhere+` GROUP BY level`, countArgs...)
 	if err != nil {
 		return page, err
 	}
-	defer countRows.Close()
+	defer func() { _ = countRows.Close() }()
 	for countRows.Next() {
 		var level string
 		var n int
-		if err := countRows.Scan(&level, &n); err != nil {
-			return page, err
+		if scanErr := countRows.Scan(&level, &n); scanErr != nil {
+			return page, scanErr
 		}
 		page.Counts[normalizeDeviceLogLevel(level)] += n
 	}
-	if err := countRows.Err(); err != nil {
-		return page, err
+	if countsErr := countRows.Err(); countsErr != nil {
+		return page, countsErr
 	}
 
 	sourceWhere, sourceArgs := deviceLogWhere(deviceID, DeviceLogQuery{Since: q.Since})
-	sourceRows, err := s.db.Query(
+	sourceRows, err := s.db.QueryContext(ctx,
 		`SELECT source, COUNT(*) FROM device_logs WHERE `+sourceWhere+`
 		 GROUP BY source ORDER BY COUNT(*) DESC, source ASC LIMIT 200`,
 		sourceArgs...,
@@ -214,12 +218,12 @@ func (s *Store) ListDeviceLogs(deviceID string, q DeviceLogQuery) (DeviceLogPage
 	if err != nil {
 		return page, err
 	}
-	defer sourceRows.Close()
+	defer func() { _ = sourceRows.Close() }()
 	for sourceRows.Next() {
 		var source string
 		var n int
-		if err := sourceRows.Scan(&source, &n); err != nil {
-			return page, err
+		if scanErr := sourceRows.Scan(&source, &n); scanErr != nil {
+			return page, scanErr
 		}
 		page.Sources = append(page.Sources, source)
 	}
@@ -236,7 +240,7 @@ func (s *Store) CleanupOldDeviceLogs(days int) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cutoff := timeText(time.Now().UTC().AddDate(0, 0, -days))
-	result, err := s.db.Exec("DELETE FROM device_logs WHERE ts < ?", cutoff)
+	result, err := s.db.ExecContext(context.Background(), "DELETE FROM device_logs WHERE ts < ?", cutoff)
 	if err != nil {
 		return 0, err
 	}
@@ -248,7 +252,7 @@ func (s *Store) CleanupOldDeviceLogs(days int) (int64, error) {
 func (s *Store) DeleteDeviceLogsForDevice(deviceID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, err := s.db.Exec("DELETE FROM device_logs WHERE device_id = ?", deviceID)
+	_, err := s.db.ExecContext(context.Background(), "DELETE FROM device_logs WHERE device_id = ?", deviceID)
 	return err
 }
 
@@ -300,7 +304,7 @@ func normalizeDeviceLogTS(raw string) string {
 
 // normalizeDeviceLogLevel folds a free-form severity onto the three levels the
 // dashboard renders. journald priority words and the agent's own guesses both
-// arrive here, so anything unrecognised is treated as info rather than dropped.
+// arrive here, so an unrecognized level is treated as info rather than dropped.
 func normalizeDeviceLogLevel(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "err", "error", "crit", "critical", "fatal", "panic", "emerg", "alert":

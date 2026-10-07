@@ -2229,7 +2229,7 @@ func (s *Store) DeleteDevice(deviceID string) error {
 	// device_logs has no foreign key, so the lines are removed explicitly here
 	// rather than relying on cascade. Done inline because the locked helper in
 	// device_logs.go would deadlock on this same mutex.
-	if _, err := s.db.Exec("DELETE FROM device_logs WHERE device_id = ?", deviceID); err != nil {
+	if _, err := s.db.ExecContext(context.Background(), "DELETE FROM device_logs WHERE device_id = ?", deviceID); err != nil {
 		return err
 	}
 	_, err := s.db.Exec("DELETE FROM devices WHERE id = ?", deviceID)
