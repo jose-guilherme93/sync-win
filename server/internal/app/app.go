@@ -1060,7 +1060,7 @@ func (s *Server) handleDeviceSettings(w http.ResponseWriter, r *http.Request, de
 			s.writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
 			return
 		}
-		settings, err := s.store.GetDeviceSettings(deviceID)
+		settings, err := s.store.GetDeviceSettings(r.Context(), deviceID)
 		if err != nil {
 			s.writeError(w, http.StatusInternalServerError, err)
 			return
@@ -1075,11 +1075,11 @@ func (s *Server) handleDeviceSettings(w http.ResponseWriter, r *http.Request, de
 		if !s.decodeBody(w, r, &settings) {
 			return
 		}
-		if err := s.store.UpdateDeviceSettings(deviceID, settings); err != nil {
+		if err := s.store.UpdateDeviceSettings(r.Context(), deviceID, settings); err != nil {
 			s.writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		updated, err := s.store.GetDeviceSettings(deviceID)
+		updated, err := s.store.GetDeviceSettings(r.Context(), deviceID)
 		if err != nil {
 			s.writeError(w, http.StatusInternalServerError, err)
 			return
@@ -1096,7 +1096,7 @@ func (s *Server) handleDeviceUpdates(w http.ResponseWriter, r *http.Request, dev
 		if !s.requireOwnedDevice(w, r, deviceID) {
 			return
 		}
-		report, err := s.store.GetPendingUpdates(deviceID)
+		report, err := s.store.GetPendingUpdates(r.Context(), deviceID)
 		if err != nil {
 			s.writeError(w, http.StatusInternalServerError, err)
 			return
@@ -1118,7 +1118,7 @@ func (s *Server) handleDeviceUpdates(w http.ResponseWriter, r *http.Request, dev
 			return
 		}
 		report := store.UpdateInventory{Status: req.Status, CheckedAt: req.CheckedAt, Message: req.Message, Updates: req.Updates}
-		if err := s.store.UpdatePendingUpdates(deviceID, report); err != nil {
+		if err := s.store.UpdatePendingUpdates(r.Context(), deviceID, report); err != nil {
 			s.writeError(w, http.StatusBadRequest, err)
 			return
 		}
@@ -1716,20 +1716,20 @@ func (s *Server) handleTelemetryHistoryV2(w http.ResponseWriter, r *http.Request
 
 	if resolution == "auto" {
 		if store.ResolutionForInterval(from, to) == "raw" {
-			points, err := s.store.GetTelemetryHistoryRaw(deviceID, from, to)
-			if err != nil {
-				s.writeError(w, http.StatusInternalServerError, err)
+			rawPoints, rerr := s.store.GetTelemetryHistoryRaw(deviceID, from, to)
+			if rerr != nil {
+				s.writeError(w, http.StatusInternalServerError, rerr)
 				return
 			}
-			if len(points) > 0 {
+			if len(rawPoints) > 0 {
 				w.Header().Set("Content-Type", "application/json")
 				_ = json.NewEncoder(w).Encode(map[string]any{
 					"device_id":  deviceID,
 					"resolution": "raw",
 					"from":       from.Format(time.RFC3339),
 					"to":         to.Format(time.RFC3339),
-					"points":     points,
-					"count":      len(points),
+					"points":     rawPoints,
+					"count":      len(rawPoints),
 				})
 				return
 			}
@@ -2015,7 +2015,7 @@ func (s *Server) handleAgentDownload(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, fmt.Errorf("read agent binary: %w", err))
 		return
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, fmt.Errorf("stat agent binary: %w", err))

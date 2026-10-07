@@ -795,8 +795,8 @@ func TestCommandStatusAllowsOwnerAndDeviceToken(t *testing.T) {
 				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 			}
 			var got store.DeviceCommand
-			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-				t.Fatal(err)
+			if uerr := json.Unmarshal(rec.Body.Bytes(), &got); uerr != nil {
+				t.Fatal(uerr)
 			}
 			if got.ID != command.ID || got.Status != "queued" {
 				t.Fatalf("unexpected command status: %+v", got)
@@ -847,8 +847,8 @@ func TestLynisCommandCompletesOnlyAfterReportIsSaved(t *testing.T) {
 	statusRec := httptest.NewRecorder()
 	s.handleCommandStatus(statusRec, statusReq, device.ID, command.ID)
 	var got store.DeviceCommand
-	if err := json.Unmarshal(statusRec.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
+	if uerr := json.Unmarshal(statusRec.Body.Bytes(), &got); uerr != nil {
+		t.Fatal(uerr)
 	}
 	if got.Status != "completed" {
 		t.Fatalf("command status = %q, want completed", got.Status)
@@ -909,8 +909,8 @@ func TestDeviceSettingsOwnerAndAgentFlows(t *testing.T) {
 		t.Fatalf("owner PATCH = %d: %s", rec.Code, rec.Body.String())
 	}
 	var settings store.DeviceSettings
-	if err := json.Unmarshal(rec.Body.Bytes(), &settings); err != nil {
-		t.Fatal(err)
+	if uerr := json.Unmarshal(rec.Body.Bytes(), &settings); uerr != nil {
+		t.Fatal(uerr)
 	}
 	if settings.DisplayName != "Main PC" || settings.CollectionIntervalSeconds != 30 || len(settings.Tags) != 2 {
 		t.Fatalf("PATCH response = %+v", settings)
@@ -924,8 +924,8 @@ func TestDeviceSettingsOwnerAndAgentFlows(t *testing.T) {
 		t.Fatalf("agent GET = %d: %s", getRec.Code, getRec.Body.String())
 	}
 	var agentSettings store.DeviceSettings
-	if err := json.Unmarshal(getRec.Body.Bytes(), &agentSettings); err != nil {
-		t.Fatal(err)
+	if uerr := json.Unmarshal(getRec.Body.Bytes(), &agentSettings); uerr != nil {
+		t.Fatal(uerr)
 	}
 	if agentSettings.DisplayName != settings.DisplayName || agentSettings.CollectionIntervalSeconds != settings.CollectionIntervalSeconds || !reflect.DeepEqual(agentSettings.Tags, settings.Tags) {
 		t.Fatalf("agent settings = %+v, want %+v", agentSettings, settings)
@@ -978,8 +978,8 @@ func TestDeviceActionsQueueOnlyExplicitOwnerCommands(t *testing.T) {
 			t.Fatalf("queue %s = %d: %s", action, rec.Code, rec.Body.String())
 		}
 		var command store.DeviceCommand
-		if err := json.Unmarshal(rec.Body.Bytes(), &command); err != nil {
-			t.Fatal(err)
+		if uerr := json.Unmarshal(rec.Body.Bytes(), &command); uerr != nil {
+			t.Fatal(uerr)
 		}
 		if command.Type != action || command.Status != "queued" {
 			t.Fatalf("queued action = %+v, want %s", command, action)

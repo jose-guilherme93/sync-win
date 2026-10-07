@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -133,7 +134,7 @@ func TestDeviceSettingsPersistAndValidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defaults, err := s.GetDeviceSettings(device.ID)
+	defaults, err := s.GetDeviceSettings(context.Background(), device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,10 +147,10 @@ func TestDeviceSettingsPersistAndValidate(t *testing.T) {
 		Tags:                      []string{" gaming ", "work", "gaming"},
 		CollectionIntervalSeconds: 30,
 	}
-	if err := s.UpdateDeviceSettings(device.ID, settings); err != nil {
-		t.Fatal(err)
+	if uerr := s.UpdateDeviceSettings(context.Background(), device.ID, settings); uerr != nil {
+		t.Fatal(uerr)
 	}
-	saved, err := s.GetDeviceSettings(device.ID)
+	saved, err := s.GetDeviceSettings(context.Background(), device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,12 +178,12 @@ func TestDeviceSettingsPersistAndValidate(t *testing.T) {
 		{Tags: []string{strings.Repeat("x", 33)}, CollectionIntervalSeconds: 10},
 		{Tags: []string{"bad,tag"}, CollectionIntervalSeconds: 10},
 	} {
-		if err := s.UpdateDeviceSettings(device.ID, invalid); err == nil {
+		if uerr := s.UpdateDeviceSettings(context.Background(), device.ID, invalid); uerr == nil {
 			t.Errorf("invalid settings were accepted: %+v", invalid)
 		}
 	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
+	if cerr := s.Close(); cerr != nil {
+		t.Fatal(cerr)
 	}
 
 	// Startup migration is safe to run repeatedly against the same database.
@@ -191,7 +192,7 @@ func TestDeviceSettingsPersistAndValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	reloaded, err := s.GetDeviceSettings(device.ID)
+	reloaded, err := s.GetDeviceSettings(context.Background(), device.ID)
 	if err != nil || !reflect.DeepEqual(reloaded, saved) {
 		t.Fatalf("reloaded settings = %+v, err = %v", reloaded, err)
 	}
@@ -208,30 +209,30 @@ func TestPendingUpdatesPersistWithExplicitEmptyAndErrorStates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	initial, err := s.GetPendingUpdates(device.ID)
+	initial, err := s.GetPendingUpdates(context.Background(), device.ID)
 	if err != nil || initial.Status != "not_reported" || len(initial.Updates) != 0 {
 		t.Fatalf("initial update inventory = %+v, err = %v", initial, err)
 	}
-	if err := s.UpdatePendingUpdates(device.ID, UpdateInventory{Status: "ready", Updates: []PendingUpdate{{
+	if uerr := s.UpdatePendingUpdates(context.Background(), device.ID, UpdateInventory{Status: "ready", Updates: []PendingUpdate{{
 		Source: "apt", Name: "vim", CurrentVersion: "9.1", NewVersion: "9.2",
-	}}}); err != nil {
-		t.Fatal(err)
+	}}}); uerr != nil {
+		t.Fatal(uerr)
 	}
-	ready, err := s.GetPendingUpdates(device.ID)
+	ready, err := s.GetPendingUpdates(context.Background(), device.ID)
 	if err != nil || ready.Status != "ready" || ready.CheckedAt == "" || len(ready.Updates) != 1 || ready.Updates[0].NewVersion != "9.2" {
 		t.Fatalf("ready update inventory = %+v, err = %v", ready, err)
 	}
-	if err := s.UpdatePendingUpdates(device.ID, UpdateInventory{Status: "ready", Updates: []PendingUpdate{}}); err != nil {
-		t.Fatal(err)
+	if uerr := s.UpdatePendingUpdates(context.Background(), device.ID, UpdateInventory{Status: "ready", Updates: []PendingUpdate{}}); uerr != nil {
+		t.Fatal(uerr)
 	}
-	empty, err := s.GetPendingUpdates(device.ID)
+	empty, err := s.GetPendingUpdates(context.Background(), device.ID)
 	if err != nil || empty.Status != "ready" || len(empty.Updates) != 0 {
 		t.Fatalf("empty update inventory = %+v, err = %v", empty, err)
 	}
-	if err := s.UpdatePendingUpdates(device.ID, UpdateInventory{Status: "error", Message: "pacman query failed"}); err != nil {
-		t.Fatal(err)
+	if uerr := s.UpdatePendingUpdates(context.Background(), device.ID, UpdateInventory{Status: "error", Message: "pacman query failed"}); uerr != nil {
+		t.Fatal(uerr)
 	}
-	failed, err := s.GetPendingUpdates(device.ID)
+	failed, err := s.GetPendingUpdates(context.Background(), device.ID)
 	if err != nil || failed.Status != "error" || failed.Message != "pacman query failed" {
 		t.Fatalf("failed update inventory = %+v, err = %v", failed, err)
 	}
@@ -240,19 +241,19 @@ func TestPendingUpdatesPersistWithExplicitEmptyAndErrorStates(t *testing.T) {
 		{Status: "ready", Updates: []PendingUpdate{{Source: "shell", Name: "bad", NewVersion: "1"}}},
 		{Status: "ready", Updates: []PendingUpdate{{Source: "apt", Name: "", NewVersion: "1"}}},
 	} {
-		if err := s.UpdatePendingUpdates(device.ID, invalid); err == nil {
+		if uerr := s.UpdatePendingUpdates(context.Background(), device.ID, invalid); uerr == nil {
 			t.Errorf("invalid update inventory accepted: %+v", invalid)
 		}
 	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
+	if cerr := s.Close(); cerr != nil {
+		t.Fatal(cerr)
 	}
 	s, err = NewStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	reloaded, err := s.GetPendingUpdates(device.ID)
+	reloaded, err := s.GetPendingUpdates(context.Background(), device.ID)
 	if err != nil || reloaded.Status != failed.Status || reloaded.Message != failed.Message {
 		t.Fatalf("reloaded update inventory = %+v, err = %v", reloaded, err)
 	}
