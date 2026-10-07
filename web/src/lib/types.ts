@@ -122,6 +122,7 @@ export type Device = {
   last_error_at?: string
   tags?: string[]
   display_name?: string
+  collection_interval_seconds?: number
 }
 
 export type AppInfo = { name: string; version: string; source: string; path?: string }

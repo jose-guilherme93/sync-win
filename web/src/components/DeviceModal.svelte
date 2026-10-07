@@ -1013,6 +1013,7 @@
               {authHeaders}
               lynisAvailable={hw?.lynis_available ?? false}
               lynisInstallCmd={hw?.lynis_install_cmd ?? ''}
+              agentStatus={device.status}
             />
           </div>
 

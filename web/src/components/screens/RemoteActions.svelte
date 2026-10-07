@@ -1,16 +1,14 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte'
   import { deviceLabel, type Device } from '../../lib/types'
   import { formatRelative } from '../../lib/format'
+  import { apiFetch, apiURL } from '../../lib/api'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import EmptyState from '../ui/EmptyState.svelte'
 
   export let device: Device
+  export let authHeaders: Record<string, string> = {}
 
-  // Remote actions are the most dangerous surface in the dashboard, so each one
-  // states its consequence and goes through a confirmation dialog. The server
-  // command queue currently accepts install_app / restore_saves / exclude_file
-  // and the Docker verbs; reboot, package updates and agent restart need new
-  // command types before these buttons can do more than explain themselves.
   type Action = {
     id: string
     label: string
@@ -22,26 +20,26 @@
 
   const ACTIONS: Action[] = [
     {
-      id: 'restart-agent',
+      id: 'restart_agent',
       label: 'Restart agent',
-      description: 'Restart the SyncWin agent process on the device.',
-      consequence: 'The device stops reporting until the service comes back, usually a few seconds.',
+      description: 'Restart the systemd-managed SyncWin agent process.',
+      consequence: 'The agent reports success, exits, and systemd restarts its service.',
       confirm: 'Restart agent',
       dangerous: false
     },
     {
-      id: 'update-packages',
+      id: 'update_packages',
       label: 'Apply package updates',
-      description: 'Run the system package manager upgrade on the device.',
-      consequence: 'This can replace a running kernel and will restart services. It cannot be undone from here.',
+      description: 'Update installed APT, Pacman/AUR, and Flatpak packages when available.',
+      consequence: 'Updates may replace the running kernel and restart services. This cannot be undone from here.',
       confirm: 'Apply updates',
       dangerous: true
     },
     {
-      id: 'reboot',
+      id: 'reboot_device',
       label: 'Reboot device',
-      description: 'Reboot the machine.',
-      consequence: 'Every session on the device is terminated. The device disappears from the fleet until it boots.',
+      description: 'Schedule a system reboot using the host shutdown utility.',
+      consequence: 'This ends every session on the device. The reboot is scheduled about one minute after confirmation.',
       confirm: 'Reboot now',
       dangerous: true
     }
@@ -49,29 +47,107 @@
 
   let pending: Action | null = null
   let busy = false
+  let error = ''
+  let destroyed = false
+  let pollTimer: ReturnType<typeof setTimeout> | null = null
+  let cancelPollDelay: (() => void) | null = null
 
-  // Session-local audit trail. Once the server records actions this becomes a
-  // read of the audit log rather than browser state.
-  type Entry = { at: number; action: string; by: string; outcome: string }
+  type Entry = { id: number; at: number; action: string; by: string; target: string; outcome: string }
   let log: Entry[] = []
-
-  const BY = 'you'
+  let nextEntryId = 1
 
   function request(action: Action) {
     pending = action
   }
 
-  function confirm() {
-    if (!pending) return
+  function updateEntry(id: number, outcome: string) {
+    log = log.map((entry) => entry.id === id ? { ...entry, outcome } : entry)
+  }
+
+  async function confirm() {
+    if (!pending || busy) return
     busy = true
     const action = pending
-    log = [
-      { at: Date.now(), action: action.label, by: BY, outcome: 'Blocked — command type not implemented server-side' },
-      ...log
-    ]
+    const deviceId = device.id
+    const target = deviceLabel(device)
+    const agentStatus = device.status
     pending = null
-    busy = false
+    error = ''
+    const entryId = nextEntryId++
+    log = [{ id: entryId, at: Date.now(), action: action.label, by: 'you', target, outcome: 'Sending command…' }, ...log]
+    try {
+      const response = await apiFetch(apiURL(`/api/devices/${deviceId}/actions`), {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: action.id })
+      })
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}))
+        throw new Error(payload.error || `request failed (${response.status})`)
+      }
+      const command = await response.json()
+      if (!command?.id) throw new Error('Server did not return a command ID')
+      await pollCommand(deviceId, agentStatus, command.id, entryId)
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Action request failed'
+      error = message
+      updateEntry(entryId, `Failed: ${message}`)
+    } finally {
+      busy = false
+    }
   }
+
+  async function pollCommand(deviceId: string, agentStatus: string, commandId: string, entryId: number, maxAttempts = 60) {
+    let lastError = ''
+    for (let i = 0; i < maxAttempts; i++) {
+      if (destroyed) return
+      try {
+        const response = await apiFetch(apiURL(`/api/devices/${deviceId}/commands/${commandId}`), { headers: authHeaders })
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}))
+          throw new Error(payload.error || `status request failed (${response.status})`)
+        }
+        const command = await response.json()
+        lastError = ''
+        if (command.status === 'completed') {
+          updateEntry(entryId, command.message || 'Completed')
+          return
+        }
+        if (command.status === 'failed') {
+          updateEntry(entryId, `Failed: ${command.message || 'Agent rejected the action'}`)
+          return
+        }
+        updateEntry(entryId, agentStatus === 'online'
+          ? 'Queued; waiting for the agent…'
+          : `Queued; device is ${agentStatus}. Waiting for reconnection…`)
+      } catch (e) {
+        lastError = e instanceof Error ? e.message : 'Unable to check action status'
+      }
+      if (i < maxAttempts - 1) {
+        await new Promise<void>((resolve) => {
+          const finish = () => {
+            if (pollTimer) clearTimeout(pollTimer)
+            pollTimer = null
+            cancelPollDelay = null
+            resolve()
+          }
+          cancelPollDelay = finish
+          pollTimer = setTimeout(finish, 3000)
+        })
+      }
+    }
+    if (destroyed) return
+    const message = lastError
+      ? `Unable to check command status: ${lastError}`
+      : 'Still queued; the agent may be offline. The command remains pending.'
+    error = lastError
+    updateEntry(entryId, message)
+  }
+
+  onDestroy(() => {
+    destroyed = true
+    cancelPollDelay?.()
+  })
 </script>
 
 <section class="actions">
@@ -79,12 +155,11 @@
     <h2>Remote actions</h2>
     <span class="target">target: {deviceLabel(device)}</span>
   </header>
-  <div class="notice" role="status">
-    These actions are not enabled: the server command queue does not yet accept
-    <code>reboot</code>, <code>update-packages</code> or <code>restart-agent</code>. The buttons
-    document the intended confirmation flow and record attempts in the log below, but nothing is
-    sent to the device.
+  <div class="notice">
+    These use fixed operations. The server's remote-mutations flag and the agent's local policy
+    must both allow an action; package updates and reboot always require confirmation.
   </div>
+  {#if error}<div class="error" role="alert">{error}</div>{/if}
 
   <div class="grid">
     {#each ACTIONS as action (action.id)}
@@ -92,22 +167,23 @@
         <h3>{action.label}</h3>
         <p>{action.description}</p>
         <p class="consequence">{action.consequence}</p>
-        <button class:danger={action.dangerous} on:click={() => request(action)}>Run…</button>
+        <button class:danger={action.dangerous} on:click={() => request(action)} disabled={busy}>Run…</button>
       </article>
     {/each}
   </div>
 
   <article class="card">
-    <header class="card-head"><h2>Audit log</h2><span class="muted">this session only</span></header>
+    <header class="card-head"><h2>Recent action results</h2><span class="muted">this view only</span></header>
     {#if log.length === 0}
-      <EmptyState icon="📋" title="No actions yet" message="Every action you attempt is recorded here with its outcome." />
+      <EmptyState icon="📋" title="No actions yet" message="Results appear here after the server and agent report the outcome." />
     {:else}
       <ul class="log">
-        {#each log as entry, i (i)}
+        {#each log as entry (entry.id)}
           <li>
             <span class="when">{formatRelative(entry.at)}</span>
             <span class="who">{entry.by}</span>
             <span class="what">{entry.action}</span>
+            <span class="target-name">{entry.target}</span>
             <span class="outcome">{entry.outcome}</span>
           </li>
         {/each}
@@ -138,7 +214,7 @@
     border-radius: var(--radius-sm); background: var(--warn-dim);
     color: var(--warn); font-size: 0.78rem; line-height: 1.5;
   }
-  .notice code { font-family: var(--mono); color: var(--text-bright); }
+  .error { padding: 0.6rem 0.8rem; border: 1px solid rgba(248, 113, 113, 0.4); border-radius: var(--radius-sm); background: var(--crit-dim); color: var(--crit); font-size: 0.78rem; }
 
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 0.75rem; }
 
@@ -156,6 +232,7 @@
     font-weight: 600; font-size: 0.78rem; cursor: pointer;
   }
   button:hover { background: rgba(52, 211, 153, 0.25); }
+  button:disabled { opacity: 0.55; cursor: default; }
   button.danger { border-color: rgba(248, 113, 113, 0.45); background: var(--crit-dim); color: var(--crit); }
   button.danger:hover { background: rgba(248, 113, 113, 0.25); }
 
@@ -165,7 +242,7 @@
 
   .log { list-style: none; margin: 0; padding: 0; }
   .log li {
-    display: grid; grid-template-columns: auto auto 1fr 1fr; gap: 0.6rem;
+    display: grid; grid-template-columns: auto auto 1fr 1fr 1fr; gap: 0.6rem;
     padding: 0.45rem 0; border-bottom: 1px solid var(--border);
     font-size: 0.75rem; align-items: baseline;
   }
@@ -173,6 +250,7 @@
   .when { color: var(--text-faint); white-space: nowrap; }
   .who { color: var(--text-muted); }
   .what { color: var(--text); font-weight: 600; }
+  .target-name { color: var(--text-muted); }
   .outcome { color: var(--warn); }
 
   @media (max-width: 700px) {

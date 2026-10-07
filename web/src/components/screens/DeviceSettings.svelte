@@ -1,58 +1,127 @@
 <script lang="ts">
+  import { createEventDispatcher, onDestroy } from 'svelte'
   import type { Device } from '../../lib/types'
   import { deviceLabel, deviceTags } from '../../lib/types'
+  import { apiFetch, apiURL } from '../../lib/api'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
-  import EmptyState from '../ui/EmptyState.svelte'
 
   export let device: Device
+  export let authHeaders: Record<string, string> = {}
   // Called after the server confirms removal; the parent handles the API call
   // and any error toast so this screen stays presentational.
   export let onRemove: (device: Device) => Promise<void> | void
   export let busy = false
 
-  let displayName = deviceLabel(device)
+  const dispatch = createEventDispatcher()
+  let displayName = device.display_name || device.hostname
   let tagInput = deviceTags(device).join(', ')
-  let interval = String(device.hardware ? 10 : 10)
+  let interval = String(device.collection_interval_seconds || 10)
+  let savedName = displayName
+  let savedTags = tagInput
+  let savedInterval = interval
   let confirmRemove = false
-
-  $: dirtyName = displayName.trim() !== deviceLabel(device)
-  $: dirtyTags = tagInput.trim() !== deviceTags(device).join(', ')
-
-  // Rename, tags and interval all need a PATCH /api/devices/{id}. Until that
-  // exists the fields are editable and validated but nothing is persisted, so
-  // the UI does not silently imply a save that did not happen.
+  let loadingSettings = false
+  let saving = false
+  let settingsError = ''
   let saved = false
+  let savedTimer: ReturnType<typeof setTimeout> | null = null
+  let loadedDeviceId = ''
+  let settingsRequest = 0
 
-  function saveMeta() {
-    saved = true
-    setTimeout(() => (saved = false), 2500)
+  $: dirtyName = displayName.trim() !== savedName
+  $: dirtyTags = tagInput.trim() !== savedTags
+  $: dirtyInterval = interval !== savedInterval
+
+  async function loadSettings() {
+    const request = ++settingsRequest
+    const deviceId = device.id
+    loadingSettings = true
+    settingsError = ''
+    saved = false
+    try {
+      const response = await apiFetch(apiURL(`/api/devices/${deviceId}/settings`), { headers: authHeaders })
+      if (!response.ok) throw new Error(`Could not load settings (${response.status})`)
+      const settings = await response.json()
+      if (request !== settingsRequest) return
+      displayName = settings.display_name || device.hostname
+      tagInput = Array.isArray(settings.tags) ? settings.tags.join(', ') : ''
+      interval = String(settings.collection_interval_seconds || 10)
+      savedName = displayName
+      savedTags = tagInput
+      savedInterval = interval
+    } catch (e) {
+      if (request !== settingsRequest) return
+      settingsError = e instanceof Error ? e.message : 'Could not load device settings'
+    } finally {
+      if (request === settingsRequest) loadingSettings = false
+    }
+  }
+
+  async function saveMeta() {
+    saving = true
+    settingsError = ''
+    saved = false
+    try {
+      const response = await apiFetch(apiURL(`/api/devices/${device.id}`), {
+        method: 'PATCH',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          display_name: displayName.trim(),
+          tags: tagInput.split(',').map((tag) => tag.trim()).filter(Boolean),
+          collection_interval_seconds: Number(interval)
+        })
+      })
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}))
+        throw new Error(payload.error || `Could not save settings (${response.status})`)
+      }
+      const settings = await response.json()
+      displayName = settings.display_name || device.hostname
+      tagInput = Array.isArray(settings.tags) ? settings.tags.join(', ') : ''
+      interval = String(settings.collection_interval_seconds)
+      savedName = displayName
+      savedTags = tagInput
+      savedInterval = interval
+      saved = true
+      dispatch('saved', settings)
+      if (savedTimer) clearTimeout(savedTimer)
+      savedTimer = setTimeout(() => (saved = false), 2500)
+    } catch (e) {
+      settingsError = e instanceof Error ? e.message : 'Could not save device settings'
+    } finally {
+      saving = false
+    }
   }
 
   async function doRemove() {
     confirmRemove = false
     await onRemove(device)
   }
+
+  $: if (device.id && loadedDeviceId !== device.id) {
+    loadedDeviceId = device.id
+    void loadSettings()
+  }
+  onDestroy(() => { if (savedTimer) clearTimeout(savedTimer) })
 </script>
 
 <section class="settings">
   <article class="card">
     <header class="card-head"><h2>Identity</h2></header>
-    <p class="hint">
-      Editing needs <code>PATCH /api/devices/{'{id}'}</code>, which the server does not implement yet.
-      Changes are validated here but not persisted.
-    </p>
+    <p class="hint">Settings are saved to the server. The collection interval applies to the agent's telemetry cycle.</p>
+    {#if settingsError}<p class="error" role="alert">{settingsError}</p>{/if}
     <div class="fields">
       <label>
         Display name
-        <input bind:value={displayName} placeholder={device.hostname} maxlength={64} />
+        <input bind:value={displayName} placeholder={device.hostname} maxlength={64} disabled={loadingSettings || saving} />
       </label>
       <label>
         Tags <span class="sub">comma separated</span>
-        <input bind:value={tagInput} placeholder="workstation, gaming" />
+        <input bind:value={tagInput} placeholder="workstation, gaming" maxlength={800} disabled={loadingSettings || saving} />
       </label>
       <label>
         Collection interval
-        <select bind:value={interval}>
+        <select bind:value={interval} disabled={loadingSettings || saving}>
           <option value="5">5 s</option>
           <option value="10">10 s</option>
           <option value="30">30 s</option>
@@ -61,8 +130,10 @@
       </label>
     </div>
     <div class="actions">
-      {#if saved}<span class="saved" role="status">Validated — not saved</span>{/if}
-      <button class="primary" on:click={saveMeta} disabled={!dirtyName && !dirtyTags}>Save changes</button>
+      {#if saved}<span class="saved" role="status">Saved</span>{/if}
+      <button class="primary" on:click={saveMeta} disabled={loadingSettings || saving || (!dirtyName && !dirtyTags && !dirtyInterval)}>
+        {saving ? 'Saving…' : 'Save changes'}
+      </button>
     </div>
   </article>
 
@@ -115,7 +186,7 @@
   .card-head h2 { margin: 0; font-size: 0.82rem; font-weight: 600; color: var(--text); }
 
   .hint { margin: 0 0 0.75rem; color: var(--text-muted); font-size: 0.78rem; line-height: 1.5; }
-  .hint code { font-family: var(--mono); color: var(--text); }
+  .error { margin: 0 0 0.75rem; color: var(--crit); font-size: 0.78rem; }
   .danger-text { color: var(--text-muted); }
   .sub { color: var(--text-faint); font-size: 0.7rem; font-weight: 400; }
 
@@ -128,7 +199,7 @@
   .fields input:focus, .fields select:focus { outline: none; border-color: var(--accent-border); }
 
   .actions { display: flex; align-items: center; justify-content: flex-end; gap: 0.75rem; margin-top: 0.85rem; }
-  .saved { color: var(--warn); font-size: 0.74rem; }
+  .saved { color: var(--accent); font-size: 0.74rem; }
 
   button { padding: 0.45rem 0.85rem; border-radius: var(--radius-sm); font-weight: 600; font-size: 0.78rem; cursor: pointer; }
   button:disabled { opacity: 0.5; cursor: default; }

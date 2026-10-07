@@ -11,6 +11,7 @@
   import Home from './components/screens/Home.svelte'
   import DeviceOverview from './components/screens/DeviceOverview.svelte'
   import Alerts from './components/screens/Alerts.svelte'
+  import Findings from './components/screens/Findings.svelte'
   import Reports from './components/screens/Reports.svelte'
   import Storage from './components/screens/Storage.svelte'
   import Processes from './components/screens/Processes.svelte'
@@ -708,6 +709,12 @@
     } catch {
       // Keep the last known detail; the list summary still renders.
     }
+  }
+
+  async function refreshDeviceSettings() {
+    if (!modalDevice) return
+    const deviceId = modalDevice.id
+    await Promise.all([loadDevices(), loadDeviceDetail(deviceId)])
   }
 
   function closeDeviceModal() {
@@ -1616,13 +1623,13 @@
             {:else if navState.section === 'processes'}
               <Processes device={modalDevice} />
             {:else if navState.section === 'packages'}
-              <Packages deviceId={modalDevice.id} />
+              <Packages deviceId={modalDevice.id} authHeaders={ownerHeaders} />
             {:else if navState.section === 'services'}
               <Services deviceId={modalDevice.id} />
             {:else if navState.section === 'remote'}
-              <RemoteActions device={modalDevice} />
+              <RemoteActions device={modalDevice} authHeaders={ownerHeaders} />
             {:else if navState.section === 'settings'}
-              <DeviceSettings device={modalDevice} onRemove={removeDeviceConfirmed} />
+              <DeviceSettings device={modalDevice} authHeaders={ownerHeaders} onRemove={removeDeviceConfirmed} on:saved={refreshDeviceSettings} />
             {:else if isHardwareSection}
               <DeviceOverview device={modalDevice} authHeaders={ownerHeaders} />
             {:else}
@@ -1638,8 +1645,10 @@
                 on:restore={(event) => restoreGameSaves(event.detail.deviceId, event.detail.prefixId, event.detail.gameName)}
               />
             {/if}
-          {:else if navState.section === 'alerts' || navState.section === 'findings'}
+          {:else if navState.section === 'alerts'}
             <Alerts {devices} onSelect={selectDevice} />
+          {:else if navState.section === 'findings'}
+            <Findings {devices} onSelect={selectDevice} />
           {:else if navState.section === 'reports'}
             <Reports {devices} onSelect={selectDevice} />
           {:else}

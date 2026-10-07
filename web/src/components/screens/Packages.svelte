@@ -1,12 +1,17 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { apiFetch, apiURL } from '../../lib/api'
+  import { formatRelative } from '../../lib/format'
   import type { AppInfo } from '../../lib/types'
   import EmptyState from '../ui/EmptyState.svelte'
   import Skeleton from '../ui/Skeleton.svelte'
 
   export let deviceId: string
   export let apps: AppInfo[] = []
+  export let authHeaders: Record<string, string> = {}
+
+  type PendingUpdate = { source: string; name: string; current_version?: string; new_version: string }
+  type UpdateReport = { status: string; checked_at?: string; message?: string; updates: PendingUpdate[] }
 
   let query = ''
   let source = 'all'
@@ -14,11 +19,18 @@
   let error = ''
   let loaded = false
 
+  let updateReport: UpdateReport | null = null
+  let updatesLoading = false
+  let updatesError = ''
+
   // The app inventory is not part of /api/devices or /api/devices/{id}/detail:
   // both omit it because it can be thousands of entries, and the summary carries
   // only app_count. The screen therefore fetches its own list, the same way the
   // Services screen does, rather than reading a field that is never populated.
-  onMount(load)
+  onMount(() => {
+    void load()
+    void loadUpdates()
+  })
 
   async function load() {
     if (!deviceId) {
@@ -28,7 +40,7 @@
     loading = true
     error = ''
     try {
-      const res = await apiFetch(apiURL(`/api/devices/${deviceId}/apps`))
+      const res = await apiFetch(apiURL(`/api/devices/${deviceId}/apps`), { headers: authHeaders })
       if (!res.ok) throw new Error(`request failed (${res.status})`)
       const payload = await res.json()
       apps = Array.isArray(payload) ? payload : []
@@ -38,6 +50,32 @@
     } finally {
       loading = false
       loaded = true
+    }
+  }
+
+  // Pending updates come from a read-only package-manager query the agent runs
+  // on its own schedule. The three non-`ready` states are distinct on purpose:
+  // "not reported yet" is not the same as "no supported package manager", which
+  // is not the same as a failed check.
+  async function loadUpdates() {
+    if (!deviceId) return
+    updatesLoading = true
+    updatesError = ''
+    try {
+      const res = await apiFetch(apiURL(`/api/devices/${deviceId}/updates`), { headers: authHeaders })
+      if (!res.ok) throw new Error(`request failed (${res.status})`)
+      const payload = await res.json()
+      if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+        if (!Array.isArray(payload.updates)) payload.updates = []
+        updateReport = payload
+      } else {
+        updateReport = null
+      }
+    } catch (e: any) {
+      updatesError = e?.message || 'Failed to load pending updates'
+      updateReport = null
+    } finally {
+      updatesLoading = false
     }
   }
 
@@ -113,12 +151,48 @@
   </article>
 
   <article class="card">
-    <header class="card-head"><h2>Pending updates</h2></header>
-    <EmptyState
-      icon="⬆"
-      title="Not collected yet"
-      message="Checking for available updates requires running the package manager, which the agent does not do. A GET /api/devices/&#123;id&#125;/updates endpoint is needed before this list can be filled."
-    />
+    <header class="card-head">
+      <h2>Pending updates</h2>
+      {#if updateReport?.status === 'ready' && !updatesLoading}
+        <span class="muted">{updateReport.updates.length} update{updateReport.updates.length !== 1 ? 's' : ''}</span>
+      {/if}
+    </header>
+
+    {#if updatesLoading}
+      <Skeleton variant="lines" rows={3} />
+    {:else if updatesError}
+      <div class="error-banner" role="alert">
+        {updatesError}
+        <button class="retry" on:click={loadUpdates}>Retry</button>
+      </div>
+    {:else if !updateReport || updateReport.status === 'not_reported'}
+      <EmptyState
+        icon="⬆"
+        title="Not checked yet"
+        message="The agent checks for available updates on its own schedule. Nothing has been reported for this device yet."
+      />
+    {:else if updateReport.status === 'unsupported'}
+      <EmptyState
+        icon="⬆"
+        title="No supported package manager"
+        message={updateReport.message || 'This device has none of the supported package managers (apt, flatpak, pacman, AUR).'}
+      />
+    {:else if updateReport.status === 'error'}
+      <div class="error-banner" role="alert">Update check failed: {updateReport.message || 'unknown error'}</div>
+    {:else if updateReport.updates.length === 0}
+      <EmptyState icon="✅" title="Up to date" message="No pending package updates were found." />
+    {:else}
+      <ul class="updates">
+        {#each updateReport.updates as update (update.source + update.name)}
+          <li>
+            <span class="source">{update.source}</span>
+            <span class="name" title={update.name}>{update.name}</span>
+            <span class="version mono">{update.current_version ? `${update.current_version} → ` : ''}{update.new_version}</span>
+          </li>
+        {/each}
+      </ul>
+      {#if updateReport.checked_at}<p class="checked">Checked {formatRelative(updateReport.checked_at)}</p>{/if}
+    {/if}
   </article>
 </section>
 
@@ -157,4 +231,22 @@
   .name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .version { color: var(--text-faint); white-space: nowrap; }
   .more { margin: 0; padding: 0.4rem 0.9rem; color: var(--text-faint); font-size: 0.7rem; }
+
+  .updates { list-style: none; margin: 0; padding: 0; max-height: 22rem; overflow-y: auto; }
+  .updates li {
+    display: grid; grid-template-columns: auto 1fr auto; gap: 0.6rem; align-items: baseline;
+    padding: 0.35rem 0.9rem; border-bottom: 1px solid var(--border); font-size: 0.78rem;
+  }
+  .updates li:last-child { border-bottom: 0; }
+  .source {
+    color: var(--text-faint); font-size: 0.68rem; text-transform: uppercase;
+    letter-spacing: 0.06em; min-width: 4.5rem;
+  }
+  .checked { margin: 0; padding: 0.4rem 0.9rem; color: var(--text-faint); font-size: 0.7rem; }
+  .error-banner { display: flex; align-items: center; gap: 0.6rem; padding: 0.6rem 0.9rem; color: var(--crit); font-size: 0.78rem; }
+  .retry {
+    padding: 0.25rem 0.6rem; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+    background: transparent; color: var(--text); font-size: 0.72rem; cursor: pointer;
+  }
+  .retry:hover { background: var(--card-hover); }
 </style>
