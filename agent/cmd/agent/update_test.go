@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -137,5 +138,80 @@ func TestParseAgentVersionRejectsInvalid(t *testing.T) {
 		if _, err := parseAgentVersion(value); err == nil {
 			t.Errorf("parseAgentVersion(%q) accepted invalid value", value)
 		}
+	}
+}
+
+func TestMergeExecStartKeepsExistingCommand(t *testing.T) {
+	current := "[Unit]\nDescription=SyncWin\n\n[Service]\nExecStart=/opt/custom/sync-win-agent daemon --server http://old:8080\nSupplementaryGroups=docker\n"
+	desired := "[Unit]\nDescription=SyncWin\n\n[Service]\nExecStart=/usr/local/bin/sync-win-agent daemon --server http://new:8080\nSupplementaryGroups=docker systemd-journal\n"
+
+	// The server renders its own ExecStart, which points at the public URL. A
+	// device installed from a different URL must keep its own, or an update
+	// silently repoints it.
+	got := mergeExecStart(current, strings.Replace(desired,
+		"ExecStart=/usr/local/bin/sync-win-agent daemon --server http://new:8080",
+		"ExecStart={{SERVER_URL}}", 1))
+	if !strings.Contains(got, "--server http://old:8080") {
+		t.Errorf("existing ExecStart lost:\n%s", got)
+	}
+	if !strings.Contains(got, "systemd-journal") {
+		t.Errorf("new group missing:\n%s", got)
+	}
+}
+
+func TestMergeExecStartPrefersRenderedCommand(t *testing.T) {
+	current := "[Service]\nExecStart=/opt/custom/agent\n"
+	desired := "[Service]\nExecStart=/usr/local/bin/sync-win-agent daemon --server http://new:8080\nSupplementaryGroups=docker systemd-journal\n"
+	got := mergeExecStart(current, desired)
+	if !strings.Contains(got, "http://new:8080") {
+		t.Errorf("a rendered ExecStart should win:\n%s", got)
+	}
+}
+
+func TestFetchAgentUnitRejectsUnrenderedTemplate(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("[Service]\nExecStart={{SERVER_URL}}\n"))
+	}))
+	defer srv.Close()
+
+	// Writing this to /etc/systemd/system would break the service, so it must
+	// be rejected rather than installed.
+	if _, err := fetchAgentUnit(srv.URL, "dev-1", "tok"); err == nil {
+		t.Fatal("expected an error for a unit still containing placeholders")
+	}
+}
+
+func TestFetchAgentUnitRejectsNonUnitResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("<html>login</html>"))
+	}))
+	defer srv.Close()
+
+	if _, err := fetchAgentUnit(srv.URL, "dev-1", "tok"); err == nil {
+		t.Fatal("expected an error for a response that is not a unit")
+	}
+}
+
+func TestFetchAgentUnitSendsCredentials(t *testing.T) {
+	var gotID, gotToken string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotID = r.URL.Query().Get("device_id")
+		gotToken = r.URL.Query().Get("device_token")
+		_, _ = w.Write([]byte("[Unit]\n\n[Service]\nExecStart=/usr/local/bin/sync-win-agent\n"))
+	}))
+	defer srv.Close()
+
+	unit, err := fetchAgentUnit(srv.URL, "dev-42", "secret token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotID != "dev-42" {
+		t.Errorf("device_id = %q", gotID)
+	}
+	if gotToken != "secret token" {
+		t.Errorf("device_token = %q (must be escaped and round-trip)", gotToken)
+	}
+	if !strings.Contains(unit, "ExecStart=") {
+		t.Errorf("unit = %q", unit)
 	}
 }
