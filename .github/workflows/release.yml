@@ -1,17 +1,22 @@
 # =============================================================================
-# Release — automatic semantic versioning, GitHub Releases and Docker publish
+# Release — version, publish image, then tag
 # =============================================================================
-# Every push to main creates the next version from Conventional Commits and
-# tags it. No manual tagging is ever needed:
+# Every push to main creates the next version from Conventional Commits:
 #
 #   feat: ...                      -> minor  (0.1.0 -> 0.2.0)
 #   fix: ... / chore: ... / etc.   -> patch  (0.2.0 -> 0.2.1)
 #   feat!: ... / BREAKING CHANGE:  -> major  (0.2.0 -> 1.0.0)
 #
-# The image is pushed to Docker Hub only when DOCKERHUB_USERNAME and
-# DOCKERHUB_TOKEN are configured; otherwise the tag and Release are still
-# created without failing. Run it manually from the Actions tab to force a
-# specific bump.
+# The image is published to GitHub Container Registry using the automatic
+# GITHUB_TOKEN, so no Docker Hub credentials are involved and there is no
+# long-lived registry secret to leak or rotate.
+#
+# ORDERING IS THE POINT: the image is pushed BEFORE the Git tag is created.
+# The deployment watches the repository tag, so tagging first would advertise a
+# version whose image does not exist yet and the deploy would fail on a pull
+# that cannot succeed. Publishing first makes "a tag exists" imply "a matching
+# image exists". If the publish fails, no tag is created and no deploy is
+# triggered.
 # =============================================================================
 name: Release
 
@@ -32,15 +37,20 @@ on:
           - major
 
 permissions:
-  contents: write
+  contents: write   # create the git tag and the GitHub Release
+  packages: write   # push the image to ghcr.io
 
 concurrency:
   group: release-main
   cancel-in-progress: false
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
 jobs:
   release:
-    name: Version, tag and publish
+    name: Version, publish image and tag
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -95,6 +105,71 @@ jobs:
           fi
           echo "Next release: ${tag} (${bump})"
 
+      # ------------------------------------------------------------------
+      # Publish the image FIRST. Nothing below may run if this fails, so the
+      # tag can never advertise an image that does not exist.
+      # ------------------------------------------------------------------
+      - name: Set up QEMU
+        if: steps.version.outputs.exists == 'false'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        if: steps.version.outputs.exists == 'false'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: steps.version.outputs.exists == 'false'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        if: steps.version.outputs.exists == 'false'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.server
+          # The runtime is a static Go binary on Alpine, and the dashboard is a
+          # static asset bundle, so both build stages cross-compile cleanly.
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          labels: |
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          # Attaches an SLSA provenance statement and an SBOM to the manifest,
+          # so what was built and from what is verifiable after the fact.
+          provenance: true
+          sbom: true
+          # The agent signing key is a BuildKit secret, so the private key never
+          # enters a layer. Without it the agent still builds but refuses
+          # auto-update, which is fail-closed by design.
+          secrets: |
+            agent_update_key=${{ secrets.AGENT_UPDATE_KEY }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Release"
+            echo ""
+            echo "- version: \`${VERSION:-unknown}\`"
+            echo "- image: \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${VERSION:-unknown}\`"
+            echo "- commit: \`${{ github.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+
+      # ------------------------------------------------------------------
+      # Tag only after the image is in the registry. These steps are what the
+      # deployment watches.
+      # ------------------------------------------------------------------
       - name: Create tag
         if: steps.version.outputs.exists == 'false'
         run: |
@@ -116,50 +191,3 @@ jobs:
           tag_name: ${{ steps.version.outputs.tag }}
           name: ${{ steps.version.outputs.tag }}
           generate_release_notes: true
-
-      - name: Check Docker Hub credentials
-        id: registry
-        if: steps.version.outputs.exists == 'false'
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-        run: |
-          if [ -n "${DOCKERHUB_USERNAME:-}" ]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "Docker Hub credentials not set; skipping image publish."
-          fi
-
-      - name: Set up QEMU
-        if: steps.version.outputs.exists == 'false' && steps.registry.outputs.enabled == 'true'
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        if: steps.version.outputs.exists == 'false' && steps.registry.outputs.enabled == 'true'
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Docker Hub
-        if: steps.version.outputs.exists == 'false' && steps.registry.outputs.enabled == 'true'
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build and push image
-        if: steps.version.outputs.exists == 'false' && steps.registry.outputs.enabled == 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/Dockerfile.server
-          platforms: linux/amd64
-          push: true
-          tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/sync-win:${{ steps.version.outputs.version }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/sync-win:latest
-          labels: |
-            org.opencontainers.image.version=${{ steps.version.outputs.version }}
-            org.opencontainers.image.revision=${{ github.sha }}
-          secrets: |
-            agent_update_key=${{ secrets.AGENT_UPDATE_KEY }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max

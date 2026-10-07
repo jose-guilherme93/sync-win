@@ -1,11 +1,32 @@
+# syntax=docker/dockerfile:1.7
+#
+# Multi-stage build producing a small runtime image.
+#
+#   build -> Go binaries (server, agent, signing helper) on Alpine
+#   web   -> compiled dashboard bundle
+#   final -> just the two binaries, the static bundle and a shell script
+#
+# Nothing from the build stages reaches the final image: no Go toolchain, no
+# Node, no node_modules, no package manifests, no package cache.
+
 FROM golang:1.25-alpine AS build
 WORKDIR /src
+
+# TARGETOS/TARGETARCH come from BuildKit. Hardcoding GOARCH would make a
+# multi-platform build produce an amd64 binary under an arm64 manifest entry,
+# which fails only at runtime on the wrong architecture.
+ARG TARGETOS
+ARG TARGETARCH
+
 COPY server/go.mod server/go.sum ./server/
 RUN cd server && go mod download
 COPY server ./server
 COPY agent ./agent
-RUN cd server && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/server ./cmd/server
-RUN cd server && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/agentsign ./cmd/agentsign
+
+RUN cd server && CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/server
+RUN cd server && CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w" -o /out/agentsign ./cmd/agentsign
 
 # Build the agent and, when an Ed25519 signing key is supplied as the BuildKit
 # secret id=agent_update_key, embed its public key and emit a detached
@@ -16,7 +37,8 @@ RUN --mount=type=secret,id=agent_update_key,required=false \
     key=""; ldf=""; \
     if [ -f /run/secrets/agent_update_key ]; then key="$(cat /run/secrets/agent_update_key)"; fi; \
     if [ -n "$key" ]; then ldf="-X main.agentUpdatePublicKey=$(/out/agentsign -derive-public -key "$key")"; fi; \
-    cd /src/agent && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "$ldf" -o /out/sync-win-agent ./cmd/agent; \
+    cd /src/agent && CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
+      go build -trimpath -ldflags="$ldf -s -w" -o /out/sync-win-agent ./cmd/agent; \
     : > /out/sync-win-agent.sig; \
     if [ -n "$key" ]; then /out/agentsign -key "$key" -in /out/sync-win-agent -out /out/sync-win-agent.sig; fi
 
@@ -27,25 +49,47 @@ RUN apk add --no-cache jq && \
 FROM node:22-alpine AS web
 WORKDIR /src
 COPY web/package.json web/package-lock.json* ./
+# `npm ci` when the lockfile matches, `npm install` otherwise. Either way this
+# stage is discarded, so a fallback here costs build time and nothing in size.
 RUN npm ci || npm install
 COPY web .
 RUN npm run build
 
 FROM alpine:3.20
-RUN apk add --no-cache curl
+
+# su-exec is a static, setuid-free privilege dropper: the entrypoint needs to
+# fix data-directory ownership, then run the server unprivileged. Everything
+# else here is already in busybox; curl is intentionally absent because wget
+# covers the health check.
+RUN apk add --no-cache su-exec && \
+    addgroup -g 10001 -S syncwin && \
+    adduser -u 10001 -S -G syncwin -h /app -s /sbin/nologin syncwin && \
+    mkdir -p /data && chown syncwin:syncwin /data
+
 WORKDIR /app
-RUN mkdir -p /data && chmod 0777 /data
-COPY --from=build /out/server /app/server
-COPY --from=build /out/sync-win-agent /app/sync-win-agent
-COPY --from=build /out/sync-win-agent.sig /app/sync-win-agent.sig
-COPY --from=build /out/agent-version.txt /app/agent-version.txt
-COPY --from=web /src/dist /app/web
-COPY scripts/install.sh /app/install.sh
-COPY server/sync-win-agent.service /app/sync-win-agent.service
-COPY server/sync-win-agent-update.service /app/sync-win-agent-update.service
-COPY server/sync-win-agent-update.timer /app/sync-win-agent-update.timer
-RUN sha256sum /app/sync-win-agent | awk '{print $1 "  sync-win-agent"}' > /app/checksums.txt
-EXPOSE 8080
+COPY --chown=syncwin:syncwin scripts/docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
+COPY --from=build --chown=syncwin:syncwin /out/server /app/server
+COPY --from=build --chown=syncwin:syncwin /out/sync-win-agent /app/sync-win-agent
+COPY --from=build --chown=syncwin:syncwin /out/sync-win-agent.sig /app/sync-win-agent.sig
+COPY --from=build --chown=syncwin:syncwin /out/agent-version.txt /app/agent-version.txt
+COPY --from=web --chown=syncwin:syncwin /src/dist /app/web
+COPY --chown=syncwin:syncwin scripts/install.sh /app/install.sh
+COPY --chown=syncwin:syncwin server/sync-win-agent.service /app/sync-win-agent.service
+COPY --chown=syncwin:syncwin server/sync-win-agent-update.service /app/sync-win-agent-update.service
+COPY --chown=syncwin:syncwin server/sync-win-agent-update.timer /app/sync-win-agent-update.timer
+
+RUN sha256sum /app/sync-win-agent | awk '{print $1 "  sync-win-agent"}' > /app/checksums.txt && \
+    chown syncwin:syncwin /app/checksums.txt
+
+# No curl: Alpine's busybox already provides wget, so installing curl would add
+# a package and its shared-library dependencies purely for the health check.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD curl -fs http://localhost:8080/health || exit 1
-CMD ["/app/server"]
+    CMD wget -q -O /dev/null http://localhost:8080/health || exit 1
+
+# The server process runs as syncwin, but the container starts as root so the
+# entrypoint can adopt a database created by an older root-running image. See
+# scripts/docker-entrypoint.sh.
+EXPOSE 8080
+VOLUME ["/data"]
+ENTRYPOINT ["/app/docker-entrypoint.sh"]

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -66,13 +67,13 @@ func TestSystemInventoryUploadAndRead(t *testing.T) {
 	get := func(which string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, "/api/devices/"+deviceID+"/"+which, nil)
 		req.Header.Set("Authorization", "Bearer "+sessionToken)
-		rec := httptest.NewRecorder()
+		read := httptest.NewRecorder()
 		if which == "services" {
-			s.handleDeviceServices(rec, req, deviceID)
+			s.handleDeviceServices(read, req, deviceID)
 		} else {
-			s.handleDevicePorts(rec, req, deviceID)
+			s.handleDevicePorts(read, req, deviceID)
 		}
-		return rec
+		return read
 	}
 
 	rec = get("services")
@@ -144,14 +145,14 @@ func TestSystemInventoryPartialUploadPreservesOtherSection(t *testing.T) {
 		t.Fatalf("partial upload status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 
-	ports, err := s.store.GetPorts(deviceID)
+	ports, err := s.store.GetPorts(context.Background(), deviceID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(ports) != 1 || ports[0].Port != 22 {
 		t.Fatalf("ports section must be preserved: %#v", ports)
 	}
-	services, err := s.store.GetServices(deviceID)
+	services, err := s.store.GetServices(context.Background(), deviceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +173,7 @@ func TestSystemInventoryEmptySectionClearsSnapshot(t *testing.T) {
 	if rec := postInventory(t, s, deviceID, token, `{"device_token":"`+token+`","services":[]}`); rec.Code != http.StatusNoContent {
 		t.Fatalf("clear upload status = %d", rec.Code)
 	}
-	services, err := s.store.GetServices(deviceID)
+	services, err := s.store.GetServices(context.Background(), deviceID)
 	if err != nil {
 		t.Fatal(err)
 	}

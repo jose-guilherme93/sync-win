@@ -222,9 +222,22 @@ from [Conventional Commits](https://www.conventionalcommits.org/):
 | `feat:` | minor | `0.2.1` → `0.3.0` |
 | `feat!:`, `BREAKING CHANGE:` | major | `0.3.0` → `1.0.0` |
 
-The workflow tags the commit (`vX.Y.Z`), creates the GitHub Release and, when
-`DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` are configured, publishes the Docker
-image. Manual runs can force a bump from the Actions tab.
+The workflow publishes the image to GitHub Container Registry and **only then**
+tags the commit (`vX.Y.Z`) and creates the GitHub Release. The order matters: a
+deployment that watches the repository tag would otherwise see a version whose
+image does not exist yet. Publishing first makes "a tag exists" imply "a matching
+image exists".
+
+Images are published for `linux/amd64` and `linux/arm64` with SLSA provenance and
+an SBOM attached. Authentication uses the automatic `GITHUB_TOKEN`, so no registry
+password is stored in the repository. Pulling the private package needs a token
+with `read:packages`, configured as registry credentials in the deployment
+platform (Dokploy, Coolify, and so on). Manual runs can force a bump from the
+Actions tab.
+
+The runtime image is multi-stage and the server runs as an unprivileged user;
+the container entrypoint only stays root long enough to adopt a data directory
+created by an older root-running image.
 
 ## Documentation
 

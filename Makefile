@@ -217,6 +217,32 @@ lint: ## Run Go and web linters
 	cd agent && go vet ./...
 	cd web && npm run check
 
+# go vet is not what CI runs. CI uses golangci-lint, which additionally applies
+# errcheck, noctx, misspell, staticcheck, unused and govet's shadow analyzer —
+# none of which go vet enables. Running the same linter and version locally is
+# the only way to catch these before pushing, so this target is part of `make
+# lint` rather than an optional extra.
+GOLANGCI_VERSION := v2.14.0
+# Diff base for the "new issues only" check, matching the CI action.
+LINT_BASE ?= origin/main
+
+.PHONY: lint-go
+lint-go: ## Run golangci-lint exactly as CI does (server and agent)
+	@docker run --rm -v "$(PWD):/src" -w /src/server \
+		golangci/golangci-lint:$(GOLANGCI_VERSION) \
+		golangci-lint run --config ../.golangci.yml --new-from-rev=$(LINT_BASE)
+	@docker run --rm -v "$(PWD):/src" -w /src/agent \
+		golangci/golangci-lint:$(GOLANGCI_VERSION) \
+		golangci-lint run --config ../.golangci.yml --new-from-rev=$(LINT_BASE)
+
+.PHONY: lint-all
+lint-all: lint lint-go ## Full local lint, matching CI and go vet
+
+.PHONY: fix-lint-base
+fix-lint-base: ## Report the commit lint should diff against
+	@git fetch origin --quiet
+	@printf 'LINT_BASE=%s\n' "$$(git merge-base origin/main HEAD)"
+
 .PHONY: fmt
 fmt: ## Format Go sources
 	cd server && gofmt -w .

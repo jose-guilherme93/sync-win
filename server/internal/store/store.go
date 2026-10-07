@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -269,7 +270,7 @@ type AppInfo struct {
 }
 
 // ServiceUnit mirrors the agent payload for one systemd service. Status is the
-// bucket the dashboard colours by (running, failed, stopped); the raw systemd
+// bucket the dashboard colors by (running, failed, stopped); the raw systemd
 // columns are kept so a detail view can show what the agent actually read.
 type ServiceUnit struct {
 	Name          string `json:"name"`
@@ -389,7 +390,9 @@ func NewStore(root string) (*Store, error) {
 	s.migrateAddWorkspaceDirsColumn()
 	s.migrateAddStatusColumn()
 	s.migrateAddFingerprintColumn()
-	s.migrateAddSystemInventoryColumns()
+	if err := s.migrateAddSystemInventoryColumns(context.Background()); err != nil {
+		return nil, err
+	}
 	s.migrateHashDeviceTokens()
 	s.migrateAddSecurityAuditsTable()
 	s.migrateAddLogsOwnerColumn()
@@ -440,17 +443,30 @@ func (s *Store) migrateAddLogsOwnerColumn() {
 // are plain JSON columns on the device row, mirroring apps_json: the agent
 // replaces them wholesale on every upload, so there is nothing to join or
 // garbage collect.
-func (s *Store) migrateAddSystemInventoryColumns() {
+//
+// Unlike the older migrations in this file, a failure here is returned rather
+// than swallowed. Booting without the columns would leave the system inventory
+// silently broken, which is worse than refusing to start.
+//
+// The context is explicit even though the caller only ever passes a background
+// one: schema migrations run at boot and have no request to cancel, and stating
+// that at the call site is better than letting database/sql imply it.
+func (s *Store) migrateAddSystemInventoryColumns(ctx context.Context) error {
 	for _, column := range []struct{ name, definition string }{
 		{"services_json", "TEXT"},
 		{"ports_json", "TEXT"},
 	} {
 		var count int
-		s.db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('devices') WHERE name=?", column.name).Scan(&count)
+		if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM pragma_table_info('devices') WHERE name=?", column.name).Scan(&count); err != nil {
+			return fmt.Errorf("inspect devices.%s: %w", column.name, err)
+		}
 		if count == 0 {
-			s.db.Exec("ALTER TABLE devices ADD COLUMN " + column.name + " " + column.definition)
+			if _, err := s.db.ExecContext(ctx, "ALTER TABLE devices ADD COLUMN "+column.name+" "+column.definition); err != nil {
+				return fmt.Errorf("add devices.%s: %w", column.name, err)
+			}
 		}
 	}
+	return nil
 }
 
 func (s *Store) migrateAddStatusColumn() {
@@ -2388,7 +2404,10 @@ func (s *Store) UpdateApps(deviceID string, apps []AppInfo) error {
 // UpdateSystemInventory replaces one or both system inventory snapshots. A nil
 // section is left untouched: the agent omits a section it could not collect, and
 // a transient failure must not be read as "this device has no services".
-func (s *Store) UpdateSystemInventory(deviceID string, services *[]ServiceUnit, ports *[]OpenPort) error {
+//
+// The context is threaded through from the HTTP handler so an abandoned upload
+// releases its database work instead of running to completion.
+func (s *Store) UpdateSystemInventory(ctx context.Context, deviceID string, services *[]ServiceUnit, ports *[]OpenPort) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := timeText(time.Now().UTC())
@@ -2397,7 +2416,7 @@ func (s *Store) UpdateSystemInventory(deviceID string, services *[]ServiceUnit, 
 		if err != nil {
 			return err
 		}
-		if _, err := s.db.Exec("UPDATE devices SET services_json = ?, updated_at = ? WHERE id = ?", string(data), now, deviceID); err != nil {
+		if _, err := s.db.ExecContext(ctx, "UPDATE devices SET services_json = ?, updated_at = ? WHERE id = ?", string(data), now, deviceID); err != nil {
 			return err
 		}
 	}
@@ -2406,7 +2425,7 @@ func (s *Store) UpdateSystemInventory(deviceID string, services *[]ServiceUnit, 
 		if err != nil {
 			return err
 		}
-		if _, err := s.db.Exec("UPDATE devices SET ports_json = ?, updated_at = ? WHERE id = ?", string(data), now, deviceID); err != nil {
+		if _, err := s.db.ExecContext(ctx, "UPDATE devices SET ports_json = ?, updated_at = ? WHERE id = ?", string(data), now, deviceID); err != nil {
 			return err
 		}
 	}
@@ -2415,8 +2434,8 @@ func (s *Store) UpdateSystemInventory(deviceID string, services *[]ServiceUnit, 
 
 // GetServices returns the last services snapshot. A device that has never
 // reported one yields an empty list, not an error.
-func (s *Store) GetServices(deviceID string) ([]ServiceUnit, error) {
-	return systemInventoryColumn(s, deviceID, "services_json", func(raw string) ([]ServiceUnit, error) {
+func (s *Store) GetServices(ctx context.Context, deviceID string) ([]ServiceUnit, error) {
+	return systemInventoryColumn(ctx, s, deviceID, "services_json", func(raw string) ([]ServiceUnit, error) {
 		var units []ServiceUnit
 		if raw == "" {
 			return []ServiceUnit{}, nil
@@ -2429,8 +2448,8 @@ func (s *Store) GetServices(deviceID string) ([]ServiceUnit, error) {
 }
 
 // GetPorts returns the last listening socket snapshot.
-func (s *Store) GetPorts(deviceID string) ([]OpenPort, error) {
-	return systemInventoryColumn(s, deviceID, "ports_json", func(raw string) ([]OpenPort, error) {
+func (s *Store) GetPorts(ctx context.Context, deviceID string) ([]OpenPort, error) {
+	return systemInventoryColumn(ctx, s, deviceID, "ports_json", func(raw string) ([]OpenPort, error) {
 		var ports []OpenPort
 		if raw == "" {
 			return []OpenPort{}, nil
@@ -2442,14 +2461,14 @@ func (s *Store) GetPorts(deviceID string) ([]OpenPort, error) {
 	})
 }
 
-func systemInventoryColumn[T any](s *Store, deviceID, column string, decode func(string) ([]T, error)) ([]T, error) {
+func systemInventoryColumn[T any](ctx context.Context, s *Store, deviceID, column string, decode func(string) ([]T, error)) ([]T, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	// COALESCE is required, not cosmetic: a device row that never received an
 	// inventory holds NULL, and scanning NULL into a string fails outright.
 	var raw string
 	query := "SELECT COALESCE(" + column + ", '') FROM devices WHERE id = ?"
-	if err := s.db.QueryRow(query, deviceID).Scan(&raw); err != nil {
+	if err := s.db.QueryRowContext(ctx, query, deviceID).Scan(&raw); err != nil {
 		return nil, err
 	}
 	return decode(raw)

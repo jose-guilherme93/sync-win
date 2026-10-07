@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 )
@@ -27,11 +28,11 @@ func TestUpdateSystemInventoryStoresBothSections(t *testing.T) {
 		{Name: "sshd.service", Status: "running", ActiveState: "active"},
 	}
 	ports := []OpenPort{{Protocol: "tcp", Local: "", Port: 22, Process: "sshd", PID: 812}}
-	if err := s.UpdateSystemInventory(device.ID, &services, &ports); err != nil {
+	if err = s.UpdateSystemInventory(context.Background(), device.ID, &services, &ports); err != nil {
 		t.Fatalf("UpdateSystemInventory: %v", err)
 	}
 
-	gotServices, err := s.GetServices(device.ID)
+	gotServices, err := s.GetServices(context.Background(), device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +43,7 @@ func TestUpdateSystemInventoryStoresBothSections(t *testing.T) {
 		t.Fatalf("service fields lost: %#v", gotServices[0])
 	}
 
-	gotPorts, err := s.GetPorts(device.ID)
+	gotPorts, err := s.GetPorts(context.Background(), device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,24 +64,24 @@ func TestUpdateSystemInventoryKeepsOmittedSection(t *testing.T) {
 
 	services := []ServiceUnit{{Name: "sshd.service", Status: "running"}}
 	ports := []OpenPort{{Protocol: "tcp", Port: 22}}
-	if err := s.UpdateSystemInventory(device.ID, &services, &ports); err != nil {
+	if err = s.UpdateSystemInventory(context.Background(), device.ID, &services, &ports); err != nil {
 		t.Fatal(err)
 	}
 
 	// Second upload reports only services, as it would if ss were unavailable.
 	fresh := []ServiceUnit{{Name: "nginx.service", Status: "failed"}}
-	if err := s.UpdateSystemInventory(device.ID, &fresh, nil); err != nil {
+	if err = s.UpdateSystemInventory(context.Background(), device.ID, &fresh, nil); err != nil {
 		t.Fatal(err)
 	}
 
-	gotServices, err := s.GetServices(device.ID)
+	gotServices, err := s.GetServices(context.Background(), device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(gotServices) != 1 || gotServices[0].Name != "nginx.service" {
 		t.Fatalf("services section must be replaced: %#v", gotServices)
 	}
-	gotPorts, err := s.GetPorts(device.ID)
+	gotPorts, err := s.GetPorts(context.Background(), device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,14 +96,14 @@ func TestGetServicesBeforeFirstUpload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	services, err := s.GetServices(device.ID)
+	services, err := s.GetServices(context.Background(), device.ID)
 	if err != nil {
 		t.Fatalf("a device that never reported must not error: %v", err)
 	}
 	if len(services) != 0 {
 		t.Fatalf("want empty list, got %#v", services)
 	}
-	ports, err := s.GetPorts(device.ID)
+	ports, err := s.GetPorts(context.Background(), device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,10 +167,10 @@ func TestSystemInventoryColumnsMigrateOnLegacyDatabase(t *testing.T) {
 	}
 	// Simulate the pre-feature schema by dropping the columns an upgraded
 	// operator's database would not have yet.
-	if _, err := s.db.Exec(`ALTER TABLE devices DROP COLUMN services_json`); err != nil {
+	if _, err = s.db.Exec(`ALTER TABLE devices DROP COLUMN services_json`); err != nil {
 		t.Skipf("sqlite build cannot drop a column: %v", err)
 	}
-	if _, err := s.db.Exec(`ALTER TABLE devices DROP COLUMN ports_json`); err != nil {
+	if _, err = s.db.Exec(`ALTER TABLE devices DROP COLUMN ports_json`); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()
@@ -189,10 +190,10 @@ func TestSystemInventoryColumnsMigrateOnLegacyDatabase(t *testing.T) {
 		}
 	}
 	services := []ServiceUnit{{Name: "sshd.service", Status: "running"}}
-	if err := again.UpdateSystemInventory(device.ID, &services, nil); err != nil {
+	if err = again.UpdateSystemInventory(context.Background(), device.ID, &services, nil); err != nil {
 		t.Fatalf("write after migration: %v", err)
 	}
-	got, err := again.GetServices(device.ID)
+	got, err := again.GetServices(context.Background(), device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
