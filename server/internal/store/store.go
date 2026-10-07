@@ -32,9 +32,11 @@ const (
 	maxBatchItems     = 256
 	maxExtraDirs      = 20
 	maxExtraDirLength = 300
+	maxDeviceTags     = 20
+	maxPendingUpdates = 1000
 	// Sessions last 30 days by default; override with SYNCWIN_SESSION_TTL_HOURS.
 	defaultSessionTTL = 30 * 24 * time.Hour
-	deviceColumns     = "id, user_id, owner_id, hostname, device_token, last_seen_at, last_sync_at, sync_failures, last_error, last_error_at, hardware_json, apps_json, status, created_at, updated_at, hardware_fingerprint"
+	deviceColumns     = "id, user_id, owner_id, hostname, device_token, last_seen_at, last_sync_at, sync_failures, last_error, last_error_at, hardware_json, apps_json, status, created_at, updated_at, hardware_fingerprint, display_name, tags_json, collection_interval_seconds"
 )
 
 // sessionTTL is the session lifetime; it can be overridden at startup.
@@ -62,22 +64,45 @@ type Store struct {
 }
 
 type Device struct {
-	ID                  string        `json:"id"`
-	UserID              string        `json:"user_id"`
-	OwnerID             string        `json:"owner_id"`
-	Hostname            string        `json:"hostname"`
-	DeviceToken         string        `json:"-"`
-	LastSeenAt          time.Time     `json:"last_seen_at"`
-	LastSyncAt          time.Time     `json:"last_sync_at"`
-	SyncFailures        int           `json:"sync_failures"`
-	LastError           string        `json:"last_error"`
-	LastErrorAt         time.Time     `json:"last_error_at"`
-	Hardware            HardwareStats `json:"hardware"`
-	Apps                []AppInfo     `json:"apps"`
-	CreatedAt           time.Time     `json:"created_at"`
-	UpdatedAt           time.Time     `json:"updated_at"`
-	Status              string        `json:"status"`
-	HardwareFingerprint string        `json:"-"`
+	ID                        string        `json:"id"`
+	UserID                    string        `json:"user_id"`
+	OwnerID                   string        `json:"owner_id"`
+	Hostname                  string        `json:"hostname"`
+	DeviceToken               string        `json:"-"`
+	LastSeenAt                time.Time     `json:"last_seen_at"`
+	LastSyncAt                time.Time     `json:"last_sync_at"`
+	SyncFailures              int           `json:"sync_failures"`
+	LastError                 string        `json:"last_error"`
+	LastErrorAt               time.Time     `json:"last_error_at"`
+	Hardware                  HardwareStats `json:"hardware"`
+	Apps                      []AppInfo     `json:"apps"`
+	CreatedAt                 time.Time     `json:"created_at"`
+	UpdatedAt                 time.Time     `json:"updated_at"`
+	Status                    string        `json:"status"`
+	HardwareFingerprint       string        `json:"-"`
+	DisplayName               string        `json:"display_name,omitempty"`
+	Tags                      []string      `json:"tags"`
+	CollectionIntervalSeconds int           `json:"collection_interval_seconds"`
+}
+
+type DeviceSettings struct {
+	DisplayName               string   `json:"display_name"`
+	Tags                      []string `json:"tags"`
+	CollectionIntervalSeconds int      `json:"collection_interval_seconds"`
+}
+
+type PendingUpdate struct {
+	Source         string `json:"source"`
+	Name           string `json:"name"`
+	CurrentVersion string `json:"current_version,omitempty"`
+	NewVersion     string `json:"new_version"`
+}
+
+type UpdateInventory struct {
+	Status    string          `json:"status"`
+	CheckedAt string          `json:"checked_at,omitempty"`
+	Message   string          `json:"message,omitempty"`
+	Updates   []PendingUpdate `json:"updates"`
 }
 
 // DeviceSummary is the lightweight device projection served by the dashboard
@@ -85,24 +110,27 @@ type Device struct {
 // logs, top processes, Docker containers, per-core usage) that are only needed
 // when a single device is opened.
 type DeviceSummary struct {
-	ID                  string          `json:"id"`
-	UserID              string          `json:"user_id"`
-	OwnerID             string          `json:"owner_id"`
-	Hostname            string          `json:"hostname"`
-	LastSeenAt          time.Time       `json:"last_seen_at"`
-	LastSyncAt          time.Time       `json:"last_sync_at"`
-	SyncFailures        int             `json:"sync_failures"`
-	LastError           string          `json:"last_error"`
-	LastErrorAt         time.Time       `json:"last_error_at"`
-	Status              string          `json:"status"`
-	Hardware            HardwareSummary `json:"hardware"`
-	PreferenceCount     int             `json:"preference_count"`
-	AppCount            int             `json:"app_count"`
-	SavesCount          int             `json:"saves_count"`
-	SavesSizeBytes      int64           `json:"saves_size_bytes"`
-	CreatedAt           time.Time       `json:"created_at"`
-	UpdatedAt           time.Time       `json:"updated_at"`
-	HardwareFingerprint string          `json:"-"`
+	ID                        string          `json:"id"`
+	UserID                    string          `json:"user_id"`
+	OwnerID                   string          `json:"owner_id"`
+	Hostname                  string          `json:"hostname"`
+	LastSeenAt                time.Time       `json:"last_seen_at"`
+	LastSyncAt                time.Time       `json:"last_sync_at"`
+	SyncFailures              int             `json:"sync_failures"`
+	LastError                 string          `json:"last_error"`
+	LastErrorAt               time.Time       `json:"last_error_at"`
+	Status                    string          `json:"status"`
+	Hardware                  HardwareSummary `json:"hardware"`
+	PreferenceCount           int             `json:"preference_count"`
+	AppCount                  int             `json:"app_count"`
+	SavesCount                int             `json:"saves_count"`
+	SavesSizeBytes            int64           `json:"saves_size_bytes"`
+	CreatedAt                 time.Time       `json:"created_at"`
+	UpdatedAt                 time.Time       `json:"updated_at"`
+	HardwareFingerprint       string          `json:"-"`
+	DisplayName               string          `json:"display_name,omitempty"`
+	Tags                      []string        `json:"tags"`
+	CollectionIntervalSeconds int             `json:"collection_interval_seconds"`
 }
 
 // HardwareSummary is the subset of HardwareStats the dashboard list renders.
@@ -393,6 +421,12 @@ func NewStore(root string) (*Store, error) {
 	if err := s.migrateAddSystemInventoryColumns(context.Background()); err != nil {
 		return nil, err
 	}
+	if err := s.migrateAddDeviceSettingsColumns(context.Background()); err != nil {
+		return nil, err
+	}
+	if err := s.migrateAddPendingUpdatesColumn(context.Background()); err != nil {
+		return nil, err
+	}
 	s.migrateHashDeviceTokens()
 	s.migrateAddSecurityAuditsTable()
 	s.migrateAddLogsOwnerColumn()
@@ -464,6 +498,38 @@ func (s *Store) migrateAddSystemInventoryColumns(ctx context.Context) error {
 			if _, err := s.db.ExecContext(ctx, "ALTER TABLE devices ADD COLUMN "+column.name+" "+column.definition); err != nil {
 				return fmt.Errorf("add devices.%s: %w", column.name, err)
 			}
+		}
+	}
+	return nil
+}
+
+func (s *Store) migrateAddDeviceSettingsColumns(ctx context.Context) error {
+	for _, column := range []struct{ name, definition string }{
+		{"display_name", "TEXT NOT NULL DEFAULT ''"},
+		{"tags_json", "TEXT NOT NULL DEFAULT '[]'"},
+		{"collection_interval_seconds", "INTEGER NOT NULL DEFAULT 10"},
+	} {
+		var count int
+		if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM pragma_table_info('devices') WHERE name=?", column.name).Scan(&count); err != nil {
+			return fmt.Errorf("inspect devices.%s: %w", column.name, err)
+		}
+		if count == 0 {
+			if _, err := s.db.ExecContext(ctx, "ALTER TABLE devices ADD COLUMN "+column.name+" "+column.definition); err != nil {
+				return fmt.Errorf("add devices.%s: %w", column.name, err)
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Store) migrateAddPendingUpdatesColumn(ctx context.Context) error {
+	var count int
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM pragma_table_info('devices') WHERE name='updates_json'").Scan(&count); err != nil {
+		return fmt.Errorf("inspect devices.updates_json: %w", err)
+	}
+	if count == 0 {
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE devices ADD COLUMN updates_json TEXT NOT NULL DEFAULT '{"status":"not_reported","updates":[]}'`); err != nil {
+			return fmt.Errorf("add devices.updates_json: %w", err)
 		}
 	}
 	return nil
@@ -554,7 +620,11 @@ func (s *Store) initSchema() error {
 		ports_json TEXT,
 		status TEXT NOT NULL DEFAULT 'online',
 		created_at TEXT NOT NULL,
-		updated_at TEXT NOT NULL
+		updated_at TEXT NOT NULL,
+		display_name TEXT NOT NULL DEFAULT '',
+		tags_json TEXT NOT NULL DEFAULT '[]',
+		collection_interval_seconds INTEGER NOT NULL DEFAULT 10,
+		updates_json TEXT NOT NULL DEFAULT '{"status":"not_reported","updates":[]}'
 	);
 	CREATE TABLE IF NOT EXISTS files (
 		id TEXT PRIMARY KEY,
@@ -813,9 +883,9 @@ func (s *Store) RegisterDevice(hostname, userID, ownerID, fingerprint string) (D
 		UpdatedAt:   now,
 	}
 	_, err := s.db.Exec(
-		"INSERT INTO devices ("+deviceColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		"INSERT INTO devices ("+deviceColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		device.ID, device.UserID, device.OwnerID, device.Hostname, hashToken(device.DeviceToken),
-		"", "", 0, "", "", "{}", "[]", "online", timeText(now), timeText(now), fingerprint,
+		"", "", 0, "", "", "{}", "[]", "online", timeText(now), timeText(now), fingerprint, "", "[]", 10,
 	)
 	if err != nil {
 		return Device{}, err
@@ -920,15 +990,10 @@ func (s *Store) FindDuplicateDevices(fingerprint string) ([]Device, error) {
 	defer rows.Close()
 	var devices []Device
 	for rows.Next() {
-		var d Device
-		var hwJSON, appsJSON string
-		if err := rows.Scan(&d.ID, &d.UserID, &d.OwnerID, &d.Hostname, &d.DeviceToken,
-			&d.LastSeenAt, &d.LastSyncAt, &d.SyncFailures, &d.LastError, &d.LastErrorAt,
-			&hwJSON, &appsJSON, &d.Status, &d.CreatedAt, &d.UpdatedAt, &d.HardwareFingerprint); err != nil {
+		d, err := scanDeviceRow(rows)
+		if err != nil {
 			return nil, err
 		}
-		json.Unmarshal([]byte(hwJSON), &d.Hardware)
-		json.Unmarshal([]byte(appsJSON), &d.Apps)
 		devices = append(devices, d)
 	}
 	return devices, nil
@@ -956,13 +1021,18 @@ func (s *Store) ListDevices() ([]Device, error) {
 }
 
 func scanDeviceRow(row interface{ Scan(dest ...any) error }) (Device, error) {
+	return scanDevice(row)
+}
+
+func scanDevice(row interface{ Scan(dest ...any) error }) (Device, error) {
 	var d Device
 	var lastSeen, lastSync, lastErrorAt, createdAt, updatedAt string
-	var hardware, apps string
+	var hardware, apps, tags string
 	err := row.Scan(
 		&d.ID, &d.UserID, &d.OwnerID, &d.Hostname, &d.DeviceToken,
 		&lastSeen, &lastSync, &d.SyncFailures, &d.LastError, &lastErrorAt,
 		&hardware, &apps, &d.Status, &createdAt, &updatedAt, &d.HardwareFingerprint,
+		&d.DisplayName, &tags, &d.CollectionIntervalSeconds,
 	)
 	if err != nil {
 		return Device{}, err
@@ -981,6 +1051,12 @@ func scanDeviceRow(row interface{ Scan(dest ...any) error }) (Device, error) {
 	}
 	if apps != "" {
 		json.Unmarshal([]byte(apps), &d.Apps)
+	}
+	if tags != "" {
+		_ = json.Unmarshal([]byte(tags), &d.Tags)
+	}
+	if d.Tags == nil {
+		d.Tags = []string{}
 	}
 	return d, nil
 }
@@ -1001,40 +1077,11 @@ func (s *Store) GetDeviceDetail(deviceID string) (Device, error) {
 	row := s.db.QueryRow(
 		`SELECT id, user_id, owner_id, hostname, device_token, last_seen_at, last_sync_at,
 		        sync_failures, last_error, last_error_at, hardware_json, '', status,
-		        created_at, updated_at, hardware_fingerprint
+		        created_at, updated_at, hardware_fingerprint, display_name, tags_json,
+		        collection_interval_seconds
 		 FROM devices WHERE id = ?`, deviceID,
 	)
 	return scanDevice(row)
-}
-
-func scanDevice(row *sql.Row) (Device, error) {
-	var d Device
-	var lastSeen, lastSync, lastErrorAt, createdAt, updatedAt string
-	var hardware, apps string
-	err := row.Scan(
-		&d.ID, &d.UserID, &d.OwnerID, &d.Hostname, &d.DeviceToken,
-		&lastSeen, &lastSync, &d.SyncFailures, &d.LastError, &lastErrorAt,
-		&hardware, &apps, &d.Status, &createdAt, &updatedAt, &d.HardwareFingerprint,
-	)
-	if err != nil {
-		return Device{}, err
-	}
-	d.LastSeenAt = textTime(lastSeen)
-	if lastSync != "" {
-		d.LastSyncAt = textTime(lastSync)
-	}
-	if lastErrorAt != "" {
-		d.LastErrorAt = textTime(lastErrorAt)
-	}
-	d.CreatedAt = textTime(createdAt)
-	d.UpdatedAt = textTime(updatedAt)
-	if hardware != "" {
-		json.Unmarshal([]byte(hardware), &d.Hardware)
-	}
-	if apps != "" {
-		json.Unmarshal([]byte(apps), &d.Apps)
-	}
-	return d, nil
 }
 
 func (s *Store) ListFiles(deviceID string) ([]PreferenceFile, error) {
@@ -1955,7 +2002,8 @@ func (s *Store) ListDeviceSummariesForOwner(ownerID string) ([]DeviceSummary, er
 	rows, err := s.db.Query(`
 		SELECT d.id, d.user_id, d.owner_id, d.hostname, d.last_seen_at, d.last_sync_at,
 		       d.sync_failures, d.last_error, d.last_error_at, d.status, d.created_at, d.updated_at,
-		       d.hardware_fingerprint, COALESCE(d.hardware_json, ''),
+		       d.hardware_fingerprint, COALESCE(d.hardware_json, ''), d.display_name,
+		       COALESCE(d.tags_json, '[]'), d.collection_interval_seconds,
 		       CASE WHEN d.apps_json IS NULL OR d.apps_json = '' THEN 0 ELSE json_array_length(d.apps_json) END,
 		       (SELECT COUNT(*) FROM files f WHERE f.device_id = d.id AND f.category != 'saves'),
 		       (SELECT COUNT(*) FROM files f WHERE f.device_id = d.id AND f.category = 'saves'),
@@ -1969,11 +2017,11 @@ func (s *Store) ListDeviceSummariesForOwner(ownerID string) ([]DeviceSummary, er
 	summaries := []DeviceSummary{}
 	for rows.Next() {
 		var d DeviceSummary
-		var lastSeen, lastSync, lastErrorAt, createdAt, updatedAt, hardware string
+		var lastSeen, lastSync, lastErrorAt, createdAt, updatedAt, hardware, tags string
 		if err := rows.Scan(
 			&d.ID, &d.UserID, &d.OwnerID, &d.Hostname, &lastSeen, &lastSync,
 			&d.SyncFailures, &d.LastError, &lastErrorAt, &d.Status, &createdAt, &updatedAt,
-			&d.HardwareFingerprint, &hardware, &d.AppCount,
+			&d.HardwareFingerprint, &hardware, &d.DisplayName, &tags, &d.CollectionIntervalSeconds, &d.AppCount,
 			&d.PreferenceCount, &d.SavesCount, &d.SavesSizeBytes,
 		); err != nil {
 			return nil, err
@@ -1989,6 +2037,12 @@ func (s *Store) ListDeviceSummariesForOwner(ownerID string) ([]DeviceSummary, er
 		d.UpdatedAt = textTime(updatedAt)
 		if hardware != "" {
 			_ = json.Unmarshal([]byte(hardware), &d.Hardware)
+		}
+		if tags != "" {
+			_ = json.Unmarshal([]byte(tags), &d.Tags)
+		}
+		if d.Tags == nil {
+			d.Tags = []string{}
 		}
 		summaries = append(summaries, d)
 	}
@@ -2159,8 +2213,163 @@ func (s *Store) DeleteDevice(deviceID string) error {
 	return err
 }
 
-// UpdateDeviceSettings updates device settings.
-func (s *Store) UpdateDeviceSettings(deviceID string, settings map[string]any) error {
+func normalizeDeviceSettings(settings DeviceSettings) (DeviceSettings, string, error) {
+	settings.DisplayName = strings.TrimSpace(settings.DisplayName)
+	if utf8.RuneCountInString(settings.DisplayName) > 64 {
+		return DeviceSettings{}, "", errors.New("display name must be at most 64 characters")
+	}
+	switch settings.CollectionIntervalSeconds {
+	case 5, 10, 30, 60:
+	default:
+		return DeviceSettings{}, "", errors.New("collection interval must be 5, 10, 30, or 60 seconds")
+	}
+	if len(settings.Tags) > maxDeviceTags {
+		return DeviceSettings{}, "", fmt.Errorf("at most %d tags are allowed", maxDeviceTags)
+	}
+	tags := make([]string, 0, len(settings.Tags))
+	seen := make(map[string]bool, len(settings.Tags))
+	for _, tag := range settings.Tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			continue
+		}
+		if utf8.RuneCountInString(tag) > 32 || strings.ContainsAny(tag, ",\r\n") {
+			return DeviceSettings{}, "", errors.New("tags must be at most 32 characters and cannot contain commas or newlines")
+		}
+		if !seen[tag] {
+			seen[tag] = true
+			tags = append(tags, tag)
+		}
+	}
+	settings.Tags = tags
+	tagsJSON, err := json.Marshal(tags)
+	return settings, string(tagsJSON), err
+}
+
+func (s *Store) GetDeviceSettings(deviceID string) (DeviceSettings, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var settings DeviceSettings
+	var tagsJSON string
+	err := s.db.QueryRow(
+		`SELECT display_name, COALESCE(tags_json, '[]'), collection_interval_seconds
+		 FROM devices WHERE id = ?`, deviceID,
+	).Scan(&settings.DisplayName, &tagsJSON, &settings.CollectionIntervalSeconds)
+	if err != nil {
+		return DeviceSettings{}, err
+	}
+	if err := json.Unmarshal([]byte(tagsJSON), &settings.Tags); err != nil {
+		return DeviceSettings{}, err
+	}
+	if settings.Tags == nil {
+		settings.Tags = []string{}
+	}
+	return settings, nil
+}
+
+func (s *Store) UpdateDeviceSettings(deviceID string, settings DeviceSettings) error {
+	settings, tagsJSON, err := normalizeDeviceSettings(settings)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result, err := s.db.Exec(
+		`UPDATE devices SET display_name = ?, tags_json = ?, collection_interval_seconds = ?, updated_at = ?
+		 WHERE id = ?`,
+		settings.DisplayName, tagsJSON, settings.CollectionIntervalSeconds, timeText(time.Now().UTC()), deviceID,
+	)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return errors.New("device not found")
+	}
+	return nil
+}
+
+func normalizeUpdateInventory(report UpdateInventory) (UpdateInventory, error) {
+	switch report.Status {
+	case "ready", "unsupported", "error":
+	default:
+		return UpdateInventory{}, errors.New("invalid update inventory status")
+	}
+	if len(report.Message) > 512 {
+		return UpdateInventory{}, errors.New("update inventory message is too long")
+	}
+	if len(report.Updates) > maxPendingUpdates {
+		return UpdateInventory{}, fmt.Errorf("too many pending updates: maximum %d", maxPendingUpdates)
+	}
+	if report.Status != "ready" {
+		report.Updates = []PendingUpdate{}
+	}
+	for i := range report.Updates {
+		update := &report.Updates[i]
+		update.Name = strings.TrimSpace(update.Name)
+		update.NewVersion = strings.TrimSpace(update.NewVersion)
+		update.CurrentVersion = strings.TrimSpace(update.CurrentVersion)
+		switch update.Source {
+		case "apt", "flatpak", "pacman", "aur":
+		default:
+			return UpdateInventory{}, fmt.Errorf("unsupported update source %q", update.Source)
+		}
+		if update.Name == "" || len(update.Name) > 255 || update.NewVersion == "" || len(update.NewVersion) > 128 || len(update.CurrentVersion) > 128 {
+			return UpdateInventory{}, errors.New("invalid pending update name or version")
+		}
+		if strings.ContainsAny(update.Name+update.CurrentVersion+update.NewVersion, "\r\n\x00") {
+			return UpdateInventory{}, errors.New("invalid control character in pending update")
+		}
+	}
+	report.CheckedAt = timeText(time.Now().UTC())
+	if report.Updates == nil {
+		report.Updates = []PendingUpdate{}
+	}
+	return report, nil
+}
+
+func (s *Store) GetPendingUpdates(deviceID string) (UpdateInventory, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var raw string
+	if err := s.db.QueryRow(`SELECT COALESCE(updates_json, '{"status":"not_reported","updates":[]}') FROM devices WHERE id = ?`, deviceID).Scan(&raw); err != nil {
+		return UpdateInventory{}, err
+	}
+	var report UpdateInventory
+	if err := json.Unmarshal([]byte(raw), &report); err != nil {
+		return UpdateInventory{}, err
+	}
+	if report.Updates == nil {
+		report.Updates = []PendingUpdate{}
+	}
+	return report, nil
+}
+
+func (s *Store) UpdatePendingUpdates(deviceID string, report UpdateInventory) error {
+	report, err := normalizeUpdateInventory(report)
+	if err != nil {
+		return err
+	}
+	data, err := json.Marshal(report)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result, err := s.db.Exec(`UPDATE devices SET updates_json = ?, updated_at = ? WHERE id = ?`, string(data), timeText(time.Now().UTC()), deviceID)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return errors.New("device not found")
+	}
 	return nil
 }
 
