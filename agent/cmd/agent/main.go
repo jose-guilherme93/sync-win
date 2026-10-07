@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -29,6 +30,8 @@ import (
 )
 
 var syncwinContract = contract.MustLoad()
+
+var errAgentRestartRequested = errors.New("agent restart requested")
 
 var (
 	maxFileSizeBytes   = syncwinContract.Collection.MaxFileBytes
@@ -587,6 +590,7 @@ func cmdDaemon(args []string) {
 	lastStateJSON := ""
 	lastPreferenceAttempt := time.Time{}
 	lastAppInventoryAttempt := time.Time{}
+	lastPendingUpdatesAttempt := time.Time{}
 	lastSystemInventoryAttempt := time.Time{}
 	lastSaveAttempt := time.Time{}
 	lastWorkspaceAttempt := time.Time{}
@@ -613,6 +617,23 @@ func cmdDaemon(args []string) {
 			} else if err := sendAppInventory(*serverURL, *deviceID, *deviceToken, state, apps); err != nil {
 				log.Printf("application inventory sync failed: %v", err)
 				hadError = true
+			}
+		}
+
+		updateLimits := syncwinContract.AppsInventory.PendingUpdates
+		updateInterval := time.Duration(updateLimits.RefreshIntervalSeconds) * time.Second
+		if updateInterval <= 0 {
+			updateInterval = time.Duration(syncwinContract.AppsInventory.RefreshIntervalSeconds) * time.Second
+		}
+		if lastPendingUpdatesAttempt.IsZero() || now.Sub(lastPendingUpdatesAttempt) >= updateInterval {
+			lastPendingUpdatesAttempt = now
+			updates := collectors.CollectPendingUpdates(syncwinContract.AppsInventory.Sources,
+				time.Duration(updateLimits.TimeoutSeconds)*time.Second, int(updateLimits.MaxOutputBytes))
+			if err := sendPendingUpdates(*serverURL, *deviceID, *deviceToken, updates); err != nil {
+				log.Printf("pending updates sync failed: %v", err)
+				hadError = true
+			} else if updates.Status == "error" {
+				log.Printf("pending updates check failed: %s", updates.Message)
 			}
 		}
 
@@ -648,6 +669,10 @@ func cmdDaemon(args []string) {
 		}
 
 		if err := processCommands(*serverURL, *deviceID, *deviceToken); err != nil {
+			if errors.Is(err, errAgentRestartRequested) {
+				log.Printf("agent restart requested; exiting for systemd restart")
+				return
+			}
 			log.Printf("command processing failed: %v", err)
 			hadError = true
 		}
@@ -666,6 +691,13 @@ func cmdDaemon(args []string) {
 			hadError = true
 		} else {
 			log.Printf("telemetry sent cpu=%.1f%% memory=%d/%d power=%.1fW agent=%.1f%% os=%q", stats.CPUUsagePercent, stats.MemoryUsedBytes, stats.MemoryTotalBytes, stats.PowerWatts, stats.AgentCPUUsage, stats.OperatingSystem)
+		}
+		if err == nil {
+			if configured, settingsErr := fetchCollectionInterval(*serverURL, *deviceID, *deviceToken); settingsErr != nil {
+				log.Printf("device settings refresh failed: %v", settingsErr)
+			} else {
+				*interval = configured
+			}
 		}
 		if serialized, err := json.Marshal(state); err == nil && string(serialized) != lastStateJSON {
 			saveAgentState(state)
@@ -709,6 +741,28 @@ func getJSON(url, token string) (int, []byte, error) {
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	return resp.StatusCode, body, err
+}
+
+func fetchCollectionInterval(serverURL, deviceID, deviceToken string) (time.Duration, error) {
+	status, body, err := getJSON(serverURL+"/api/devices/"+deviceID+"/settings", deviceToken)
+	if err != nil {
+		return 0, err
+	}
+	if status >= http.StatusBadRequest {
+		return 0, fmt.Errorf("settings request returned %d: %s", status, strings.TrimSpace(string(body)))
+	}
+	var settings struct {
+		CollectionIntervalSeconds int `json:"collection_interval_seconds"`
+	}
+	if err := json.Unmarshal(body, &settings); err != nil {
+		return 0, fmt.Errorf("decode device settings: %w", err)
+	}
+	for _, seconds := range syncwinContract.Telemetry.IntervalSecondsAllowed {
+		if settings.CollectionIntervalSeconds == seconds {
+			return time.Duration(seconds) * time.Second, nil
+		}
+	}
+	return 0, fmt.Errorf("server returned unsupported collection interval %d seconds", settings.CollectionIntervalSeconds)
 }
 
 func postJSON(url, token string, data any) error {
@@ -789,14 +843,7 @@ func processCommands(serverURL, deviceID, deviceToken string) error {
 		return fmt.Errorf("command poll returned %d", status)
 	}
 
-	var commands []struct {
-		ID      string `json:"id"`
-		Type    string `json:"type"`
-		Path    string `json:"path"`
-		Name    string `json:"name"`
-		Source  string `json:"source"`
-		Payload string `json:"payload"`
-	}
+	var commands []agentCommand
 	if err := json.Unmarshal(payload, &commands); err != nil {
 		return fmt.Errorf("unmarshal commands: %w", err)
 	}
@@ -811,6 +858,9 @@ func processCommands(serverURL, deviceID, deviceToken string) error {
 		}); err != nil {
 			return err
 		}
+		if cmd.Type == "restart_agent" && result.Status == "completed" {
+			return errAgentRestartRequested
+		}
 	}
 	return nil
 }
@@ -820,14 +870,16 @@ type commandResult struct {
 	Message string `json:"message,omitempty"`
 }
 
-func executeCommand(cmd struct {
+type agentCommand struct {
 	ID      string `json:"id"`
 	Type    string `json:"type"`
 	Path    string `json:"path"`
 	Name    string `json:"name"`
 	Source  string `json:"source"`
 	Payload string `json:"payload"`
-}, serverURL, deviceID, deviceToken string) commandResult {
+}
+
+func executeCommand(cmd agentCommand, serverURL, deviceID, deviceToken string) commandResult {
 	policy := loadLocalPolicy()
 	switch cmd.Type {
 	case "exclude_file":
@@ -864,6 +916,30 @@ func executeCommand(cmd struct {
 			}
 		}
 		return executeLynisAuditWithTimeout(timeout)
+	case "restart_agent":
+		if !policy.AllowRestartAgent {
+			return commandResult{"failed", "command disabled by local policy"}
+		}
+		if os.Getenv("INVOCATION_ID") == "" {
+			return commandResult{"failed", "agent restart requires a systemd-managed service"}
+		}
+		return commandResult{"completed", "agent will restart after this command is acknowledged"}
+	case "update_packages":
+		if !policy.AllowPackageUpdates {
+			return commandResult{"failed", "command disabled by local policy"}
+		}
+		if err := applyPackageUpdates(syncwinContract.CommandTimeout(policy.CommandTimeoutSeconds)); err != nil {
+			return commandResult{"failed", err.Error()}
+		}
+		return commandResult{"completed", "package updates applied"}
+	case "reboot_device":
+		if !policy.AllowRebootDevice {
+			return commandResult{"failed", "command disabled by local policy"}
+		}
+		if err := runPrivilegedInstall("shutdown", []string{"-r", "+1"}, 10*time.Second); err != nil {
+			return commandResult{"failed", fmt.Sprintf("failed to schedule reboot: %v", err)}
+		}
+		return commandResult{"completed", "reboot scheduled in about one minute"}
 	case "install_app":
 		if !policy.AllowInstallApp {
 			return commandResult{"failed", "command disabled by local policy"}
@@ -1767,6 +1843,9 @@ type localPolicy struct {
 	AllowExcludeFile      bool `json:"allow_exclude_file"`
 	AllowRestoreSaves     bool `json:"allow_restore_saves"`
 	AllowLynisAudit       bool `json:"allow_lynis_audit"`
+	AllowRestartAgent     bool `json:"allow_restart_agent"`
+	AllowPackageUpdates   bool `json:"allow_package_updates"`
+	AllowRebootDevice     bool `json:"allow_reboot_device"`
 	AllowDockerRead       bool `json:"allow_docker_read"`
 	AllowDockerLifecycle  bool `json:"allow_docker_lifecycle"`
 	AllowDockerExec       bool `json:"allow_docker_exec"`
@@ -1783,6 +1862,9 @@ func loadLocalPolicy() localPolicy {
 		AllowExcludeFile:      defaults.AllowExcludeFile,
 		AllowRestoreSaves:     defaults.AllowRestoreSaves,
 		AllowLynisAudit:       defaults.AllowLynisAudit,
+		AllowRestartAgent:     defaults.AllowRestartAgent,
+		AllowPackageUpdates:   defaults.AllowPackageUpdates,
+		AllowRebootDevice:     defaults.AllowRebootDevice,
 		AllowDockerRead:       defaults.AllowDockerRead,
 		AllowDockerLifecycle:  defaults.AllowDockerLifecycle,
 		AllowDockerExec:       defaults.AllowDockerExec,
@@ -1841,6 +1923,62 @@ func installApp(source, name string, timeout time.Duration) error {
 	default:
 		return fmt.Errorf("unsupported app source: %s", source)
 	}
+}
+
+type packageUpdateCommand struct {
+	program    string
+	args       []string
+	privileged bool
+}
+
+func packageUpdatePlan(lookPath func(string) (string, error)) ([]packageUpdateCommand, error) {
+	var plan []packageUpdateCommand
+	if _, err := lookPath("apt-get"); err == nil {
+		plan = append(plan,
+			packageUpdateCommand{"apt-get", []string{"update"}, true},
+			packageUpdateCommand{"apt-get", []string{"upgrade", "-y"}, true},
+		)
+	}
+	if _, err := lookPath("flatpak"); err == nil {
+		plan = append(plan,
+			packageUpdateCommand{"flatpak", []string{"update", "--user", "--noninteractive", "--assumeyes"}, false},
+			packageUpdateCommand{"flatpak", []string{"update", "--system", "--noninteractive", "--assumeyes"}, true},
+		)
+	}
+	archManager := ""
+	for _, candidate := range []string{"paru", "yay"} {
+		if _, err := lookPath(candidate); err == nil {
+			archManager = candidate
+			break
+		}
+	}
+	if archManager != "" {
+		plan = append(plan, packageUpdateCommand{archManager, []string{"-Syu", "--noconfirm"}, false})
+	} else if _, err := lookPath("pacman"); err == nil {
+		plan = append(plan, packageUpdateCommand{"pacman", []string{"-Syu", "--noconfirm"}, true})
+	}
+	if len(plan) == 0 {
+		return nil, errors.New("no supported package manager is installed")
+	}
+	return plan, nil
+}
+
+func applyPackageUpdates(timeout time.Duration) error {
+	plan, err := packageUpdatePlan(exec.LookPath)
+	if err != nil {
+		return err
+	}
+	for _, command := range plan {
+		if command.privileged {
+			err = runPrivilegedInstall(command.program, command.args, timeout)
+		} else {
+			err = runInstallCommand(command.program, command.args, timeout)
+		}
+		if err != nil {
+			return fmt.Errorf("%s update failed: %w", command.program, err)
+		}
+	}
+	return nil
 }
 
 func validPackageName(name string) bool {
@@ -2301,4 +2439,14 @@ func sendAppInventory(serverURL, deviceID, deviceToken string, st *agentState, a
 	st.save()
 	log.Printf("application inventory sync completed apps=%d", len(apps))
 	return nil
+}
+
+func sendPendingUpdates(serverURL, deviceID, deviceToken string, report collectors.UpdateInventory) error {
+	return postJSON(serverURL+"/api/devices/"+deviceID+"/updates", deviceToken, map[string]any{
+		"device_token": deviceToken,
+		"status":       report.Status,
+		"checked_at":   report.CheckedAt,
+		"message":      report.Message,
+		"updates":      report.Updates,
+	})
 }

@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.4.0",
+  "contract_version": "1.5.0",
   "agent_version": "0.6.1",
   "collection": {
     "max_file_bytes": 524288,
@@ -62,6 +62,7 @@
   },
   "telemetry": {
     "interval_seconds_default": 10,
+    "interval_seconds_allowed": [5, 10, 30, 60],
     "fields": [
       "cpu_usage_percent",
       "memory_used_bytes",
@@ -113,7 +114,12 @@
   },
   "apps_inventory": {
     "sources": ["apt", "flatpak", "pacman", "aur", "appimage"],
-    "refresh_interval_seconds": 300
+    "refresh_interval_seconds": 300,
+    "pending_updates": {
+      "refresh_interval_seconds": 300,
+      "timeout_seconds": 30,
+      "max_output_bytes": 65536
+    }
   },
   "system_inventory": {
     "refresh_interval_seconds": 300,
@@ -144,7 +150,7 @@
       "docker_exec",
       "docker_compose_read", "docker_compose_write", "docker_compose_up",
       "docker_compose_down", "docker_compose_ps", "docker_compose_logs",
-      "lynis_audit"
+      "lynis_audit", "restart_agent", "update_packages", "reboot_device"
     ],
     "timeout_seconds_default": 900,
     "output_cap_bytes": 65536,
@@ -155,6 +161,9 @@
       "allow_exclude_file": false,
       "allow_restore_saves": false,
       "allow_lynis_audit": true,
+      "allow_restart_agent": false,
+      "allow_package_updates": false,
+      "allow_reboot_device": false,
       "allow_docker_read": true,
       "allow_docker_lifecycle": false,
       "allow_docker_exec": false,

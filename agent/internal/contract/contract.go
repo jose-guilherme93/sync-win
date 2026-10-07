@@ -48,6 +48,7 @@ type Contract struct {
 	} `json:"collection"`
 	Telemetry struct {
 		IntervalSecondsDefault int               `json:"interval_seconds_default"`
+		IntervalSecondsAllowed []int             `json:"interval_seconds_allowed"`
 		Fields                 []string          `json:"fields"`
 		RateSemantics          map[string]string `json:"rate_semantics"`
 		NetworkInterfaceFilter struct {
@@ -64,6 +65,11 @@ type Contract struct {
 	AppsInventory struct {
 		Sources                []string `json:"sources"`
 		RefreshIntervalSeconds int      `json:"refresh_interval_seconds"`
+		PendingUpdates         struct {
+			RefreshIntervalSeconds int   `json:"refresh_interval_seconds"`
+			TimeoutSeconds         int   `json:"timeout_seconds"`
+			MaxOutputBytes         int64 `json:"max_output_bytes"`
+		} `json:"pending_updates"`
 	} `json:"apps_inventory"`
 	SystemInventory struct {
 		RefreshIntervalSeconds int `json:"refresh_interval_seconds"`
@@ -96,6 +102,9 @@ type Contract struct {
 			AllowExcludeFile      bool `json:"allow_exclude_file"`
 			AllowRestoreSaves     bool `json:"allow_restore_saves"`
 			AllowLynisAudit       bool `json:"allow_lynis_audit"`
+			AllowRestartAgent     bool `json:"allow_restart_agent"`
+			AllowPackageUpdates   bool `json:"allow_package_updates"`
+			AllowRebootDevice     bool `json:"allow_reboot_device"`
 			AllowDockerRead       bool `json:"allow_docker_read"`
 			AllowDockerLifecycle  bool `json:"allow_docker_lifecycle"`
 			AllowDockerExec       bool `json:"allow_docker_exec"`
