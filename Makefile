@@ -122,6 +122,19 @@ prod: ## Build and start the production stack (detached)
 	$(PROD) up -d --build
 	@printf "$(G)Production stack up:$(N) http://localhost:%s\n" "$${SYNCWIN_HTTP_PORT:-8080}"
 
+.PHONY: prod-pull
+prod-pull: ## Pull the published image from the registry and start it (no local build)
+	@test -f .env || { printf "$(Y).env not found. Run 'make env' first and set SYNCWIN_SECRET_KEY.$(N)\n"; exit 1; }
+	@$(PROD) config >/dev/null 2>&1 || { printf "$(Y)Set SYNCWIN_SECRET_KEY in .env (run 'make secret').$(N)\n"; exit 1; }
+	@mkdir -p data
+	$(PROD) pull
+	$(PROD) up -d
+	@printf "$(G)Production stack up (pulled image):$(N) http://localhost:%s\n" "$${SYNCWIN_HTTP_PORT:-8080}"
+
+.PHONY: prod-verify
+prod-verify: ## Show which image the production stack would use
+	@printf 'image: %s\n' "$$(SYNCWIN_SECRET_KEY=validate-only $(PROD) config | awk '/^ *image: /{print $$2; exit}')"
+
 .PHONY: prod-down
 prod-down: ## Stop and remove the production stack
 	$(PROD) down

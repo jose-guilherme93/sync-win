@@ -251,3 +251,4 @@ created by an older root-running image.
 - [SECURITY.md](SECURITY.md) — security model and rules
 - [API.md](API.md) — REST API reference
 - [docs/INSTALL.md](docs/INSTALL.md) — agent installation architecture
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — production deployment and the release pipeline
