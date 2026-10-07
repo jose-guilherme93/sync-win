@@ -146,12 +146,13 @@
                   <td class="num">
                     {#if row.device.hardware}
                       {row.device.hardware.cpu_usage_percent.toFixed(0)}%
-                      <DeviceRow deviceId={row.device.id} />
+                      <DeviceRow deviceId={row.device.id} metric="cpu" />
                     {:else}—{/if}
                   </td>
                   <td class="num">
                     {#if row.device.hardware}
                       {memoryPercent(row.device.hardware).toFixed(0)}%
+                      <DeviceRow deviceId={row.device.id} metric="memory" />
                     {:else}—{/if}
                   </td>
                   <td>

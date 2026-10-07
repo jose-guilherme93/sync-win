@@ -131,8 +131,13 @@
 
   $: windowed = PERIODS.find((p) => p.id === period)?.live ? liveHistory : serverHistory
 
-  function seriesOf(key: 'cpu' | 'memory' | 'temp' | 'netRx' | 'netTx'): number[] {
-    return windowed.map((p) => (p[key] as number) ?? 0).filter((v) => Number.isFinite(v))
+  // windowed must be passed in explicitly: Svelte's reactive analysis does not
+  // see a dependency that is only read inside a called function, so
+  // `seriesOf('cpu')` would be evaluated once (while windowed was still empty)
+  // and never re-run. That left the History chart and the overview sparklines
+  // permanently blank.
+  function seriesOf(values: ChartPoint[], key: 'cpu' | 'memory' | 'temp' | 'netRx' | 'netTx'): number[] {
+    return values.map((p) => (p[key] as number) ?? 0).filter((v) => Number.isFinite(v))
   }
 
   function minOf(values: number[]): number | null {
@@ -152,11 +157,11 @@
     .filter((i) => (i.rx_rate || 0) > 0 || (i.tx_rate || 0) > 0 || i.rx_errors > 0 || i.tx_errors > 0)
     .slice(0, 4)
 
-  $: cpuSeries = seriesOf('cpu')
-  $: memSeries = seriesOf('memory')
-  $: tempSeries = seriesOf('temp')
-  $: rxSeries = seriesOf('netRx')
-  $: txSeries = seriesOf('netTx')
+  $: cpuSeries = seriesOf(windowed, 'cpu')
+  $: memSeries = seriesOf(windowed, 'memory')
+  $: tempSeries = seriesOf(windowed, 'temp')
+  $: rxSeries = seriesOf(windowed, 'netRx')
+  $: txSeries = seriesOf(windowed, 'netTx')
 
   // Agent impact is the footprint of the SyncWin agent itself, which the user
   // cares about because it is the one process this project is responsible for.
