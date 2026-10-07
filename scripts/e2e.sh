@@ -569,15 +569,16 @@ else
   fail "storage screen names the missing SMART data" "no SMART reference in: ${STORAGE_TEXT:0:120}"
 fi
 
-# Remote actions: documented as not enabled, and must say so rather than looking
-# operational.
+# Remote actions: the three actions are real now, so the screen must list them
+# and state the conditions (server flag + local policy) instead of claiming the
+# actions are disabled.
 click_text 'Remote actions' >/dev/null
 sleep 2
 REMOTE_TEXT=$(unquote "$(eval_js "(()=>{const m=document.querySelector('main')||document.body;return m.innerText.replace(/\s+/g,' ');})()")")
-if [[ "${REMOTE_TEXT}" == *"not enabled"* ]]; then
-  ok "remote actions screen states the actions are disabled"
+if [[ "${REMOTE_TEXT}" == *"Restart agent"* && "${REMOTE_TEXT}" == *"Apply package updates"* && "${REMOTE_TEXT}" == *"Reboot device"* && "${REMOTE_TEXT}" == *"local policy"* ]]; then
+  ok "remote actions screen lists the actions and their policy conditions"
 else
-  fail "remote actions screen states the actions are disabled" "${REMOTE_TEXT:0:120}"
+  fail "remote actions screen lists the actions and their policy conditions" "${REMOTE_TEXT:0:200}"
 fi
 
 # ---------------------------------------------------------------------------
