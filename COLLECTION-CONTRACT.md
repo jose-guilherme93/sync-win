@@ -128,6 +128,37 @@ Interfaces reais e túneis deliberados são mantidos: `eth0`, `wlan0`, `enp3s0`,
 
 `top_cpu_processes[].cpu_percent` e `top_mem_processes[].cpu_percent` são a **porcentagem consumida na janela entre dois ciclos**, calculada como delta de jiffies (`utime + stime`) dividido pelo tempo decorrido e pelo número de CPUs lógicas, com limite de 0 a 100. Não são o total acumulado desde o início do processo. O primeiro ciclo e PIDs recém-surgidos reportam `0` porque não há delta a apurar. `top_mem_processes[]` carrega a mesma porcentagem normalizada, não um contador bruto de jiffies.
 
+### Logs de journal (`logs[]`)
+
+`logs[]` chega em `POST /api/devices/{id}/telemetry` com os campos `timestamp`,
+`level`, `source` e `message`. O agent **não** coleta a cada ciclo: amostra o
+journal a cada 6 ciclos (cerca de 60 s no intervalo padrão de 10 s) porque
+`journalctl` é a coleta mais pesada do ciclo.
+
+O server **persiste** essas linhas em `device_logs`. Isso é o que permite a tela
+mostrar histórico: `hardware_json` é sobrescrito inteiro a cada post de
+telemetria, então um lote só sobrevive até o próximo ciclo que não traz logs.
+
+- Ingestão é idempotente: `(device_id, ts, source, message)` é único, então as
+  janelas sobrepostas que o agent reenvia são gravadas uma única vez.
+- Linha sem timestamp parseável é descartada, não gravada como inconsultável.
+- `message` passa pela redação de segredos e é truncada em 2000 bytes.
+- `timestamp` é o formato `short-iso` do journalctl (`2026-10-07T13:03:15-0300`).
+  O offset não tem dois-pontos, então `time.Parse(time.RFC3339)` o rejeita; o
+  server aceita o layout específico. Consumidores devem aceitar o mesmo.
+- `source` nunca mantém os dois-pontos finais. `journalctl` escreve `kernel:`
+  para fontes sem pid, e manter o `:` dividia um serviço em dois buckets no
+  filtro de origem do dashboard.
+- Severidade vem de palavras-chave na mensagem (`ERROR`/`FAIL`/`CRIT`,
+  `WARN`), não da prioridade do journald: `journalctl` é chamado no formato
+  `short-iso`, que não carrega prioridade. O server normaliza para `error`,
+  `warn` ou `info`, e qualquer valor não reconhecido vira `info`.
+- **Falha de leitura é reportada, não silenciosa.** O agent roda como usuário de
+  serviço sem privilégio, então um journal ilegível é um resultado real de
+  implantação (sem journald, sem permissão, host sem systemd). `CollectDeviceLogs`
+  retorna o erro e o agent o registra no próprio journal — que é justamente o
+  journal que a tela tenta ler.
+
 ### Partições de disco são reportadas uma vez por device
 
 Em ext4 o sistema reporta `/home`, `/root`, `/srv` e outros diretórios como mounts separados do mesmo device, o que listava o mesmo disco várias vezes. O collector deduplica por device, mantendo o mount mais raso. Subvolumes **btrfs** são a exceção e permanecem, pois cada um é um mount independente com uso próprio.

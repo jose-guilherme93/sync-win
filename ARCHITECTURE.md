@@ -78,7 +78,7 @@ Key UI components:
 - `NotificationsModal.svelte`: notification provider settings and inbox
 - `NotificationToast.svelte`: real-time toast notifications via SSE
 
-**Status:** the shell and every fleet and device screen are implemented. Four screens render honest "not collected yet" states for the parts whose API does not exist: `Services` (systemd units, open ports), `RemoteActions` (reboot / update-packages / restart-agent command types), the pending-updates half of `Packages`, and the SMART half of `Storage`. Those are marked in the UI with the missing endpoint, and `lib/flags.ts` (`VITE_MOCK_*`) can swap in labelled sample data for layout review. `cpu`, `memory`, `network` and `sensors` currently all resolve to the same `DeviceOverview`; `containers`, `logs` and `security` still resolve to `DeviceModal` tabs.
+**Status:** the shell and every fleet and device screen are implemented. Four screens render honest "not collected yet" states for the parts whose API does not exist: `Services` (systemd units, open ports), `RemoteActions` (reboot / update-packages / restart-agent command types), the pending-updates half of `Packages`, and the SMART half of `Storage`. Those are marked in the UI with the missing endpoint, and `lib/flags.ts` (`VITE_MOCK_*`) can swap in labelled sample data for layout review. `cpu`, `memory`, `network` and `sensors` currently all resolve to the same `DeviceOverview`; `containers` and `security` still resolve to `DeviceModal` tabs. `logs` is a dedicated screen (`DeviceLogs`) that the sidebar section and the modal tab both render.
 
 Note that `svelte-check` does not reliably catch malformed Svelte block structure in this repo; `vite build` is the trustworthy gate for template changes.
 
@@ -210,6 +210,29 @@ The current project intentionally does not include:
   history modals.
 - Agent samples system logs every 6th telemetry cycle and only rewrites its
   state file when it changes.
+- Device log lines are persisted to their own `device_logs` table rather than
+  living in the `hardware_json` blob, which is overwritten on every telemetry
+  post. Ingestion is idempotent on `(device_id, ts, source, message)`, so the
+  overlapping windows an agent re-ships cost one `INSERT OR IGNORE` per line and
+  rows are aged out after 7 days.
+
+### Device log storage
+
+The Logs screen could not be built on `hardware_json`. That column is replaced
+wholesale by every telemetry post, and the agent only samples the journal on one
+cycle in six, so a batch was erased by the next cycle that carried no logs — the
+screen rendered empty roughly five sixths of the time.
+
+Journal lines therefore get their own table and their own endpoint,
+`GET /api/devices/{id}/logs`. The server owns the store and the query surface
+(level, source, substring search, time range, paging); the agent owns only the
+sampling and the redaction. The `logs[]` field still travels inside the telemetry
+payload, because the agent samples on a slow cycle and a dedicated endpoint for a
+once-a-minute batch would be a second failure path for no gain.
+
+The viewer is one component (`DeviceLogs.svelte`) used by both the sidebar Logs
+section and the device modal tab. When those were separate, they drifted — which is
+the failure `web/src/lib/types.ts` documents for duplicated shapes.
 
 ## Future evolution
 

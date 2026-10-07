@@ -77,7 +77,7 @@ sync-win/
 │   │   ├── components/
 │   │   │   ├── shell/              # Sidebar, Topbar, DeviceList (app chrome)
 │   │   │   ├── ui/                 # Icon, StatusDot, GaugeCard, StatCard, Skeleton, ConfirmDialog…
-│   │   │   ├── screens/            # Home, DeviceOverview, Alerts, Reports, Storage, Processes, Packages, Services, RemoteActions, DeviceSettings
+│   │   │   ├── screens/            # Home, DeviceOverview, Alerts, Reports, Storage, Processes, Packages, Services, RemoteActions, DeviceSettings, DeviceLogs
 │   │   │   ├── DeviceModal.svelte  # Device detail tabs; variant="page" renders inline
 │   │   │   ├── DockerTab.svelte    # Docker container management
 │   │   │   ├── SystemMetrics.svelte    # Detailed hardware telemetry
@@ -88,6 +88,7 @@ sync-win/
 │   │       ├── router.ts           # Navigation store + NAV_GROUPS
 │   │       ├── types.ts            # Shared Device / HardwareStats shapes
 │   │       ├── insights.ts         # Alert thresholds (single source)
+│   │       ├── device-logs.ts      # Device log viewer types, formatting, query building
 │   │       ├── flags.ts            # VITE_MOCK_* switches for screens without an API
 │   │       ├── format.ts           # Timestamp/byte/severity helpers (guards the Go zero time)
 │   │       ├── telemetry-store.ts  # Telemetry state management

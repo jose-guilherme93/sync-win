@@ -30,6 +30,9 @@ entries:
   - id: decisions/parallel-agents
     path: decisions/parallel-agents.md
     type: decision
+  - id: decisions/device-log-storage
+    path: decisions/device-log-storage.md
+    type: decision
   - id: sessions/260925-p0-start
     path: sessions/260925-p0-start.md
     type: session
@@ -47,4 +50,7 @@ entries:
     type: session
   - id: sessions/261007-dashboard-functionality
     path: sessions/261007-dashboard-functionality.md
+    type: session
+  - id: sessions/261007-device-logs
+    path: sessions/261007-device-logs.md
     type: session
