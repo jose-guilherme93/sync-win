@@ -17,6 +17,7 @@
   import Processes from './components/screens/Processes.svelte'
   import Packages from './components/screens/Packages.svelte'
   import Services from './components/screens/Services.svelte'
+  import DeviceLogs from './components/screens/DeviceLogs.svelte'
   import RemoteActions from './components/screens/RemoteActions.svelte'
   import DeviceSettings from './components/screens/DeviceSettings.svelte'
   import { nav, type Section } from './lib/router'
@@ -148,7 +149,6 @@
     sensors: 'system',
     containers: 'docker',
     packages: 'apps',
-    logs: 'logs',
     security: 'security'
   } as Record<string, string>)[navState.section] || null
 
@@ -1626,6 +1626,8 @@
               <Packages deviceId={modalDevice.id} authHeaders={ownerHeaders} />
             {:else if navState.section === 'services'}
               <Services deviceId={modalDevice.id} />
+            {:else if navState.section === 'logs'}
+              <DeviceLogs deviceId={modalDevice.id} authHeaders={ownerHeaders} />
             {:else if navState.section === 'remote'}
               <RemoteActions device={modalDevice} authHeaders={ownerHeaders} />
             {:else if navState.section === 'settings'}
