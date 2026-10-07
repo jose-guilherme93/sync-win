@@ -140,6 +140,34 @@ jobs:
           curl -fs http://localhost:8080/health || (docker logs sync-win-test && exit 1)
           docker stop sync-win-test
 
+      # The release publishes an image and the repository keeps a buildable
+      # Dockerfile, and both paths have to keep working. A wrong default or a
+      # broken interpolation in compose.prod.yaml would only surface at deploy
+      # time, when the tag already exists and the deploy fails on a pull.
+      - name: Verify the production compose file resolves for both paths
+        run: |
+          set -euo pipefail
+          export SYNCWIN_SECRET_KEY=ci-validation-key-not-a-real-secret
+
+          # Path A: build from source. The build section must still be present.
+          docker compose -f compose.prod.yaml config | grep -q 'dockerfile: docker/Dockerfile.server'
+          echo "path A (build): OK"
+
+          # Path B: pull a pinned image. The tag must reach the image reference.
+          ref=$(IMAGE_TAG=9.9.9 docker compose -f compose.prod.yaml config \
+            | awk '/^ *image: /{print $2; exit}')
+          echo "resolved image with IMAGE_TAG=9.9.9: ${ref}"
+          case "$ref" in
+            *:9.9.9) echo "path B (pull): OK" ;;
+            *) echo "IMAGE_TAG did not reach the image reference: ${ref}" >&2; exit 1 ;;
+          esac
+
+          # The agent signing key is optional at build time: without it the agent
+          # still builds and refuses auto-update, which is fail-closed. A failure
+          # here would mean the build now requires a secret that CI does not have.
+          docker compose -f compose.prod.yaml config | grep -q 'SYNCWIN_DATA_DIR: /data'
+          echo "data dir: OK"
+
   # ---------------------------------------------------------------------------
   # Browser end-to-end
   # ---------------------------------------------------------------------------

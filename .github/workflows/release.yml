@@ -132,8 +132,14 @@ jobs:
           # path take half an hour.
           platforms: linux/amd64
           push: true
+          # Both forms of the version tag are published. Docker convention drops
+          # the `v`, but the Git tag keeps it, and a deployment platform that
+          # derives the image tag from the Git ref would otherwise look for
+          # `:v1.2.3` and find nothing. Publishing both makes either derivation
+          # resolve to the same digest.
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.tag }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           labels: |
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
@@ -157,6 +163,7 @@ jobs:
             echo "### Release"
             echo ""
             echo "- version: \`${VERSION:-unknown}\`"
+            echo "- image tags: \`${VERSION:-unknown}\`, \`v${VERSION:-unknown}\`, \`latest\`"
             echo "- image: \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${VERSION:-unknown}\`"
             echo "- commit: \`${{ github.sha }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
