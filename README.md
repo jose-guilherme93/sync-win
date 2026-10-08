@@ -1,254 +1,334 @@
 # SyncWin
 
-SyncWin is a lightweight self-hosted system for synchronizing small user preference files and game save data from Linux devices to a central Docker server. The main goal is to track the preferences of each device and show the current status in the web UI: online devices, last sync time, live hardware telemetry, installed packages, and stored preference/save data.
+**Self-hosted sync and monitoring for your Linux machines.** Keep small
+preference files and game saves in sync, and watch CPU, memory, disk, network,
+packages, containers and system logs from one dashboard.
 
-## Problem it solves
+[![CI](https://github.com/jose-guilherme93/sync-win/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/jose-guilherme93/sync-win/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/jose-guilherme93/sync-win?sort=semver)](https://github.com/jose-guilherme93/sync-win/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Docker Hub](https://img.shields.io/docker/v/joseguilherme93/sync-win?label=docker%20hub&sort=semver)](https://hub.docker.com/r/joseguilherme93/sync-win)
+[![Docker pulls](https://img.shields.io/docker/pulls/joseguilherme93/sync-win)](https://hub.docker.com/r/joseguilherme93/sync-win)
+[![Go 1.25](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![Svelte 5](https://img.shields.io/badge/Svelte-5-FF3E00?logo=svelte&logoColor=white)](https://svelte.dev)
 
-Users often want a simple way to keep per-device preferences organized and visible across Linux machines without building a full environment backup system. Typical needs include:
+---
 
-- knowing which devices are online
-- tracking the last synchronization time
-- storing only small text preference files
-- keeping a minimal record of user configuration state
-- avoiding the complexity of full snapshots or broad home backups
-- syncing game save files from Hydra Launcher (Wine prefixes, Steam, Unity) and other launchers
-- monitoring hardware health (CPU, memory, disk, network, temperature)
-- viewing installed applications across devices
-- managing Docker containers remotely
-- receiving notifications about device status changes
+## What it does
 
-This project solves that by syncing only explicit, small preference files and selected save-game data to the server.
+SyncWin is a server plus a small agent that runs on each Linux machine. The agent
+collects an explicit, allowlisted set of files and reports hardware telemetry; the
+server stores both and serves a dashboard.
 
-## Architecture
+It is deliberately **not** a backup tool and **not** a snapshot system. It moves
+small text files and nothing else.
 
-The project is split into three main layers:
+**Sync**
 
-- **Server**: Go + SQLite REST API running in Docker. Receives device metadata, stores preference files, manages user accounts, dispatches notifications, and serves the web dashboard.
-- **Agent**: Lightweight Go binary installed on each Linux machine. Collects preference files, saves, telemetry, and installed apps. Executes Docker management commands locally.
-- **Web**: Svelte 5 + TypeScript 6 dashboard showing online devices, synchronization timestamps, hardware telemetry charts, installed packages, Docker container management, and notification settings.
+- allowlisted preference files (`~/.bashrc`, KDE/GTK settings, VS Code settings,
+  workspace configs)
+- game saves from Hydra Launcher (Wine prefixes, Saved Games, AppData), Steam
+  userdata and Unity3D, with one-click restore back to a device
+- content hashes, so an unchanged file is never re-uploaded
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design.
+**Monitor**
 
-## Server
+- live telemetry: CPU (per core), memory, swap, disk and network rates,
+  temperatures, power, battery, uptime, load
+- installed packages (apt, pacman/AUR, flatpak, AppImage) and pending updates
+- systemd services, open ports and Docker containers
+- Linux journal logs, searchable and filterable per device
+- Lynis security audits with hardening score and history
+- alerts, per-device notes and file attachments
+- Telegram / webhook / in-app notifications
 
-The server is a Go application that runs in Docker. It exposes a REST API, stores state in SQLite with WAL journal mode, and keeps small text files and base64-encoded saves in a data directory. It serves the web dashboard from the same origin (no CORS). Features include:
+**Manage** (all opt-in, off by default)
 
-- User authentication (register, login, HttpOnly session cookie with CSRF protection)
-- Device registry with heartbeat tracking and online/offline status
-- Preference file storage (text + base64-encoded saves)
-- Docker command queue management (proxy to agents)
-- Notification dispatch (Telegram, webhook, web inbox) with encrypted credentials
-- Device notes and file attachments
-- Structured JSON logging with secret redaction
-- Telemetry history with downsampled aggregation
+- start, stop, restart, kill and remove containers; exec, compose, prune
+- restart the agent, run package updates, reboot a device
 
-## Agent
+---
 
-The agent is a lightweight Go binary (zero external dependencies) installed on each Linux machine via a one-line installer. It collects selected preference files and game saves, uploads them to the server, and reports device heartbeat, hardware telemetry, and installed packages. Features include:
+## Quick start
 
-- Allowlist-based file collection (no broad filesystem scans)
-- Game save collection from Hydra Launcher, Steam, Unity3D, and operator-configured directories
-- Binary saves encoded as base64 with per-file (1 MiB) and per-cycle (16 MiB) budgets
-- Hardware telemetry (CPU, memory, disk I/O, network, temperatures, battery, processes)
-- Docker container monitoring and management (21 command types)
-- Installed application inventory (apt, flatpak, pacman, AUR, AppImages)
-- Local policy enforcement (any command type can be disabled)
-- Exponential backoff with jitter for server outages
-- Fresh enrollment-token recovery when device credentials are lost (hardware fingerprints are never used for authentication)
-
-Everything the agent collects and executes is defined in an explicit written contract (`COLLECTION-CONTRACT.md`, machine-readable at `agent/internal/contract/contract.json`). The agent owns command execution: a local policy file (`~/.config/sync-win/policy.json`) can disable any command type, and refusals are reported back to the server. Commands run with hard timeouts and output caps; sync survives server outages via exponential backoff with jitter.
-
-The one-line installer prints numbered progress steps and verifies the connection to the server before declaring success; on failure it prints an actionable checklist (reachability, LAN IP vs container IP, firewall, live logs). Devices are registered at install time, so they appear on the dashboard within seconds — bound to the account that generated the command. The agent binary path served by the server defaults to `/app/sync-win-agent` and can be overridden with `SYNCWIN_AGENT_BINARY`.
-
-## Web dashboard
-
-The web frontend is a Svelte 5 + TypeScript 6 + Vite 8 application that shows devices online/offline, last sync information, live hardware telemetry charts, installed packages, and synchronized preference files. Features include:
-
-- Account-first auth (sign in; public registration is disabled by default and the first account is bootstrapped from `SYNCWIN_ADMIN_EMAIL`/`SYNCWIN_ADMIN_PASSWORD`)
-- Device grid with status badges and save counts
-- Real-time CPU/memory/network sparklines on device cards (lightweight canvas)
-- Device detail modal with tabs: System, Files, Packages, Saves, Notes, Docker
-- Docker container management (start/stop/restart/kill/remove, exec, compose editor, prune)
-- Telemetry history with time period selection
-- Notification settings and inbox with real-time SSE push
-- Device notes and file attachments
-
-**Save-game view**: each device card shows a badge with save count, total size, and last sync time. The Settings modal (gear icon) lists built-in Hydra/Steam/Unity locations and lets operators add extra save folders. The device detail tabs include a "saves" tab listing all synced save files with their sizes and timestamps; binary files are marked and viewable as base64.
-
-In production the server serves the built dashboard itself from `SYNCWIN_WEB_DIR` (default `/app/web`, baked into the Docker image), so everything runs on a single origin and port. For UI development use `npm run dev` (Vite) pointed at a running server; large app inventories render in capped groups with search to keep interactions smooth.
-
-## Getting started
-
-### Quick start with Docker Compose
+Requires Docker with the Compose plugin. Nothing else — no checkout, no Go, no
+Node.
 
 ```bash
-make prod
+# 1. Get this one file and generate the required secret
+curl -fsSLO https://raw.githubusercontent.com/jose-guilherme93/sync-win/main/compose.yaml
+echo "SYNCWIN_SECRET_KEY=$(openssl rand -hex 32)" > .env
+
+# 2. Start
+docker compose up -d
 ```
 
-The production stack builds the image and starts the server at `http://localhost:8080` with persistent data in the `sync-win-data` Docker volume (set `SYNCWIN_DATA_PATH=./data` for a host bind mount). Public registration is disabled by default; set `SYNCWIN_ADMIN_EMAIL` and `SYNCWIN_ADMIN_PASSWORD` in `.env` to create the first account, then sign in and install the agent on your Linux devices.
+Open **http://localhost:8080** and create your account.
 
-Before the first production run, create the environment file with a generated secret:
+That is the whole setup. The first start creates the database inside a named
+Docker volume, so your data survives every update.
+
+> **After you create your account**, set `SYNCWIN_ENABLE_REGISTRATION=false` in
+> `.env` and run `docker compose up -d` again. Registration is open by default so
+> the first account is easy to make; leaving it open on a public server lets
+> anyone sign up.
+
+<details>
+<summary>Prefer to build from source instead of pulling the image?</summary>
 
 ```bash
-make env      # creates .env from .env.example and fills SYNCWIN_SECRET_KEY
-# then set SYNCWIN_ADMIN_EMAIL and SYNCWIN_ADMIN_PASSWORD in .env
-make prod
+git clone https://github.com/jose-guilherme93/sync-win.git
+cd sync-win
+echo "SYNCWIN_SECRET_KEY=$(openssl rand -hex 32)" > .env
+docker compose up -d --build
 ```
 
-`make help` lists every target. If you prefer raw Compose, `docker compose -f compose.prod.yaml up -d --build` is equivalent.
+Or use `make prod`, which does the same through the Makefile.
+</details>
 
-### Development environment
+### Next: install an agent
 
-```bash
-make dev
-```
-
-This brings up the whole application in containers with hot reload:
-
-| Service | URL | Behaviour |
-| --- | --- | --- |
-| Server | `http://localhost:8088` | Go server rebuilt by [air](https://github.com/air-verse/air) on every change |
-| Dashboard | `http://localhost:5173` | Vite dev server with HMR |
-
-Development data lives in `./data-dev`, separate from production `./data`. To run dev alongside a running production stack, publish dev on other ports:
+In the dashboard, open **Add device**, copy the generated command and run it on
+the Linux machine:
 
 ```bash
-DEV_HTTP_PORT=8081 WEB_PORT=5199 make dev
-```
-
-The Vite dev server automatically points at the dev API port via `VITE_API_BASE`.
-
-Useful targets: `make dev-d` (detached), `make dev-logs`, `make dev-down`, `make clean-dev`.
-
-### Agent installation
-
-From the dashboard, generate an enrollment token and run the one-line installer on your Linux machine:
-
-```bash
-curl -fsSL https://sync-win.local/install/TOKEN -o /tmp/sync-win-install.sh
+curl -fsSL http://YOUR-SERVER:8080/install/TOKEN -o /tmp/sync-win-install.sh
 sudo bash /tmp/sync-win-install.sh
 ```
 
-See [QUICKSTART.md](QUICKSTART.md) for detailed instructions.
+The installer is idempotent: running it again updates the agent in place. It
+installs a systemd service, grants the agent the journal group so device logs
+work, and enables automatic updates.
 
-## Running from source
+---
 
-The `Makefile` wraps the common commands:
+## Configuration
 
-```bash
-make build        # server + agent + web
-make test         # go test (server, agent) + svelte-check
-make lint         # go vet + svelte-check
-make run-server   # go run the API on :8080 against ./data-dev
-make run-web      # Vite dev server on :5173
-make run-agent    # run the agent daemon locally
-```
+All settings are environment variables, read from `.env` next to `compose.yaml`.
+Only `SYNCWIN_SECRET_KEY` is required.
 
-Individual builds remain available:
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SYNCWIN_SECRET_KEY` | — (**required**) | Encrypts stored provider credentials. Must stay stable. Generate with `openssl rand -hex 32`. |
+| `SYNCWIN_HTTP_PORT` | `8080` | Host port for the dashboard and API. |
+| `SYNCWIN_ENABLE_REGISTRATION` | `true` | Open sign-up. Turn off after creating your account. |
+| `SYNCWIN_ADMIN_EMAIL` / `SYNCWIN_ADMIN_PASSWORD` | — | Bootstrap the first account from the environment instead of signing up. Created once, never overwritten. |
+| `SYNCWIN_SESSION_TTL_HOURS` | `720` | Dashboard session lifetime (30 days). |
+| `SYNCWIN_ENABLE_REMOTE_MUTATIONS` | `false` | Allow reboot / package updates / agent restart. |
+| `SYNCWIN_ENABLE_DOCKER_MUTATIONS` | `false` | Allow container start/stop/remove, exec, prune. |
+| `SYNCWIN_ENABLE_FINGERPRINT_RECONNECT` | `false` | Let a device re-enroll by hardware fingerprint. |
+| `SYNCWIN_CORS_ALLOWED_ORIGIN` | — | Comma-separated origins, needed only when the dashboard is served from a different host. |
+| `SYNCWIN_HTTPS` | `false` | Set `true` behind TLS so session cookies get the `Secure` flag. |
+| `SYNCWIN_DATA_PATH` | named volume | Set to `./data` for a host bind mount instead. |
+| `IMAGE_TAG` | `latest` | Pin a release, e.g. `0.6.5`. Recommended for reproducible deploys. |
+| `LOG_LEVEL` / `LOG_CONSOLE_LEVEL` | `INFO` | Structured log level. `DEBUG` when investigating. |
 
-```bash
-cd server && go build ./...
-cd ../agent && go build ./...
-cd ../web && npm install && npm run build
-```
+Put TLS in front with Caddy, Traefik or nginx. The server speaks plain HTTP and
+is designed to sit behind a reverse proxy.
 
-### Debug logs
-
-The server logs every HTTP request as a structured JSON line, including method, path, status, duration, and remote address. Authentication events are also logged without passwords.
-
-Follow live container logs:
-
-```bash
-docker compose logs -f server
-```
-
-The same log stream is persisted at `/data/sync-win-server.log` inside the `sync-win-data` volume:
+### Updating
 
 ```bash
-docker run --rm -v sync-win-data:/data alpine tail -f /data/sync-win-server.log
+docker compose pull && docker compose up -d
 ```
 
-### Agent logs on Linux
+The database schema is applied idempotently on every start, so an update needs no
+manual migration.
 
-The agent is installed as a user service named `sync-win-agent.service`, not as a system-wide service. Use the `--user` flag for every systemd command:
+### Backup and restore
+
+Everything lives in the `sync-win-data` volume.
 
 ```bash
-systemctl --user status sync-win-agent.service
-journalctl --user -u sync-win-agent.service -f
+# Backup
+docker run --rm -v sync-win-data:/data -v "$PWD:/backup" alpine \
+  tar czf /backup/sync-win-backup.tar.gz -C /data .
+
+# Restore (into a stopped stack)
+docker compose down
+docker run --rm -v sync-win-data:/data -v "$PWD:/backup" alpine \
+  tar xzf /backup/sync-win-backup.tar.gz -C /data
+docker compose up -d
 ```
 
-Useful variations:
+Keep `SYNCWIN_SECRET_KEY` with the backup. Without it, stored notification
+credentials cannot be decrypted.
 
-```bash
-# Last 100 entries
-journalctl --user -u sync-win-agent.service -n 100 --no-pager
+---
 
-# Only logs from the current boot
-journalctl --user -u sync-win-agent.service -b --no-pager
+## How it works
 
-# Restart after updating the agent
-systemctl --user restart sync-win-agent.service
-
-# Show the installed unit and executable
-systemctl --user cat sync-win-agent.service
+```
+┌──────────────┐   telemetry, files, saves    ┌─────────────────┐
+│  Agent       │ ───────────────────────────► │  Server         │
+│  (per host)  │                              │  Go + SQLite    │
+│  systemd     │ ◄─────────────────────────── │  serves the     │
+└──────────────┘   commands (opt-in)          │  dashboard too  │
+                                              └─────────────────┘
 ```
 
-The unit file is stored at:
+- **Server** — Go, single binary, SQLite in WAL mode, no external services. Serves
+  the REST API and the compiled dashboard from the same origin.
+- **Agent** — Go, runs as the unprivileged `sync-win` systemd service. Collects
+  an explicit allowlist, applies local policy from `policy.json`, and survives
+  server outages with exponential backoff.
+- **Dashboard** — Svelte 5 + TypeScript + Vite, served by the Go server, no
+  separate web container in production.
 
-```text
-~/.config/systemd/user/sync-win-agent.service
-```
+The agent never executes arbitrary shell commands. Every privileged action is a
+named, validated operation that local policy on the device can refuse.
 
-### Agent updates
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design and
+[COLLECTION-CONTRACT.md](COLLECTION-CONTRACT.md) for exactly what the agent
+collects.
 
-New installations enable `sync-win-agent-update.timer` by default. It checks the server every 15 minutes, compares versions, verifies the SHA-256 checksum and the downloaded binary version, then replaces the agent atomically and restarts it. Failed health checks roll back automatically.
+---
 
-Disable it before installation with:
+## Releases and CI
 
-```bash
-sudo SYNCWIN_AUTO_UPDATE=0 bash install.sh
-```
-
-The updater is pull-based: the agent only contacts the configured SyncWin server. The system-wide installer uses a root systemd timer; the user installer uses `systemctl --user`.
-
-## Releases
-
-Releases are automatic. Every push to `main` creates the next semantic version
+Every push to `main` runs the release pipeline, which derives the next version
 from [Conventional Commits](https://www.conventionalcommits.org/):
 
 | Commit | Bump | Example |
 | --- | --- | --- |
-| `fix:`, `chore:`, anything else | patch | `0.2.0` → `0.2.1` |
-| `feat:` | minor | `0.2.1` → `0.3.0` |
-| `feat!:`, `BREAKING CHANGE:` | major | `0.3.0` → `1.0.0` |
+| `fix:`, `chore:`, anything else | patch | `0.6.4` → `0.6.5` |
+| `feat:` | minor | `0.6.5` → `0.7.0` |
+| `feat!:`, `BREAKING CHANGE:` | major | `0.7.0` → `1.0.0` |
 
-The workflow publishes the image to Docker Hub, and mirrors it to GitHub
-Container Registry, and **only then** tags the commit (`vX.Y.Z`) and creates the
-GitHub Release. The order matters: a deployment that watches the repository tag
-would otherwise see a version whose image does not exist yet. Publishing first
-makes "a tag exists" imply "a matching image exists".
+Versions are never edited by hand. The workflow builds and publishes the image to
+Docker Hub — and mirrors it to GHCR — **before** creating the Git tag, so a tag
+always has an image to pull. Each release carries SLSA provenance and an SBOM.
 
-Images are published for `linux/amd64` with SLSA provenance and an SBOM attached.
-The Docker Hub push needs `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository
-secrets; the GHCR mirror authenticates with the automatic `GITHUB_TOKEN`, so no
-other registry credential exists in the repository.
-platform (Dokploy, Coolify, and so on). Manual runs can force a bump from the
-Actions tab.
+Pull a specific version when you want a reproducible deploy:
 
-The runtime image is multi-stage and the server runs as an unprivileged user;
-the container entrypoint only stays root long enough to adopt a data directory
-created by an older root-running image.
+```bash
+IMAGE_TAG=0.6.5 docker compose up -d
+```
+
+Every push and pull request runs the full test suite: Go tests with the race
+detector, `golangci-lint` on a diff basis, dashboard unit tests, `svelte-check`,
+and a browser end-to-end job that boots the real stack and drives a real Chrome.
+
+---
+
+## Development
+
+```bash
+make dev          # full stack in containers: server hot reload + web HMR
+make test         # server + agent Go tests, dashboard tests, svelte-check
+make test-race    # Go tests with the race detector
+make lint         # go vet + svelte-check
+make help         # every target
+```
+
+**Hot reload stack**
+
+| Service | URL | Behaviour |
+| --- | --- | --- |
+| API | `http://localhost:8088` | Go server rebuilt by [air](https://github.com/air-verse/air) on change |
+| Dashboard | `http://localhost:5173` | Vite dev server with HMR |
+
+Development data lives in `./data-dev`, separate from production. Run it
+alongside a production stack by changing ports:
+`DEV_HTTP_PORT=8081 WEB_PORT=5199 make dev`.
+
+**Without containers**
+
+```bash
+make run-server   # API on :8080 against ./data-dev
+make run-web      # Vite dev server on :5173
+make run-agent    # agent daemon
+```
+
+---
+
+## Troubleshooting
+
+**The Logs screen is empty for every device.**
+The agent can read only its own journal entries unless it belongs to the
+`systemd-journal` group — journal files are `0640 root:systemd-journal`. Check:
+
+```bash
+grep Groups /proc/$(pidof sync-win-agent)/status
+```
+
+If `systemd-journal` is not listed, re-run the installer, or:
+
+```bash
+sudo usermod -aG systemd-journal sync-win
+sudo systemctl restart sync-win-agent
+```
+
+The dashboard also shows the agent's own reason when log collection fails.
+
+**A device shows as offline.**
+Check the agent service and its connection:
+
+```bash
+sudo systemctl status sync-win-agent
+sudo journalctl -u sync-win-agent -n 100 --no-pager
+```
+
+**Agent is not updating itself.**
+Updates run from a root-owned systemd timer plus an on-demand path unit:
+
+```bash
+systemctl list-timers | grep sync-win
+systemctl status sync-win-agent-update.path
+```
+
+**Docker mutations do nothing.**
+They are off by default. Set `SYNCWIN_ENABLE_DOCKER_MUTATIONS=true` on the server
+and check the device's `~/.config/sync-win/policy.json`.
+
+**Forgot the admin password.**
+There is no recovery flow. Remove the database row, or set
+`SYNCWIN_ADMIN_EMAIL`/`SYNCWIN_ADMIN_PASSWORD` for a fresh account and create a
+second one.
+
+---
+
+## Security
+
+- Nothing is stored unencrypted. Provider credentials are encrypted with
+  `SYNCWIN_SECRET_KEY` (AES-GCM).
+- The agent runs unprivileged with a hardened systemd unit: `NoNewPrivileges`,
+  `ProtectSystem=strict`, `PrivateTmp`, `RestrictNamespaces`.
+- Collection is allowlist-based. The entire home directory is never copied, and
+  secrets, tokens, keyrings and browser credentials are excluded by default.
+- Journal lines are redacted for common secret shapes before upload.
+- Mutating actions are opt-in per capability and can be refused locally per
+  device.
+- Sessions use an HttpOnly cookie with CSRF protection.
+
+Found a vulnerability? Please open a security advisory rather than a public
+issue.
+
+---
+
+## Contributing
+
+Issues and pull requests are welcome.
+
+- Commits follow [Conventional Commits](https://www.conventionalcommits.org/) —
+  the release version is derived from them.
+- Run `make test` and `make lint` before opening a PR.
+- New collectors and sync behaviour need tests. See [AGENTS.md](AGENTS.md) for
+  the conventions this repository follows.
 
 ## Documentation
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) — full architectural design
-- [DATA-MODEL.md](DATA-MODEL.md) — conceptual data model
-- [SNAPSHOT-FORMAT.md](SNAPSHOT-FORMAT.md) — preference sync format specification
-- [COLLECTION-CONTRACT.md](COLLECTION-CONTRACT.md) — binding contract between agent and server
-- [AGENTS.md](AGENTS.md) — AI agent development guide
-- [ROADMAP.md](ROADMAP.md) — development roadmap
-- [QUICKSTART.md](QUICKSTART.md) — quick start guide
-- [SECURITY.md](SECURITY.md) — security model and rules
-- [API.md](API.md) — REST API reference
-- [docs/INSTALL.md](docs/INSTALL.md) — agent installation architecture
-- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — production deployment and the release pipeline
+| Document | Contents |
+| --- | --- |
+| [QUICKSTART.md](QUICKSTART.md) | Step-by-step first run |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Components, responsibilities, data flow |
+| [API.md](API.md) | REST API reference |
+| [DATA-MODEL.md](DATA-MODEL.md) | Tables and relationships |
+| [COLLECTION-CONTRACT.md](COLLECTION-CONTRACT.md) | Exactly what the agent collects and sends |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Deployment platforms, tags, verification |
+| [SECURITY.md](SECURITY.md) | Threat model and hardening |
+| [ROADMAP.md](ROADMAP.md) | Where this is going |
+
+## License
+
+[MIT](LICENSE). Use it, modify it, ship it.

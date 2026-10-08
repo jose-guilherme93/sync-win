@@ -1,36 +1,80 @@
+# =============================================================================
+# SyncWin — single-server stack
+# =============================================================================
+# The whole thing in one file. Pull the published image, no checkout required.
+#
+#   echo "SYNCWIN_SECRET_KEY=$(openssl rand -hex 32)" > .env
+#   docker compose up -d
+#
+# Then open http://localhost:8080 and create your account.
+#
+# Everything is optional except SYNCWIN_SECRET_KEY. See the Configuration
+# section of README.md for the full list, and compose.dev.yaml if you want to
+# hack on the code with hot reload.
+#
+# To build from a checkout instead of pulling the image, uncomment the `build:`
+# block below and run `docker compose up -d --build`.
+# =============================================================================
+name: sync-win
+
 services:
   server:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.server
-      network: host
+    image: ${IMAGE_NAME:-docker.io/joseguilherme93/sync-win}:${IMAGE_TAG:-latest}
+    # build:
+    #   context: .
+    #   dockerfile: docker/Dockerfile.server
+    container_name: sync-win
+    restart: unless-stopped
     init: true
     ports:
-      - "8080:8080"
+      - "${SYNCWIN_HTTP_PORT:-8080}:8080"
     environment:
-      SYNCWIN_ENV: development
-      SYNCWIN_SECRET_KEY: "${SYNCWIN_SECRET_KEY:-dev-insecure-key-not-for-production}"
-      # Dashboard session lifetime. Default 720h = 30 days.
+      SYNCWIN_ENV: "production"
+
+      # Required. Encrypts the credentials of notification providers, so it must
+      # stay stable across restarts: changing it makes those credentials
+      # unreadable. Generate one with `openssl rand -hex 32`.
+      SYNCWIN_SECRET_KEY: "${SYNCWIN_SECRET_KEY:?SYNCWIN_SECRET_KEY is required. Create it with: echo \"SYNCWIN_SECRET_KEY=$$(openssl rand -hex 32)\" > .env}"
+
+      # Dashboard session lifetime. 720h = 30 days.
       SYNCWIN_SESSION_TTL_HOURS: "${SYNCWIN_SESSION_TTL_HOURS:-720}"
-      SYNCWIN_ENABLE_FINGERPRINT_RECONNECT: "${SYNCWIN_ENABLE_FINGERPRINT_RECONNECT:-false}"
-      SYNCWIN_ENABLE_LEGACY_INSTALL: "${SYNCWIN_ENABLE_LEGACY_INSTALL:-false}"
-      SYNCWIN_ENABLE_REMOTE_MUTATIONS: "${SYNCWIN_ENABLE_REMOTE_MUTATIONS:-false}"
-      SYNCWIN_ENABLE_DOCKER_MUTATIONS: "${SYNCWIN_ENABLE_DOCKER_MUTATIONS:-false}"
-      # Local stack (SYNCWIN_ENV=development): registration stays open so you
-      # can create an account. Production defaults to false.
+
+      # Open registration so the first account can be created from the browser.
+      # Once you have signed up, set SYNCWIN_ENABLE_REGISTRATION=false in .env
+      # and `docker compose up -d` again: a public server with open
+      # registration lets anyone create an account on your instance.
       SYNCWIN_ENABLE_REGISTRATION: "${SYNCWIN_ENABLE_REGISTRATION:-true}"
+
+      # Alternative to open registration: bootstrap the first account from the
+      # environment. It is created once and never overwritten.
       SYNCWIN_ADMIN_EMAIL: "${SYNCWIN_ADMIN_EMAIL:-}"
       SYNCWIN_ADMIN_PASSWORD: "${SYNCWIN_ADMIN_PASSWORD:-}"
+
+      # Mutating actions are opt-in per capability. The dashboard still shows
+      # state with all of these off; only remote writes are gated.
+      SYNCWIN_ENABLE_REMOTE_MUTATIONS: "${SYNCWIN_ENABLE_REMOTE_MUTATIONS:-false}"
+      SYNCWIN_ENABLE_DOCKER_MUTATIONS: "${SYNCWIN_ENABLE_DOCKER_MUTATIONS:-false}"
+      SYNCWIN_ENABLE_FINGERPRINT_RECONNECT: "${SYNCWIN_ENABLE_FINGERPRINT_RECONNECT:-false}"
+
+      # Set this to the address you actually reach the server on when it is not
+      # plain http on localhost, so the install command shown in the dashboard
+      # points devices at the right place. Comma-separated for several origins.
       SYNCWIN_CORS_ALLOWED_ORIGIN: "${SYNCWIN_CORS_ALLOWED_ORIGIN:-}"
-      SYNCWIN_HTTPS: "false"
-      LOG_CONSOLE_LEVEL: INFO
+      # Set to true when serving over TLS, so session cookies get the Secure flag.
+      SYNCWIN_HTTPS: "${SYNCWIN_HTTPS:-false}"
+
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      LOG_CONSOLE_LEVEL: "${LOG_CONSOLE_LEVEL:-INFO}"
     volumes:
-      - ./data:/data
-    working_dir: /app
-    command: ["/app/server"]
+      - sync-win-data:/data
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://localhost:8080/health"]
       interval: 30s
       timeout: 5s
-      start_period: 10s
+      start_period: 15s
       retries: 3
+
+volumes:
+  # Named volume, so `docker compose up -d --pull always` on a new release keeps
+  # your accounts, devices, preferences and saves.
+  sync-win-data:
