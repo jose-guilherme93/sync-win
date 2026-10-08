@@ -60,3 +60,6 @@ entries:
   - id: sessions/261008-agent-self-update
     path: sessions/261008-agent-self-update.md
     type: session
+  - id: sessions/261008-quickstart-dockerhub
+    path: sessions/261008-quickstart-dockerhub.md
+    type: session

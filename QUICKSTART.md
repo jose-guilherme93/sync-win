@@ -4,22 +4,44 @@ This guide walks through setting up SyncWin from scratch: starting the server, s
 
 ## Prerequisites
 
-- Docker and Docker Compose installed on the server machine
+- Docker with the Compose plugin, on the machine that will run the server
 - A Linux machine for running the agent
-- Both machines must be network-reachable (same LAN or with port 8080 forwarded)
+- Both machines must be network-reachable (same LAN, or with port 8080 forwarded)
+
+Nothing else. No checkout, no Go, no Node — the published image is used.
 
 ## 1. Start the server
 
-From the repository root:
+Copy the compose file and generate the one required secret:
 
 ```bash
-make env     # create .env with a generated SYNCWIN_SECRET_KEY
-make prod    # build the image and start the stack
+curl -fsSLO https://raw.githubusercontent.com/jose-guilherme93/sync-win/main/compose.yaml
+echo "SYNCWIN_SECRET_KEY=$(openssl rand -hex 32)" > .env
+docker compose up -d
 ```
 
-The server starts at `http://localhost:8080`. The first build takes a few minutes (Go + Node multi-stage). Data is stored in the `sync-win-data` Docker volume (set `SYNCWIN_DATA_PATH=./data` to use a host bind mount instead).
+The server starts at `http://localhost:8080`. Data is stored in the
+`sync-win-data` Docker volume, so it survives updates.
 
-To hack on the UI or API instead, use the development stack with hot reload:
+`SYNCWIN_SECRET_KEY` is required and compose refuses to start without it, with a
+message naming the exact command above. Keep it safe and stable: it encrypts
+stored notification credentials, and changing it makes them unreadable.
+
+### Building from a checkout instead
+
+```bash
+git clone https://github.com/jose-guilherme93/sync-win.git
+cd sync-win
+echo "SYNCWIN_SECRET_KEY=$(openssl rand -hex 32)" > .env
+docker compose up -d --build
+```
+
+`make prod` does the same through the Makefile, and `make env` creates the `.env`
+for you.
+
+### Working on the code
+
+For hot reload instead of a production image:
 
 ```bash
 make dev     # dashboard http://localhost:5173 · api http://localhost:8088
@@ -27,43 +49,44 @@ make dev     # dashboard http://localhost:5173 · api http://localhost:8088
 
 Run `make help` for the full target list.
 
-## 2. Sign in as admin
+## 2. Create your account
 
-Public self-registration is **disabled by default**, so a fresh deployment has no
-open sign-up form. The first account is created automatically on boot from two
-environment variables:
+The quick-start `compose.yaml` leaves registration **open** so you can sign up
+from the browser on first run:
+
+1. Open `http://localhost:8080`
+2. Choose **Create account** and pick an email and password (at least 8
+   characters)
+
+**Then close it again.** Edit `.env`:
 
 ```bash
+SYNCWIN_ENABLE_REGISTRATION=false
+```
+
+and apply it with `docker compose up -d`. While it stays open, anyone who can
+reach the server can create an account on your instance.
+
+### Prefer to bootstrap the first account instead
+
+Set these in `.env` before the first start and no sign-up is needed:
+
+```bash
+SYNCWIN_ENABLE_REGISTRATION=false
 SYNCWIN_ADMIN_EMAIL=you@example.com
 SYNCWIN_ADMIN_PASSWORD=at-least-8-chars
 ```
 
-`make env` creates `.env` with a generated `SYNCWIN_SECRET_KEY`; add the two
-admin variables above and restart the stack. On boot the server creates the
-account only if it does not exist — the password in `.env` is **never** used to
-overwrite an existing account, so a password changed in the dashboard survives
-restarts.
+The account is created on boot only if it does not exist. The password in `.env`
+is **never** used to overwrite an existing account, so a password changed in the
+dashboard survives restarts.
 
-Open `http://localhost:8080` (production) or `http://localhost:5173`
-(development) and sign in with the admin credentials. Accounts are stored in
-SQLite (`sync-win.db` inside the `sync-win-data` volume in production,
-`./data-dev/sync-win.db` in development). The password must be at least 8
-characters.
-
-### Allow open sign-ups (optional)
-
-To let anyone create an account, set:
-
-```bash
-SYNCWIN_ENABLE_REGISTRATION=true
-```
-
-The "Create account" option only appears in the dashboard when this flag is on.
+Accounts are stored in SQLite, at `sync-win.db` inside the `sync-win-data`
+volume (`./data-dev/sync-win.db` in development).
 
 ### Development shortcut
 
-The dev stack (`make dev`) enables registration, so you can also create a demo
-account:
+The dev stack (`make dev`) also enables registration:
 
 ```bash
 make dev-account   # creates demo@sync-win.local / sync-win-demo-password on :8088
@@ -72,13 +95,13 @@ make dev-account   # creates demo@sync-win.local / sync-win-demo-password on :80
 Or register through the API directly (only works when registration is enabled):
 
 ```bash
-curl -X POST http://localhost:8088/api/auth/register \
+curl -X POST http://localhost:8080/api/auth/register \
   -H 'Content-Type: application/json' \
   -d '{"email":"you@example.com","password":"at-least-8-chars"}'
 ```
 
-The automated test suites (`make test`, `make test-race`, `make test-web`) need
-no account at all — they mock the API.
+The automated test suites (`make test`, `make test-race`, `npm run test`) need no
+account at all — they mock the API.
 
 ## 3. Install the agent on a Linux machine
 
@@ -113,16 +136,17 @@ On the Linux machine:
 
 ```bash
 # Check agent status
-systemctl --user status sync-win-agent.service
+sudo systemctl status sync-win-agent
 
 # View agent logs
-journalctl --user -u sync-win-agent.service -f
+sudo journalctl -u sync-win-agent -f
 ```
 
 On the dashboard:
 - The device should appear with status "Online"
 - Hardware telemetry should start flowing within 10 seconds
 - Preference files should sync on the next cycle (default: 300 seconds)
+- The **Logs** tab should fill within about a minute
 
 ## 5. Configure save-game sync (optional)
 
@@ -185,7 +209,7 @@ Files, Telemetry, Docker
 
 1. Check if the server is reachable: `curl http://YOUR-SERVER:8080/health`
 2. Check firewall: port 8080 must be open
-3. Check agent logs: `journalctl --user -u sync-win-agent.service -n 50`
+3. Check agent logs: `sudo journalctl -u sync-win-agent -n 50`
 4. If using Docker Compose with `network: host`, the server is directly on the host network
 
 ### Device shows "Offline"
@@ -193,7 +217,27 @@ Files, Telemetry, Docker
 - The agent sends heartbeats every 10 seconds
 - Status derivation: online (<30s), stale (>30s), offline (>5min)
 - Check agent logs for connection errors
-- Restart the agent: `systemctl --user restart sync-win-agent.service`
+- Restart the agent: `sudo systemctl restart sync-win-agent`
+
+### Logs tab is empty for every device
+
+The agent can only read its own journal entries unless it belongs to the
+`systemd-journal` group, because journal files are `0640 root:systemd-journal`.
+Check whether the running agent has it:
+
+```bash
+grep Groups /proc/$(pidof sync-win-agent)/status
+```
+
+If `systemd-journal` is missing, install the group and restart:
+
+```bash
+sudo usermod -aG systemd-journal sync-win
+sudo systemctl restart sync-win-agent
+```
+
+Re-running the installer does this for you. The dashboard also shows the agent's
+own explanation when log collection fails, at the top of the Logs screen.
 
 ### Preference files not syncing
 
