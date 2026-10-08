@@ -153,6 +153,35 @@ No direct server-to-client shell execution is allowed.
 - The contract (`COLLECTION-CONTRACT.md` + `agent/internal/contract/contract.json`) is the single source of truth.
 - Account-first auth: devices are always bound to an owner account.
 - Notifications use pluggable providers with encrypted credentials and non-blocking fan-out.
+- The agent never writes outside its own state directories and never runs privileged.
+
+## Agent updates
+
+The agent ships fixes to itself without anyone logging into a device, which is
+harder than it sounds: the daemon runs as an unprivileged service user, so it can
+neither replace `/usr/local/bin/sync-win-agent` nor write `/etc/systemd/system`.
+
+Two root-owned units close that gap, and the update service reconciles **both**
+the binary and the unit on every run:
+
+- `sync-win-agent-update.timer` — checks every 15 minutes.
+- `sync-win-agent-update.path` — fires the same service when the daemon writes
+  `AgentUpdateRequestPath` (`/var/lib/sync-win/update-request`), a file it may
+  write because the directory is in the unit's `ReadWritePaths`.
+
+The daemon drives its own upgrade through the path unit, so it no longer depends
+on the timer having been installed. It requests an update when the server reports
+a newer version, and a **unit repair** when it can read neither the journal nor
+its configuration — a unit problem the daemon cannot fix itself.
+
+Reconciling the unit independently of the binary matters: a device can be fully
+up to date and still missing a group or a flag that a feature depends on. An
+early version of the updater returned early when the binary was current, which
+left a fleet running without journal access while looking perfectly healthy.
+
+Credentials for the authenticated unit fetch come from the unit itself
+(`--device-id`/`--device-token`), not from the agent state file: the update
+service runs as root, where the state path resolves under a different `HOME`.
 
 ## Project limits
 

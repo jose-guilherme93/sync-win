@@ -285,6 +285,26 @@ inventário continuam independentes.
 - systemd user unit gerada pelo `install.sh`: `Restart=always`, `RestartSec=15`, `StartLimitIntervalSec=0` (nunca entra em ban).
 - Arquivos individuais problemáticos são pulados com log — um arquivo ruim nunca aborta o lote.
 
+## Auto-atualização do agente
+
+O daemon roda como usuário de serviço sem privilégio: não pode substituir
+`/usr/local/bin/sync-win-agent` nem escrever em `/etc/systemd/system`. Ele
+**pede** a atualização, e uma unit de caminho com privilégio a executa.
+
+- O daemon escreve `/var/lib/sync-win/update-request` (diretório dele, dentro de
+  `ReadWritePaths`) quando o servidor anuncia versão mais nova.
+- `sync-win-agent-update.path` observa esse arquivo e dispara
+  `sync-win-agent-update.service`, que roda como root.
+- O serviço reconcilia **binário e unit** a cada execução. Uma unit pode estar
+  desatualizada mesmo com o binário em dia — foi assim que uma frota ficou sem
+  acesso ao journal parecendo saudável.
+- Credenciais para buscar a unit autenticada vêm da própria unit
+  (`--device-id`/`--device-token`), não do arquivo de estado: o serviço de update
+  roda como root, onde o path de estado resolve sob outro `HOME`.
+
+Se o agente não consegue ler o journal, ele solicita um **reparo de unit**, no
+máximo uma vez por hora, porque a correção exige root.
+
 ## Versionamento do contrato
 
 `contract_version` no JSON segue SemVer. Mudanças incompatíveis de schema exigem bump major e atualização simultânea deste arquivo. Testes automatizados garantem que constantes de runtime e o JSON embutido não divergem.

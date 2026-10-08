@@ -54,3 +54,9 @@ entries:
   - id: sessions/261007-device-logs
     path: sessions/261007-device-logs.md
     type: session
+  - id: decisions/agent-self-update
+    path: decisions/agent-self-update.md
+    type: decision
+  - id: sessions/261008-agent-self-update
+    path: sessions/261008-agent-self-update.md
+    type: session
