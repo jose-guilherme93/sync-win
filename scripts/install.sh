@@ -35,6 +35,10 @@ SYNCWIN_UPDATE_SERVICE_FILE="/etc/systemd/system/${SYNCWIN_UPDATE_SERVICE_NAME}"
 SYNCWIN_UPDATE_TIMER_FILE="/etc/systemd/system/${SYNCWIN_UPDATE_TIMER_NAME}"
 SYNCWIN_UPDATE_SERVICE_TEMPLATE="/app/sync-win-agent-update.service"
 SYNCWIN_UPDATE_TIMER_TEMPLATE="/app/sync-win-agent-update.timer"
+SYNCWIN_UPDATE_PATH_NAME="sync-win-agent-update.path"
+SYNCWIN_UPDATE_PATH_FILE="/etc/systemd/system/${SYNCWIN_UPDATE_PATH_NAME}"
+SYNCWIN_UPDATE_PATH_TEMPLATE="/app/sync-win-agent-update.path"
+SYNCWIN_UPDATE_REQUEST_FILE="/var/lib/sync-win/update-request"
 SYNCWIN_AUTO_UPDATE="${SYNCWIN_AUTO_UPDATE:-1}"
 
 # Temp directory for downloads (cleaned up on exit)
@@ -466,22 +470,48 @@ install_auto_update() {
         warn "Automatic agent updates disabled (SYNCWIN_AUTO_UPDATE=$SYNCWIN_AUTO_UPDATE)"
         return 0
     fi
-    if [ ! -f "$SYNCWIN_UPDATE_SERVICE_TEMPLATE" ] || [ ! -f "$SYNCWIN_UPDATE_TIMER_TEMPLATE" ]; then
-        warn "Updater templates not found — automatic updates were not enabled"
-        return 0
+    # Missing templates used to be a warning and an early return, which is how a
+    # device ended up with no way to ever receive a fix. Without the updater the
+    # only remedy is a manual reinstall, so this is a failure, not a note.
+    local missing=""
+    for tpl in "$SYNCWIN_UPDATE_SERVICE_TEMPLATE" "$SYNCWIN_UPDATE_TIMER_TEMPLATE" "$SYNCWIN_UPDATE_PATH_TEMPLATE"; do
+        [ -f "$tpl" ] || missing="$missing $(basename "$tpl")"
+    done
+    if [ -n "$missing" ]; then
+        error "Updater templates missing:${missing}"
+        error "Automatic updates cannot be enabled; reinstall from a current server."
+        return 1
     fi
+
     sed \
         -e "s|{{AGENT_BINARY}}|${SYNCWIN_BINARY}|g" \
         -e "s|{{SERVER_URL}}|${SYNCWIN_SERVER}|g" \
         -e "s|{{SERVICE_NAME}}|${SYNCWIN_SERVICE_NAME}|g" \
         -e "s|{{USER_FLAG}}||g" \
+        -e "s|{{DEVICE_ID}}|${DEVICE_ID}|g" \
+        -e "s|{{DEVICE_TOKEN}}|${DEVICE_TOKEN}|g" \
         "$SYNCWIN_UPDATE_SERVICE_TEMPLATE" > "$SYNCWIN_UPDATE_SERVICE_FILE"
     cp "$SYNCWIN_UPDATE_TIMER_TEMPLATE" "$SYNCWIN_UPDATE_TIMER_FILE"
+    cp "$SYNCWIN_UPDATE_PATH_TEMPLATE" "$SYNCWIN_UPDATE_PATH_FILE"
+
+    # The daemon writes this file to request an update. It must exist and be
+    # writable by the agent user before the path unit is armed.
+    install -d -o "$SYNCWIN_USER" -g "$SYNCWIN_USER" -m 0755 "$(dirname "$SYNCWIN_UPDATE_REQUEST_FILE")"
+    install -o "$SYNCWIN_USER" -g "$SYNCWIN_USER" -m 0644 /dev/null "$SYNCWIN_UPDATE_REQUEST_FILE"
+
     systemctl daemon-reload
-    if systemctl enable --now "$SYNCWIN_UPDATE_TIMER_NAME" >/dev/null 2>&1; then
-        success "Automatic agent updates enabled (every 15 minutes)"
+    local ok=1
+    systemctl enable --now "$SYNCWIN_UPDATE_TIMER_NAME" >/dev/null 2>&1 \
+        || { warn "Could not enable ${SYNCWIN_UPDATE_TIMER_NAME}"; ok=0; }
+    # The path unit is what lets a device whose timer was never installed still
+    # upgrade itself, so a failure here matters more than the timer's.
+    systemctl enable --now "$SYNCWIN_UPDATE_PATH_NAME" >/dev/null 2>&1 \
+        || { warn "Could not enable ${SYNCWIN_UPDATE_PATH_NAME}"; ok=0; }
+
+    if [ "$ok" = "1" ]; then
+        success "Automatic agent updates enabled (timer every 15 minutes, plus on demand)"
     else
-        warn "Could not enable ${SYNCWIN_UPDATE_TIMER_NAME}; install it manually"
+        warn "Automatic updates are only partially enabled; check the units above"
     fi
 }
 
@@ -604,18 +634,27 @@ start_service() {
 # Both used to be a warning nobody saw, which is how a broken Logs screen looked
 # identical to a healthy one.
 verify_agent_readiness() {
-    local unit_file="/etc/systemd/system/${SYNCWIN_SERVICE_NAME}"
     local problems=0
 
-    if [ -f "$unit_file" ] && ! grep -q "systemd-journal" "$unit_file"; then
-        warn "The agent unit lacks 'systemd-journal'; the Logs screen will stay empty."
-        warn "Adding it now."
-        if sed -i 's/^SupplementaryGroups=.*/SupplementaryGroups=docker systemd-journal/' "$unit_file"; then
-            systemctl daemon-reload
-            systemctl restart "$SYNCWIN_SERVICE_NAME" >/dev/null 2>&1
-            success "Added systemd-journal to the agent unit and restarted"
+    # Reinstall rather than patch. A unit that is missing entirely (systemd then
+    # reports Loaded: not-found while the process keeps running from a
+    # definition held in memory) or one that predates systemd-journal is fixed
+    # the same way: regenerate it from the current template.
+    if [ ! -f "$SYNCWIN_SERVICE_FILE" ] || ! grep -q "systemd-journal" "$SYNCWIN_SERVICE_FILE"; then
+        if [ -f "$SYNCWIN_SERVICE_FILE" ]; then
+            warn "The agent unit lacks 'systemd-journal'; the Logs screen will stay empty."
+        else
+            warn "The agent unit file is missing; reinstalling it."
+        fi
+        install_systemd_service >/dev/null 2>&1
+        configure_service >/dev/null 2>&1
+        systemctl daemon-reload
+        systemctl restart "$SYNCWIN_SERVICE_NAME" >/dev/null 2>&1
+        if [ -f "$SYNCWIN_SERVICE_FILE" ] && grep -q "systemd-journal" "$SYNCWIN_SERVICE_FILE"; then
+            success "Agent unit regenerated with journal access"
         else
             problems=$((problems + 1))
+            warn "Could not regenerate the agent unit."
         fi
     fi
 
@@ -627,6 +666,15 @@ verify_agent_readiness() {
             problems=$((problems + 1))
             warn "Could not enable ${SYNCWIN_UPDATE_TIMER_NAME}."
             warn "Enable it manually: systemctl enable --now ${SYNCWIN_UPDATE_TIMER_NAME}"
+        fi
+    fi
+
+    if ! systemctl is-enabled --quiet "$SYNCWIN_UPDATE_PATH_NAME" 2>/dev/null; then
+        if [ -f "$SYNCWIN_UPDATE_PATH_FILE" ] && systemctl enable --now "$SYNCWIN_UPDATE_PATH_NAME" >/dev/null 2>&1; then
+            success "Enabled ${SYNCWIN_UPDATE_PATH_NAME} (updates on agent request)"
+        else
+            problems=$((problems + 1))
+            warn "Could not enable ${SYNCWIN_UPDATE_PATH_NAME}; on-demand updates are unavailable."
         fi
     fi
 

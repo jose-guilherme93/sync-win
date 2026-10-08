@@ -78,6 +78,7 @@ COPY --chown=syncwin:syncwin scripts/install.sh /app/install.sh
 COPY --chown=syncwin:syncwin server/sync-win-agent.service /app/sync-win-agent.service
 COPY --chown=syncwin:syncwin server/sync-win-agent-update.service /app/sync-win-agent-update.service
 COPY --chown=syncwin:syncwin server/sync-win-agent-update.timer /app/sync-win-agent-update.timer
+COPY --chown=syncwin:syncwin server/sync-win-agent-update.path /app/sync-win-agent-update.path
 
 RUN sha256sum /app/sync-win-agent | awk '{print $1 "  sync-win-agent"}' > /app/checksums.txt && \
     chown syncwin:syncwin /app/checksums.txt

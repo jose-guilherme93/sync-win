@@ -1,0 +1,17 @@
+[Unit]
+Description=Watch for SyncWin Agent update requests
+
+# The agent daemon runs as an unprivileged service user: it can neither replace
+# /usr/local/bin/sync-win-agent nor write /etc/systemd/system. It therefore asks
+# for an update by touching a file it owns, and this path unit runs the root
+# updater in response.
+#
+# This exists in addition to the timer on purpose. The timer covers a device with
+# no daemon running; the path unit covers the case that actually bit us -- a
+# device where the timer was never installed, so no fix could ever arrive.
+[Path]
+PathChanged=/var/lib/sync-win/update-request
+Unit=sync-win-agent-update.service
+
+[Install]
+WantedBy=paths.target

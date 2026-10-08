@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -29,6 +30,11 @@ const maxAgentDownloadBytes = 128 << 20
 // fail closed: it will not install an unsigned binary.
 var agentUpdatePublicKey string
 
+// errUnitEndpointUnsupported means the server does not serve the agent unit
+// template. It is distinguished from a real failure so an older server is
+// tolerated while a genuine error is still reported.
+var errUnitEndpointUnsupported = errors.New("server does not expose the agent unit endpoint")
+
 type agentVersionResponse struct {
 	Version string `json:"version"`
 }
@@ -38,17 +44,24 @@ func cmdUpdate(args []string) error {
 	serverURL := fs.String("server", "http://localhost:8080", "SyncWin server URL")
 	service := fs.String("service", "sync-win-agent.service", "systemd service name")
 	userSystemd := fs.Bool("user-systemd", false, "use the user systemd manager")
+	deviceID := fs.String("device-id", "", "device id, for the authenticated unit refresh")
+	deviceToken := fs.String("device-token", "", "device token, for the authenticated unit refresh")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	server := strings.TrimRight(*serverURL, "/")
-	if state := loadAgentState(); state != nil {
-		// The unit refresh is authenticated, so the updater needs the same
-		// credentials the daemon uses. Read from state rather than requiring
-		// them on the timer command line.
-		return updateAgentAtIdentity(executableOf(), server, *service, *userSystemd, state.DeviceID, state.DeviceToken)
+
+	// Prefer explicit credentials. This runs as root from the update service,
+	// where the agent's state file resolves under a different HOME, so reading
+	// state quietly yields nothing there. The flags come from the unit, which
+	// already carries the token for the daemon.
+	id, token := strings.TrimSpace(*deviceID), strings.TrimSpace(*deviceToken)
+	if id == "" || token == "" {
+		if state := loadAgentState(); state != nil {
+			id, token = state.DeviceID, state.DeviceToken
+		}
 	}
-	return updateAgent(server, *service, *userSystemd)
+	return updateAgentAtIdentity(executableOf(), server, *service, *userSystemd, id, token)
 }
 
 func executableOf() string {
@@ -95,7 +108,10 @@ func updateAgentAtIdentity(executable, serverURL, service string, userSystemd bo
 	}
 	if !newer {
 		fmt.Printf("SyncWin agent is current: %s\n", current)
-		return nil
+		// A unit change is independent of the binary. An agent can be current
+		// while its unit is stale or missing entirely, which is how a device
+		// kept running without systemd-journal after the fix shipped.
+		return reconcileUnit(serverURL, service, userSystemd, deviceID, deviceToken)
 	}
 
 	temp, err := downloadAgent(serverURL, executable)
@@ -147,14 +163,34 @@ func updateAgentAtIdentity(executable, serverURL, service string, userSystemd bo
 	// Rewrite the unit after the binary is proven good, then restart so a unit
 	// change (a new group, a flag) takes effect. Done last so a bad unit cannot
 	// strand a device on an unproven binary.
-	if _, err := refreshUnitFile(serverURL, service, userSystemd, deviceID, deviceToken); err != nil {
-		fmt.Printf("warning: could not refresh the systemd unit: %v\n", err)
-	} else {
-		_ = restartAgent(service, userSystemd)
+	if err := reconcileUnit(serverURL, service, userSystemd, deviceID, deviceToken); err != nil {
+		fmt.Printf("warning: %v\n", err)
 	}
 
 	_ = os.Remove(backup)
 	fmt.Printf("SyncWin agent updated: %s -> %s\n", current, remote)
+	return nil
+}
+
+// reconcileUnit rewrites the systemd unit from the server and restarts the
+// service only when it actually changed.
+//
+// Split out so it also runs when the binary is already current: the unit is
+// versioned independently of the binary, and a device that never receives a
+// unit change looks perfectly healthy while a feature that depends on it is
+// silently dead.
+func reconcileUnit(serverURL, service string, userSystemd bool, deviceID, deviceToken string) error {
+	changed, err := refreshUnitFile(serverURL, service, userSystemd, deviceID, deviceToken)
+	if err != nil {
+		return fmt.Errorf("could not refresh the systemd unit: %w", err)
+	}
+	if !changed {
+		return nil
+	}
+	if err := restartAgent(service, userSystemd); err != nil {
+		return fmt.Errorf("restart after unit refresh: %w", err)
+	}
+	fmt.Println("SyncWin agent unit refreshed")
 	return nil
 }
 
@@ -370,8 +406,14 @@ func refreshUnitFile(serverURL, service string, userSystemd bool, deviceID, devi
 
 	desired, err := fetchAgentUnit(serverURL, deviceID, deviceToken)
 	if err != nil {
-		// A missing endpoint on an older server must not fail the whole update.
-		return false, nil
+		// An older server without the endpoint is tolerated: the binary update is
+		// the important part and must not be blocked by it. Anything else is a
+		// real failure and is reported, because a silently skipped unit refresh
+		// is how a device kept running without journal access after the fix.
+		if errors.Is(err, errUnitEndpointUnsupported) {
+			return false, nil
+		}
+		return false, err
 	}
 
 	target := "/etc/systemd/system/" + service
@@ -427,6 +469,12 @@ func fetchAgentUnit(serverURL, deviceID, deviceToken string) (string, error) {
 		return "", err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		// An older server has no such route, and a current one has no template on
+		// disk. Either way the endpoint is simply unavailable, which must not be
+		// confused with a failure worth reporting.
+		return "", errUnitEndpointUnsupported
+	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("unit endpoint returned %d", resp.StatusCode)
 	}
@@ -459,6 +507,77 @@ func runSystemctl(action string, userSystemd bool) error {
 		return fmt.Errorf("systemctl %s: %w: %s", action, err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// AgentUpdateRequestPath is where the daemon asks to be updated.
+//
+// The daemon runs as an unprivileged service user: it can neither replace
+// /usr/local/bin/sync-win-agent nor write /etc/systemd/system. A systemd path
+// unit watching this file runs the root updater when it changes, so the agent
+// can drive its own upgrade without holding privilege. The path must match the
+// PathChanged= entry in sync-win-agent-update.path and stay inside the unit's
+// ReadWritePaths.
+const AgentUpdateRequestPath = "/var/lib/sync-win/update-request"
+
+// requestUpdateForCurrentVersion writes the update request when the server is
+// ahead. Safe to call on a schedule: a request is a file write, and the root
+// updater is idempotent.
+func requestUpdateForCurrentVersion(serverURL string) {
+	remote, err := fetchAgentVersion(serverURL)
+	if err != nil {
+		return
+	}
+	current := installedAgentVersion(executableOf())
+	newer, err := newerAgentVersion(remote, current)
+	if err != nil || !newer {
+		return
+	}
+	if err := writeUpdateRequest(remote); err != nil {
+		log.Printf("could not request agent update: %v", err)
+		return
+	}
+	log.Printf("agent update requested: %s -> %s (see %s)", current, remote, AgentUpdateRequestPath)
+}
+
+// writeUpdateRequest touches the request file. The content carries the version
+// and a timestamp so consecutive requests differ and PathChanged fires each
+// time rather than only on the first.
+func writeUpdateRequest(version string) error {
+	return writeUpdateRequestTo(AgentUpdateRequestPath, version)
+}
+
+func writeUpdateRequestTo(path, version string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	body := fmt.Sprintf("%s %d\n", version, time.Now().UnixNano())
+	return os.WriteFile(path, []byte(body), 0o644)
+}
+
+// requestUnitRepair asks for an update run even though the binary is current.
+//
+// The journal permission the device Logs screen needs lives in the unit, not the
+// binary, so an agent that is up to date but outside systemd-journal can only be
+// fixed by the root updater. Detected from inside where the failure is visible.
+func requestUnitRepair(reason string) {
+	if err := writeUpdateRequest(reason); err != nil {
+		log.Printf("could not request unit repair: %v", err)
+		return
+	}
+	log.Printf("agent unit repair requested: %s (see %s)", reason, AgentUpdateRequestPath)
+}
+
+// journalAccessDenied reports whether the agent can read the system journal.
+// A negative result is not fatal -- an agent outside systemd-journal still
+// works, it just has no logs -- so this only drives the repair request.
+func journalAccessDenied(logsStatus string) bool {
+	lower := strings.ToLower(logsStatus)
+	for _, marker := range []string{"permission denied", "not authorized", "access denied"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func restartAgent(service string, userSystemd bool) error {
