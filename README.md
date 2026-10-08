@@ -222,16 +222,16 @@ from [Conventional Commits](https://www.conventionalcommits.org/):
 | `feat:` | minor | `0.2.1` → `0.3.0` |
 | `feat!:`, `BREAKING CHANGE:` | major | `0.3.0` → `1.0.0` |
 
-The workflow publishes the image to GitHub Container Registry and **only then**
-tags the commit (`vX.Y.Z`) and creates the GitHub Release. The order matters: a
-deployment that watches the repository tag would otherwise see a version whose
-image does not exist yet. Publishing first makes "a tag exists" imply "a matching
-image exists".
+The workflow publishes the image to Docker Hub, and mirrors it to GitHub
+Container Registry, and **only then** tags the commit (`vX.Y.Z`) and creates the
+GitHub Release. The order matters: a deployment that watches the repository tag
+would otherwise see a version whose image does not exist yet. Publishing first
+makes "a tag exists" imply "a matching image exists".
 
-Images are published for `linux/amd64` and `linux/arm64` with SLSA provenance and
-an SBOM attached. Authentication uses the automatic `GITHUB_TOKEN`, so no registry
-password is stored in the repository. Pulling the private package needs a token
-with `read:packages`, configured as registry credentials in the deployment
+Images are published for `linux/amd64` with SLSA provenance and an SBOM attached.
+The Docker Hub push needs `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository
+secrets; the GHCR mirror authenticates with the automatic `GITHUB_TOKEN`, so no
+other registry credential exists in the repository.
 platform (Dokploy, Coolify, and so on). Manual runs can force a bump from the
 Actions tab.
 
