@@ -29,9 +29,14 @@ repository was publishing an image anywhere.
 Publish before tagging. The invariant is now **a tag exists implies a matching
 image exists**; if the publish fails, no tag is created and no deploy fires.
 
-Images go to GitHub Container Registry authenticated with the automatic
-`GITHUB_TOKEN`, so there is no registry password in the repository. Published
-for `linux/amd64` and `linux/arm64` with provenance and SBOM attached.
+Images go to Docker Hub, where users pull from, and are mirrored to GitHub
+Container Registry. GHCR needs no credentials at all (the automatic
+`GITHUB_TOKEN` is enough), which is why it is kept as a mirror: a rotated or
+missing Docker Hub secret cannot leave a tag pointing at an image that was never
+published. The Docker Hub push needs `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`
+repository secrets, checked before the build so a missing secret costs seconds
+rather than a full image build. Published for `linux/amd64` with provenance and
+SBOM attached.
 
 ## The upgrade hazard, and why it was caught
 
@@ -107,8 +112,7 @@ by design.
 ## Verified end to end
 
 - `v0.4.0` tagged at `754baad`, matching `origin/main`
-- image `ghcr.io/jose-guilherme93/sync-win` published as `0.4.0`, `v0.4.0` and
-  `latest`, all at `sha256:bf454b67…`
+- image published as `0.4.0`, `v0.4.0` and `latest`, all at `sha256:bf454b67…`
 - release run completed in 40s, against 28 minutes that never finished
 - step order in the log: image push, then tag, then GitHub Release
 - CI green on `main` and `develop`, including the browser end-to-end job and the

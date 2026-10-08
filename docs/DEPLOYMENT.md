@@ -10,7 +10,7 @@ The agent installation is a separate concern; see [INSTALL.md](INSTALL.md).
 Every push to `main` runs the `Release` workflow, which:
 
 1. Computes the next semantic version from Conventional Commits
-2. Builds and pushes the container image to GitHub Container Registry
+2. Builds and pushes the container image to Docker Hub (and mirrors it to GHCR)
 3. **Then** creates the Git tag and the GitHub Release
 
 Step 3 comes after step 2 deliberately. A deployment platform watches the Git
@@ -34,7 +34,7 @@ from the GitHub tag and build, or from the registry tag and pull.
 | Path | Trigger | How |
 | --- | --- | --- |
 | Build from source | GitHub tag / push | Platform reads `docker/Dockerfile.server` and builds |
-| Pull the image | Registry tag in GHCR | Platform pulls `ghcr.io/…/sync-win:<tag>` |
+| Pull the image | Registry tag on Docker Hub | Platform pulls `docker.io/joseguilherme93/sync-win:<tag>` |
 
 `compose.prod.yaml` supports both from the same file: it carries an `image:`
 reference **and** a `build:` section, so Compose builds when asked to and pulls
@@ -50,8 +50,7 @@ Pinning the version is what makes a deploy reproducible. `IMAGE_TAG` defaults
 to `latest` for convenience, but a real deployment should set it explicitly:
 
 ```bash
-IMAGE_NAME=ghcr.io/jose-guilherme93/sync-win \
-IMAGE_TAG=0.3.1 \
+IMAGE_TAG=0.6.4 \
 SYNCWIN_SECRET_KEY=... \
 docker compose -f compose.prod.yaml up -d
 ```
@@ -59,10 +58,16 @@ docker compose -f compose.prod.yaml up -d
 ## The image
 
 ```
-ghcr.io/jose-guilherme93/sync-win:<version>     # 0.3.1
-ghcr.io/jose-guilherme93/sync-win:v<version>    # v0.3.1 — same digest
-ghcr.io/jose-guilherme93/sync-win:latest
+docker.io/joseguilherme93/sync-win:<version>     # 0.6.4
+docker.io/joseguilherme93/sync-win:v<version>    # v0.6.4 — same digest
+docker.io/joseguilherme93/sync-win:latest
 ```
+
+Every release is also mirrored to `ghcr.io/jose-guilherme93/sync-win` with the
+same three tags. The mirror exists because it needs no credentials at all: the
+Release workflow authenticates there with the automatic `GITHUB_TOKEN`, so a
+rotated or missing Docker Hub secret cannot leave a tag pointing at an image
+that was never published. Pull from either — the digests are identical.
 
 All three tags point at the same digest. Both the bare and the `v`-prefixed
 form are published because Docker convention drops the `v` while the Git tag
@@ -83,20 +88,20 @@ The workflow authenticates to GHCR with the automatic `GITHUB_TOKEN`, so **no
 registry password is stored in this repository**. That is the reason GHCR is
 used instead of Docker Hub.
 
-The package is private. A platform pulling it needs a token with
-`read:packages`, configured as registry credentials:
+The Docker Hub package is public, so a platform can pull it with no
+credentials. If you publish your own build instead, configure credentials:
 
-1. Create a personal access token (classic) with `read:packages`, or a
-   fine-grained token with *Packages: read*.
+1. For a private GHCR package, create a personal access token (classic) with
+   `read:packages`, or a fine-grained token with *Packages: read*.
 2. In the platform's registry settings add:
-   - URL: `ghcr.io`
-   - username: the GitHub account that owns the package
-   - password: the token
-3. Point the service at `ghcr.io/jose-guilherme93/sync-win:<tag>`.
+   - URL: `docker.io` (or `ghcr.io` for the mirror)
+   - username: the registry account that owns the image
+   - password: the access token, or the Docker Hub token
+3. Point the service at `docker.io/joseguilherme93/sync-win:<tag>`.
 
 ## Deploying with a Compose file
 
-`compose.prod.yaml` works for both paths. The `image:` default is the GHCR
+`compose.prod.yaml` works for both paths. The `image:` default is the Docker Hub
 reference and the `build:` section is kept, so:
 
 - a platform that only pulls needs no local build
@@ -133,10 +138,10 @@ After a release run, three things should be true together:
 git fetch --tags && git tag --list 'v*' --sort=-v:refname | head -3
 
 # 2. it points at the deployed commit
-git rev-list -n1 v0.3.1
+git rev-list -n1 v0.6.4
 
-# 3. the image exists (needs read:packages)
-docker pull ghcr.io/jose-guilherme93/sync-win:0.3.1
+# 3. the image exists
+docker pull docker.io/joseguilherme93/sync-win:0.6.4
 ```
 
 If the tag exists but the image does not, the ordering invariant has been
