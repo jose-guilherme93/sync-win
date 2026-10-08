@@ -142,16 +142,61 @@ Two agents must never share a working directory. The git index is shared, so
 `docs(memory)` commit absorbed eight files of in-flight work, was pushed, and
 left `develop` failing lint on a mid-edit snapshot.
 
-- One `git worktree add ../sync-win-<topic> -b <branch>` per concurrent task,
-  including two tasks by the same agent.
-- In a shared directory, stage explicit paths and never `git add -A` or
-  `git commit -a`.
+- **Always** create a worktree for a task, even when the main checkout looks
+  clean. A clean `git status` is not evidence the tree is yours: another agent
+  may be between edits, or have staged work you cannot see.
+  `git worktree add ../sync-win-<topic> -b <branch> <base>`.
+- Never `git add -A` or `git commit -a`, in a worktree or anywhere else. Stage
+  explicit paths.
 - Run `git status --short` before staging and read every entry. A path that is
   not yours means stop.
-- Remove the worktree when the task lands: `git worktree remove <path>`.
+- Remove the worktree once the task lands: `git worktree remove <path>`. A
+  container that mounted the tree holds root-owned files inside it, so
+  `rm -rf` may need `sudo` after the stack is down.
+- Compose file binds use absolute paths. A second stack serving a worktree must
+  mount that worktree, or it silently serves the main checkout instead.
 
 See `.agent-memory/decisions/parallel-agents.md` for the full incident and the
 worktree mechanics.
+
+## Verification discipline
+
+A change is not verified until the exact thing that will run in production has
+run. Two failures in this repository's history were both "verified" work that
+had never been executed in its real form.
+
+- **Never verify a pipeline by seeding its output.** A device Logs screen was
+  signed off against rows inserted straight into the database, which bypassed
+  the agent entirely. The screen looked correct while the real path had never
+  worked once, and the released "fix" left production unchanged. Exercise the
+  producer, not the table.
+- **Do not commit a tree that does not compile.** Run the build and the tests
+  before ending a work session, not after. A half-applied edit left for the next
+  session is indistinguishable from a finished one.
+- **Distinguish absent from broken.** An unreadable resource and an empty one
+  look identical unless the code says which. Return an error with the underlying
+  cause (stderr, status, reason) rather than a bare nil.
+- **Do not swallow errors that matter.** Tolerating an older peer is not the
+  same as ignoring a failure; if a step is skipped, say so where a human will
+  see it.
+- **A failing test is a finding until proven otherwise.** Four tests failing at
+  once once exposed a filter that folded an unset value onto a default. Check the
+  code before changing the test.
+- Run `golangci-lint` the way CI does, with `--new-from-rev`. In a worktree,
+  `.git` is a file pointing outside the mount, so the diff filter silently does
+  nothing; mount the parent `.git` and set `GIT_DIR`/`GIT_WORK_TREE` or the run
+  will report every pre-existing issue and look like a regression.
+
+## Commit types drive the release version
+
+The release workflow derives the version from commit subjects. A fix typed as
+`feat` publishes a minor release for what is only a correction, which is a
+promise about new surface area that was not made.
+
+- Use `fix:` for corrections, including a change that only exists to make
+  another fix reach a device.
+- Use `feat:` only for genuinely new user-visible capability.
+- Never edit versions or tags by hand.
 
 ## How to run tests
 

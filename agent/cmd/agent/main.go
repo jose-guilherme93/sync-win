@@ -591,6 +591,17 @@ func cmdDaemon(args []string) {
 	// than hardware telemetry: roughly every 60s at the default 10s interval.
 	const logCollectCycles = 6
 	logCycle := 0
+	// Version check cadence: ~5 minutes at the default 10s interval. Cheap
+	// (one small GET) and independent of the unit the updater runs from, which
+	// is the point: a device whose update timer was never installed still
+	// upgrades itself from here.
+	const updateCheckCycles = 30
+	updateCycle := 0
+	// A unit repair is requested at most once per hour. Without this an agent
+	// that cannot read the journal would ask on every check, and each request
+	// restarts the service.
+	const unitRepairInterval = time.Hour
+	lastUnitRepair := time.Time{}
 	lastStateJSON := ""
 	lastPreferenceAttempt := time.Time{}
 	lastAppInventoryAttempt := time.Time{}
@@ -711,6 +722,24 @@ func cmdDaemon(args []string) {
 				log.Printf("device settings refresh failed: %v", settingsErr)
 			} else {
 				*interval = configured
+			}
+		}
+		// Drive our own upgrade. The daemon cannot replace its binary or unit,
+		// so it signals the root updater instead of waiting for a timer that an
+		// older install may never have created.
+		if err == nil {
+			updateCycle++
+			if updateCycle >= updateCheckCycles {
+				updateCycle = 0
+				requestUpdateForCurrentVersion(*serverURL)
+			}
+			// A journal we cannot read is a unit problem, not a binary one. Ask
+			// the root updater to reconcile the unit, at most hourly: the repair
+			// restarts the service, so requesting it every cycle would loop.
+			if journalAccessDenied(stats.LogsStatus) &&
+				(lastUnitRepair.IsZero() || time.Since(lastUnitRepair) > unitRepairInterval) {
+				lastUnitRepair = time.Now()
+				requestUnitRepair(stats.LogsStatus)
 			}
 		}
 		if serialized, err := json.Marshal(state); err == nil && string(serialized) != lastStateJSON {

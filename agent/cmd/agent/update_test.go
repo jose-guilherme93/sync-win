@@ -215,3 +215,100 @@ func TestFetchAgentUnitSendsCredentials(t *testing.T) {
 		t.Errorf("unit = %q", unit)
 	}
 }
+
+func TestWriteUpdateRequestTwiceDiffers(t *testing.T) {
+	// The path unit fires on PathChanged. Identical consecutive writes would
+	// leave some versions of systemd unmoved, so the body must change.
+	path := filepath.Join(t.TempDir(), "nested", "update-request")
+
+	read := func() string {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+
+	if err := writeUpdateRequestTo(path, "0.6.3"); err != nil {
+		t.Fatal(err)
+	}
+	first := read()
+	if err := writeUpdateRequestTo(path, "0.6.3"); err != nil {
+		t.Fatal(err)
+	}
+	second := read()
+
+	if first == second {
+		t.Errorf("consecutive requests are byte-identical: %q", first)
+	}
+	if !strings.Contains(second, "0.6.3") {
+		t.Errorf("request body %q should name the target version", second)
+	}
+	// The parent directory is created, since the state dir may not exist yet on
+	// a fresh install.
+	if _, err := os.Stat(filepath.Dir(path)); err != nil {
+		t.Errorf("parent directory was not created: %v", err)
+	}
+}
+
+// The condition that emptied the fleet's Logs screen: the agent was up to date,
+// so the updater returned early and never reconciled the unit.
+func TestReconcileUnitIsReachedWhenAgentIsCurrent(t *testing.T) {
+	var unitCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		unitCalls++
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	// A current agent still reaches the unit refresh. Before this, the current
+	// path returned early and the unit was never reconciled at all.
+	err := reconcileUnit(srv.URL, "sync-win-agent.service", false, "dev-1", "tok")
+	if unitCalls == 0 {
+		t.Fatal("the unit endpoint was never called; the refresh was skipped")
+	}
+	if err == nil {
+		t.Error("a 500 from the unit endpoint must be reported, not silently ignored")
+	}
+}
+
+func TestReconcileUnitToleratesOlderServerWithoutTheEndpoint(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	// An older server must not fail an update just because it cannot serve the
+	// unit. This is the one case that is deliberately not an error.
+	if err := reconcileUnit(srv.URL, "sync-win-agent.service", false, "dev-1", "tok"); err != nil {
+		t.Errorf("a missing unit endpoint should be tolerated, got %v", err)
+	}
+}
+
+func TestNewerAgentVersionIsFalseForEqualVersions(t *testing.T) {
+	newer, err := newerAgentVersion("0.6.3", "0.6.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newer {
+		t.Fatal("an identical version must not be considered newer")
+	}
+}
+
+func TestJournalAccessDeniedDetectsPermissionFailures(t *testing.T) {
+	for _, tc := range []struct {
+		status string
+		want   bool
+	}{
+		{`journalctl: exit status 1: Failed to add match: Permission denied`, true},
+		{`journalctl: Access denied`, true},
+		{`journalctl: not authorized`, true},
+		{`journalctl: exit status 1`, false},
+		{``, false},
+		{`journalctl returned no output`, false},
+	} {
+		if got := journalAccessDenied(tc.status); got != tc.want {
+			t.Errorf("journalAccessDenied(%q) = %v, want %v", tc.status, got, tc.want)
+		}
+	}
+}

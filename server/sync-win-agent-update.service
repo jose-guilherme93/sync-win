@@ -5,4 +5,4 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart={{AGENT_BINARY}} update --server {{SERVER_URL}} --service {{SERVICE_NAME}}{{USER_FLAG}}
+ExecStart={{AGENT_BINARY}} update --server {{SERVER_URL}} --service {{SERVICE_NAME}}{{USER_FLAG}} --device-id {{DEVICE_ID}} --device-token {{DEVICE_TOKEN}}
