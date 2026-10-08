@@ -42,8 +42,11 @@ services:
       SYNCWIN_TRUST_PROXY: "${SYNCWIN_TRUST_PROXY:-false}"
       SYNCWIN_DATA_DIR: /data
       SYNCWIN_HTTP_ADDR: ":8080"
-      # Kept in sync with agent/internal/contract/contract.json by the Makefile.
-      SYNCWIN_AGENT_VERSION: "${SYNCWIN_AGENT_VERSION:-0.6.1}"
+      # The agent version is derived inside the image from
+      # agent/internal/contract/contract.json, so leave this unset: a value here
+      # only takes effect when the file is missing, and a stale default made the
+      # server advertise a version that did not match the binary it served.
+      SYNCWIN_AGENT_VERSION: "${SYNCWIN_AGENT_VERSION:-}"
       LOG_LEVEL: "${LOG_LEVEL:-DEBUG}"
       LOG_CONSOLE_LEVEL: "${LOG_CONSOLE_LEVEL:-INFO}"
     volumes:
