@@ -3,10 +3,18 @@
 # stage only prepares the toolchain and installs; air rebuilds the server.
 FROM golang:1.25-alpine AS agent-build
 WORKDIR /src
+# jq extracts the agent version from contract.json below, which is the single
+# source of truth for it.
+RUN apk add --no-cache jq
 COPY agent/go.mod ./
 RUN go mod download
 COPY agent ./agent
 RUN cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/sync-win-agent ./cmd/agent
+# The server reports this version and the updater rejects a downloaded binary
+# whose version differs from it. Deriving it from the contract here, rather than
+# relying on the env var, is what keeps the advertised version and the served
+# binary from drifting apart.
+RUN jq -r '.agent_version' agent/internal/contract/contract.json > /out/agent-version.txt
 
 FROM golang:1.25-alpine
 
@@ -20,6 +28,7 @@ RUN go mod download
 
 # These files are served by the development install endpoint.
 COPY --from=agent-build /out/sync-win-agent /app/sync-win-agent
+COPY --from=agent-build /out/agent-version.txt /app/agent-version.txt
 COPY scripts/install.sh /app/install.sh
 COPY server/sync-win-agent.service /app/sync-win-agent.service
 COPY server/sync-win-agent-update.service /app/sync-win-agent-update.service

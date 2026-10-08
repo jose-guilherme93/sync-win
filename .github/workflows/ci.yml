@@ -180,9 +180,11 @@ jobs:
   e2e:
     name: Browser end-to-end
     runs-on: ubuntu-latest
-    # The dev stack brings up Postgres-free SQLite and the Vite dev server; the
-    # suite drives a real Chrome over CDP.
-    timeout-minutes: 30
+    # A green run takes about 4m30s, of which the browser suite is under 3m.
+    # This bound is the backstop for a wedge that no individual step timeout
+    # catches: it used to be 30 minutes, which meant one hung CDP session cost
+    # half an hour of runner time before anything gave up.
+    timeout-minutes: 10
     needs: [web]
     steps:
       - uses: actions/checkout@v4
@@ -197,6 +199,7 @@ jobs:
           agent-browser install --with-deps
 
       - name: Start the dev stack
+        timeout-minutes: 6
         # data-dev is gitignored, so a fresh checkout does not have it. The
         # Makefile creates it before `up` for the same reason; letting Docker
         # create a missing bind-mount source is a needless difference from the
@@ -206,6 +209,7 @@ jobs:
           docker compose -f compose.dev.yaml up -d --build
 
       - name: Wait for the server and dashboard
+        timeout-minutes: 6
         run: |
           set -euo pipefail
           for _ in $(seq 1 60); do
@@ -221,6 +225,7 @@ jobs:
           exit 1
 
       - name: Run the browser suite
+        timeout-minutes: 4
         run: scripts/e2e.sh
 
       # Container logs are the only place a server-side 5xx or a proxy error will

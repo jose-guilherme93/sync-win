@@ -2,16 +2,24 @@
 # SyncWin — production stack
 # =============================================================================
 # Single image serving both the API and the compiled dashboard, published by the
-# Release workflow to GitHub Container Registry. Universal: works with plain
-# Docker Compose, Dokploy, Coolify or any platform that runs a Compose file.
+# Release workflow to Docker Hub and mirrored to GitHub Container Registry.
+# Universal: works with plain Docker Compose, Dokploy, Coolify or any platform
+# that runs a Compose file.
 #
 # The deployment follows the Git tag, and the Release workflow publishes the
 # image before creating that tag, so a tag always has a matching image.
 #
-# ghcr.io is the default because the Release workflow authenticates with the
-# automatic GITHUB_TOKEN: no registry password exists in this repository to leak
-# or rotate. Pulling a private package needs a token with read:packages, set as
-# IMAGE_NAME credentials by the platform (Dokploy/Coolify registry settings).
+# Docker Hub is where users pull from:
+#   IMAGE_NAME=<dockerhub-user>/sync-win
+# The image there carries the same `0.6.3`, `v0.6.3` and `latest` tags as GHCR.
+#
+# The default stays on ghcr.io because it needs no credentials on either side:
+# the Release workflow authenticates with the automatic GITHUB_TOKEN and public
+# packages pull anonymously. Docker Hub works with no setup to pull, but the
+# publish side needs DOCKERHUB_USERNAME/DOCKERHUB_TOKEN repository secrets, and
+# a default that pointed there would break for anyone who had not set them.
+# A private GHCR package needs a token with read:packages, configured as the
+# image credentials by the platform (Dokploy/Coolify registry settings).
 #
 # The `build:` section stays so `make prod` works from a checkout without a
 # registry. A platform that only pulls from a registry can drop it.

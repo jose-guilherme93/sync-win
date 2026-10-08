@@ -68,7 +68,7 @@ if ! command -v agent-browser >/dev/null 2>&1; then
 fi
 
 cleanup() {
-  agent-browser close --all >/dev/null 2>&1 || true
+  timeout "${AB_CMD_TIMEOUT:-45}" agent-browser close --all >/dev/null 2>&1 || true
   rm -rf "${WORK}"
 }
 trap cleanup EXIT
@@ -92,7 +92,13 @@ json_get() { python3 -c "import json,sys;d=json.load(sys.stdin);print(d${1})"; }
 # eval_js runs the expression in the page and prints the last line. agent-browser
 # prints the return value as a JSON string, so plain values come back quoted
 # ("CLICKED"). unquote strips that so shell comparisons stay readable.
-eval_js() { agent-browser eval "$1" 2>&1 | tail -1; }
+#
+# Every agent-browser call is wrapped in `timeout`. Without it a wedged CDP
+# session hangs the whole suite and burns the job's full timeout: one run sat at
+# 19 minutes instead of 4. A bound here turns a hang into a normal failed
+# assertion, which the script already reports.
+AB_CMD_TIMEOUT="${AB_CMD_TIMEOUT:-45}"
+eval_js() { timeout "${AB_CMD_TIMEOUT}" agent-browser eval "$1" 2>&1 | tail -1; }
 
 # unquote <value> — removes the surrounding quotes agent-browser adds, so
 # callers can compare against bare words instead of hand-writing "CLICKED".
@@ -284,7 +290,7 @@ section "Sign in"
 agent-browser close --all >/dev/null 2>&1 || true
 sleep 1
 
-agent-browser open "${BASE}/" --args "--no-sandbox" >/dev/null
+timeout 60 agent-browser open "${BASE}/" --args "--no-sandbox" >/dev/null
 sleep 3
 
 if eval_js "!!document.querySelector('input[type=email]')" | grep -q true; then
@@ -404,7 +410,7 @@ check "error banner shown" "$(eval_js "document.querySelector('[role=alert]')?.t
 check "error is not reported as an empty inventory" "$(eval_js "[...document.querySelectorAll('.empty-state strong')].map(e=>e.textContent).join(',')")" "Could not load services"
 
 # Recovery: after a clean reload the screen must show the data again.
-agent-browser reload >/dev/null
+timeout "${AB_CMD_TIMEOUT}" agent-browser reload >/dev/null
 sleep 4
 ROW=$(eval_js "(()=>{const r=[...document.querySelectorAll('tr,[role=row]')].find(x=>x.textContent.includes(${HOSTNAME@Q}));if(!r)return 'MISSING';r.click();return 'CLICKED';})()")
 sleep 3
