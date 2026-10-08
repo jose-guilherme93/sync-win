@@ -56,7 +56,8 @@ sync-win/
 │   │   └── docker/                 # Docker command queue and broadcaster
 │   ├── sync-win-agent.service           # Systemd unit template
 │   ├── sync-win-agent-update.service    # Auto-update service
-│   └── sync-win-agent-update.timer      # Auto-update timer
+│   ├── sync-win-agent-update.timer      # Auto-update timer
+│   └── sync-win-agent-update.path       # On-demand update trigger (daemon request)
 ├── agent/
 │   ├── cmd/agent/main.go           # Entry point (CLI daemon mode)
 │   ├── collectors/                 # 13 hardware/Docker collectors
@@ -124,6 +125,32 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 The `Release` workflow derives the version automatically on every push to `main`
 (`feat` = minor, `fix`/anything else = patch, `feat!`/`BREAKING CHANGE` = major).
 Never bump versions or create tags by hand — use the right commit type instead.
+
+## Distribution
+
+The server image is published to Docker Hub (`docker.io/joseguilherme93/sync-win`)
+and mirrored to GHCR, tagged `<version>`, `v<version>` and `latest` on every
+release. Publishing happens **before** the tag is created, so a tag always has a
+matching image. Never reorder those steps.
+
+**The agent ships inside the server image.** `docker/Dockerfile.server` compiles
+`agent/cmd/agent` in a build stage and copies the binary to `/app/sync-win-agent`,
+which the server serves at `GET /api/agent/download`. Its version is extracted
+from `agent/internal/contract/contract.json` into `/app/agent-version.txt` at
+build time and reported by `GET /api/agent/version`.
+
+Two consequences worth remembering:
+
+- There is no separate agent release. Publishing the server image *is* the agent
+  release, so an agent fix is a server image. Do not add a second artefact.
+- The advertised version and the served binary must always come from the same
+  build. Deriving the version from an env var instead once left a dev server
+  advertising an older version than the binary it handed out, and the updater
+  rejects that mismatch, so no agent could update at all.
+
+A device does not pull the image: it downloads the binary over HTTP and swaps the
+file. The image being current is necessary but not sufficient — the device still
+needs a trigger, which is the update timer plus the path unit.
 
 ## How to develop
 

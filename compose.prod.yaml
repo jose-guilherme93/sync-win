@@ -9,17 +9,14 @@
 # The deployment follows the Git tag, and the Release workflow publishes the
 # image before creating that tag, so a tag always has a matching image.
 #
-# Docker Hub is where users pull from:
-#   IMAGE_NAME=<dockerhub-user>/sync-win
-# The image there carries the same `0.6.3`, `v0.6.3` and `latest` tags as GHCR.
+# Docker Hub is where users pull from, and it is the default:
+#   docker.io/joseguilherme93/sync-win:<version>
+# The same `0.6.4`, `v0.6.4` and `latest` tags are mirrored to
+# ghcr.io/jose-guilherme93/sync-win, which needs no credentials on either side
+# (the Release workflow authenticates with the automatic GITHUB_TOKEN) and is
+# what keeps a release from failing if the Docker Hub secret is ever rotated.
 #
-# The default stays on ghcr.io because it needs no credentials on either side:
-# the Release workflow authenticates with the automatic GITHUB_TOKEN and public
-# packages pull anonymously. Docker Hub works with no setup to pull, but the
-# publish side needs DOCKERHUB_USERNAME/DOCKERHUB_TOKEN repository secrets, and
-# a default that pointed there would break for anyone who had not set them.
-# A private GHCR package needs a token with read:packages, configured as the
-# image credentials by the platform (Dokploy/Coolify registry settings).
+# Override with IMAGE_NAME to run your own build or a different registry.
 #
 # The `build:` section stays so `make prod` works from a checkout without a
 # registry. A platform that only pulls from a registry can drop it.
@@ -35,7 +32,7 @@
 # =============================================================================
 services:
   server:
-    image: ${IMAGE_NAME:-ghcr.io/jose-guilherme93/sync-win}:${IMAGE_TAG:-latest}
+    image: ${IMAGE_NAME:-docker.io/joseguilherme93/sync-win}:${IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: docker/Dockerfile.server
