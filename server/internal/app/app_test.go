@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1284,5 +1285,62 @@ func TestAgentUnitTemplateRendersForAuthenticatedDevice(t *testing.T) {
 	s.handleAgentUnitTemplate(missingRec, missing)
 	if missingRec.Code != http.StatusBadRequest {
 		t.Errorf("missing credentials status = %d, want 400", missingRec.Code)
+	}
+}
+
+// The installer runs on a device and cannot read /app, so it fetches the unit
+// templates. Serving from a map keyed by short name is what keeps this from
+// being an arbitrary file read of the server's filesystem.
+func TestAgentUnitFileServesOnlyAllowlistedTemplates(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range agentUnitFiles {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("[Unit]\nDescription="+name+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("SYNCWIN_UNIT_DIR", dir)
+
+	s := newTestServer(t)
+	for key, name := range agentUnitFiles {
+		req := httptest.NewRequest(http.MethodGet, "/api/agent/units?name="+key, nil)
+		rec := httptest.NewRecorder()
+		s.handleAgentUnitFile(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("name=%s: status = %d, want 200", key, rec.Code)
+			continue
+		}
+		if !strings.Contains(rec.Body.String(), "[Unit]") {
+			t.Errorf("name=%s: body = %q", key, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), name) {
+			t.Errorf("name=%s: served the wrong template: %q", key, rec.Body.String())
+		}
+	}
+}
+
+func TestAgentUnitFileRejectsEverythingElse(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "sync-win-agent.service"), []byte("[Unit]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SYNCWIN_UNIT_DIR", dir)
+
+	s := newTestServer(t)
+	// A traversal attempt, a bare filename and an empty value must all miss the
+	// allowlist rather than reach the filesystem.
+	for _, name := range []string{"", "../sync-win-agent.service", "/etc/passwd", "sync-win-agent.service", "AGENT", "agent/../agent"} {
+		req := httptest.NewRequest(http.MethodGet, "/api/agent/units?name="+url.QueryEscape(name), nil)
+		rec := httptest.NewRecorder()
+		s.handleAgentUnitFile(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("name=%q: status = %d, want 404", name, rec.Code)
+		}
+	}
+
+	post := httptest.NewRequest(http.MethodPost, "/api/agent/units?name=agent", nil)
+	postRec := httptest.NewRecorder()
+	s.handleAgentUnitFile(postRec, post)
+	if postRec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST status = %d, want 405", postRec.Code)
 	}
 }
