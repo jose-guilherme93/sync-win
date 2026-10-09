@@ -209,6 +209,17 @@ had never been executed in its real form.
 - **Do not swallow errors that matter.** Tolerating an older peer is not the
   same as ignoring a failure; if a step is skipped, say so where a human will
   see it.
+- **Understand where a value comes from before changing how you react to its
+  absence.** An installer skipped the unit templates with a quiet warning. That
+  silence was treated as the bug, so the warning became a hard failure. The real
+  bug was that it looked for them at `/app`, a path that only exists inside the
+  server container, so it had never found them on any device. The hard failure
+  then tripped the rollback trap and refused to install the agent at all. The
+  quiet warning was a symptom; the wrong path was the disease.
+- **Never let a non-essential step abort the whole operation.** The installer
+  rolls back on any non-zero exit. Automatic updates being unavailable is a
+  degraded outcome; refusing to install the agent is a broken one. Keep those
+  separate, and only make the essential steps fatal.
 - **A failing test is a finding until proven otherwise.** Four tests failing at
   once once exposed a filter that folded an unset value onto a default. Check the
   code before changing the test.

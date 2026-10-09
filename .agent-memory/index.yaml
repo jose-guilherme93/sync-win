@@ -33,6 +33,9 @@ entries:
   - id: decisions/device-log-storage
     path: decisions/device-log-storage.md
     type: decision
+  - id: decisions/installer-unit-templates
+    path: decisions/installer-unit-templates.md
+    type: decision
   - id: sessions/260925-p0-start
     path: sessions/260925-p0-start.md
     type: session
