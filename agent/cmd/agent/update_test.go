@@ -176,7 +176,7 @@ func TestFetchAgentUnitRejectsUnrenderedTemplate(t *testing.T) {
 
 	// Writing this to /etc/systemd/system would break the service, so it must
 	// be rejected rather than installed.
-	if _, err := fetchAgentUnit(srv.URL, "dev-1", "tok"); err == nil {
+	if _, err := fetchAgentUnit(srv.URL); err == nil {
 		t.Fatal("expected an error for a unit still containing placeholders")
 	}
 }
@@ -187,32 +187,62 @@ func TestFetchAgentUnitRejectsNonUnitResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := fetchAgentUnit(srv.URL, "dev-1", "tok"); err == nil {
+	if _, err := fetchAgentUnit(srv.URL); err == nil {
 		t.Fatal("expected an error for a response that is not a unit")
 	}
 }
 
-func TestFetchAgentUnitSendsCredentials(t *testing.T) {
-	var gotID, gotToken string
+// The unit refresh must work from a device whose update service carries no
+// credentials, which is every device installed before those flags existed. That
+// is exactly the population that needs its unit repaired.
+func TestFetchAgentUnitNeedsNoCredentials(t *testing.T) {
+	var query string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotID = r.URL.Query().Get("device_id")
-		gotToken = r.URL.Query().Get("device_token")
+		query = r.URL.RawQuery
+		if r.URL.Path != "/api/agent/units" {
+			t.Errorf("path = %q, want /api/agent/units (the public endpoint)", r.URL.Path)
+		}
 		_, _ = w.Write([]byte("[Unit]\n\n[Service]\nExecStart=/usr/local/bin/sync-win-agent\n"))
 	}))
 	defer srv.Close()
 
-	unit, err := fetchAgentUnit(srv.URL, "dev-42", "secret token")
+	unit, err := fetchAgentUnit(srv.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotID != "dev-42" {
-		t.Errorf("device_id = %q", gotID)
+	if strings.Contains(query, "device_token") {
+		t.Errorf("query %q carries a credential; it must not be required", query)
 	}
-	if gotToken != "secret token" {
-		t.Errorf("device_token = %q (must be escaped and round-trip)", gotToken)
+	if !strings.Contains(query, "name=agent") {
+		t.Errorf("query = %q, want name=agent", query)
 	}
 	if !strings.Contains(unit, "ExecStart=") {
 		t.Errorf("unit = %q", unit)
+	}
+}
+
+func TestApplySupplementaryGroups(t *testing.T) {
+	unit := "[Unit]\nDescription=x\n\n[Service]\nExecStart=/bin/true\nSupplementaryGroups=docker systemd-journal\n"
+
+	got := applySupplementaryGroups(unit, "systemd-journal")
+	if !strings.Contains(got, "SupplementaryGroups=systemd-journal") {
+		t.Errorf("did not replace the line:\n%s", got)
+	}
+	if strings.Contains(got, "docker") {
+		t.Errorf("kept a group the host does not have:\n%s", got)
+	}
+
+	// No groups available: the line must go, not be left empty.
+	got = applySupplementaryGroups(unit, "")
+	if strings.Contains(got, "SupplementaryGroups") {
+		t.Errorf("kept an empty directive, which systemd rejects:\n%s", got)
+	}
+
+	// A unit without the line gains it under [Service].
+	plain := "[Unit]\nDescription=x\n\n[Service]\nExecStart=/bin/true\n"
+	got = applySupplementaryGroups(plain, "adm")
+	if !strings.Contains(got, "SupplementaryGroups=adm") {
+		t.Errorf("did not add the line:\n%s", got)
 	}
 }
 

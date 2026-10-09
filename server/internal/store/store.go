@@ -422,6 +422,7 @@ func NewStore(root string) (*Store, error) {
 	s.migrateAddWorkspaceDirsColumn()
 	s.migrateAddStatusColumn()
 	s.migrateAddFingerprintColumn()
+	s.migrateAddMachineIDColumn()
 	if err := s.migrateAddSystemInventoryColumns(context.Background()); err != nil {
 		return nil, err
 	}
@@ -556,6 +557,25 @@ func (s *Store) migrateAddFingerprintColumn() {
 	}
 }
 
+// migrateAddMachineIDColumn adds the machine identifier used to recognize a
+// device that is being reinstalled. The CREATE TABLE above is a no-op on an
+// existing database, so the column needs adding explicitly, the same way the
+// fingerprint column was.
+//
+// The indexes live here rather than next to the CREATE TABLE because indexing a
+// column that does not exist yet would abort the whole schema step on an
+// existing database, before this migration had a chance to add it.
+func (s *Store) migrateAddMachineIDColumn() {
+	ctx := context.Background()
+	var count int
+	_ = s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM pragma_table_info('devices') WHERE name='machine_id'").Scan(&count)
+	if count == 0 {
+		_, _ = s.db.ExecContext(ctx, "ALTER TABLE devices ADD COLUMN machine_id TEXT NOT NULL DEFAULT ''")
+	}
+	_, _ = s.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_devices_owner_machine ON devices(owner_id, machine_id)")
+	_, _ = s.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_devices_machine ON devices(machine_id)")
+}
+
 func (s *Store) migrateHashDeviceTokens() {
 	rows, err := s.db.Query("SELECT id, device_token FROM devices")
 	if err != nil {
@@ -628,8 +648,13 @@ func (s *Store) initSchema() error {
 		display_name TEXT NOT NULL DEFAULT '',
 		tags_json TEXT NOT NULL DEFAULT '[]',
 		collection_interval_seconds INTEGER NOT NULL DEFAULT 10,
-		updates_json TEXT NOT NULL DEFAULT '{"status":"not_reported","updates":[]}'
+		updates_json TEXT NOT NULL DEFAULT '{"status":"not_reported","updates":[]}',
+		machine_id TEXT NOT NULL DEFAULT ''
 	);
+	-- Indexes on machine_id are deliberately NOT created here, for the same
+	-- reason as idx_logs_owner_ts below: on an existing database the CREATE TABLE
+	-- above is a no-op, so the column does not exist yet and indexing it fails
+	-- before migrateAddMachineIDColumn can add it. That function creates them.
 	CREATE TABLE IF NOT EXISTS files (
 		id TEXT PRIMARY KEY,
 		device_id TEXT NOT NULL,
@@ -874,8 +899,6 @@ func (s *Store) RegisterDevice(hostname, userID, ownerID, fingerprint string) (D
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Hardware fingerprints are metadata only. They must never authenticate or
-	// silently reconnect a device; enrollment always creates a fresh credential.
 	if userID == "" {
 		userID = "user-" + newID()
 	}
@@ -888,9 +911,21 @@ func (s *Store) RegisterDevice(hostname, userID, ownerID, fingerprint string) (D
 	if err := validateHostname(hostname); err != nil {
 		return Device{}, err
 	}
+	return s.insertDeviceLocked(hostname, userID, ownerID, fingerprint)
+}
 
-	// Do not reuse a device record based on owner/hostname either: a new
-	// enrollment must always receive a new credential.
+// registerDeviceLocked is the enrollment path's variant, which derives the user
+// id from the owner. Kept separate from RegisterDevice so the two entry points
+// stay explicit about what they create.
+func (s *Store) registerDeviceLocked(hostname, ownerID, fingerprint string) (Device, error) {
+	return s.insertDeviceLocked(hostname, "user-"+newID(), ownerID, fingerprint)
+}
+
+func (s *Store) insertDeviceLocked(hostname, userID, ownerID, fingerprint string) (Device, error) {
+	// A new enrollment always receives a fresh credential. Reuse of an existing
+	// record is a separate, explicit path (EnrollDevice), and it also rotates the
+	// token rather than reviving one. Hardware fingerprints remain metadata that
+	// never authenticate or reconnect a device.
 	token := newToken()
 
 	now := time.Now().UTC()

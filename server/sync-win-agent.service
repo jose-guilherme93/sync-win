@@ -29,7 +29,12 @@ ProtectControlGroups=yes
 RestrictSUIDSGID=yes
 RestrictRealtime=yes
 RestrictNamespaces=yes
-ReadWritePaths=/var/lib/sync-win /var/log/sync-win /etc/sync-win /var/run/docker.sock
+# StateDirectory makes systemd create /var/lib/sync-win owned by the service
+# user and add it to the writable set. Without it the state file lands under a
+# home that does not exist, inside a filesystem ProtectSystem=strict mounted
+# read-only, and every restart forgets which files were already uploaded.
+StateDirectory=sync-win
+ReadWritePaths=/var/log/sync-win /etc/sync-win /var/run/docker.sock
 
 [Install]
 WantedBy=multi-user.target
