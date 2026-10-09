@@ -28,16 +28,22 @@ SYNCWIN_DATA_DIR="/var/lib/sync-win"
 SYNCWIN_LOG_DIR="/var/log/sync-win"
 SYNCWIN_SERVICE_NAME="sync-win-agent.service"
 SYNCWIN_SERVICE_FILE="/etc/systemd/system/${SYNCWIN_SERVICE_NAME}"
-SYNCWIN_SERVICE_TEMPLATE="/app/sync-win-agent.service"
+
+# The unit templates live on the server. /app is a path inside the server
+# container, so a client can never read it: download_unit_templates fetches them
+# into TMP_DIR and fills these in. That is the bug that meant no device ever got
+# the update timer. The agent unit also has an inline fallback below; the updater
+# units do not, and without them only automatic updates are lost.
+SYNCWIN_SERVICE_TEMPLATE=""
 SYNCWIN_UPDATE_SERVICE_NAME="sync-win-agent-update.service"
 SYNCWIN_UPDATE_TIMER_NAME="sync-win-agent-update.timer"
 SYNCWIN_UPDATE_SERVICE_FILE="/etc/systemd/system/${SYNCWIN_UPDATE_SERVICE_NAME}"
 SYNCWIN_UPDATE_TIMER_FILE="/etc/systemd/system/${SYNCWIN_UPDATE_TIMER_NAME}"
-SYNCWIN_UPDATE_SERVICE_TEMPLATE="/app/sync-win-agent-update.service"
-SYNCWIN_UPDATE_TIMER_TEMPLATE="/app/sync-win-agent-update.timer"
+SYNCWIN_UPDATE_SERVICE_TEMPLATE=""
+SYNCWIN_UPDATE_TIMER_TEMPLATE=""
 SYNCWIN_UPDATE_PATH_NAME="sync-win-agent-update.path"
 SYNCWIN_UPDATE_PATH_FILE="/etc/systemd/system/${SYNCWIN_UPDATE_PATH_NAME}"
-SYNCWIN_UPDATE_PATH_TEMPLATE="/app/sync-win-agent-update.path"
+SYNCWIN_UPDATE_PATH_TEMPLATE=""
 SYNCWIN_UPDATE_REQUEST_FILE="/var/lib/sync-win/update-request"
 SYNCWIN_AUTO_UPDATE="${SYNCWIN_AUTO_UPDATE:-1}"
 
@@ -366,6 +372,79 @@ download_binary() {
     success "Binary downloaded ($(wc -c < "$binary_path") bytes)"
 }
 
+# download_unit_templates fetches the systemd unit templates from the server.
+#
+# They cannot be read locally: the installer runs on the device, and their old
+# path (/app/...) exists only inside the server container. A missing template is
+# not fatal — the agent unit has an inline fallback and the updater units only
+# affect automatic updates — so this warns and lets the install continue.
+download_unit_templates() {
+    local curl_opts=(
+        --fail
+        --silent
+        --show-error
+        --location
+        --retry 3
+        --retry-all-errors
+        --connect-timeout 10
+        --max-time 30
+    )
+    local fetched=0
+    local mapping=(
+        "agent:${SYNCWIN_SERVICE_NAME}"
+        "update-service:${SYNCWIN_UPDATE_SERVICE_NAME}"
+        "update-timer:${SYNCWIN_UPDATE_TIMER_NAME}"
+        "update-path:${SYNCWIN_UPDATE_PATH_NAME}"
+    )
+
+    for entry in "${mapping[@]}"; do
+        local key="${entry%%:*}"
+        local filename="${entry#*:}"
+        local target="${TMP_DIR}/${filename}"
+        if curl "${curl_opts[@]}" "${SYNCWIN_SERVER}/api/agent/units?name=${key}" -o "$target" 2>/dev/null \
+            && grep -q '^\[Unit\]' "$target"; then
+            fetched=$((fetched + 1))
+        else
+            rm -f "$target"
+        fi
+    done
+
+    [ -f "${TMP_DIR}/${SYNCWIN_SERVICE_NAME}" ] && SYNCWIN_SERVICE_TEMPLATE="${TMP_DIR}/${SYNCWIN_SERVICE_NAME}"
+    [ -f "${TMP_DIR}/${SYNCWIN_UPDATE_SERVICE_NAME}" ] && SYNCWIN_UPDATE_SERVICE_TEMPLATE="${TMP_DIR}/${SYNCWIN_UPDATE_SERVICE_NAME}"
+    [ -f "${TMP_DIR}/${SYNCWIN_UPDATE_TIMER_NAME}" ] && SYNCWIN_UPDATE_TIMER_TEMPLATE="${TMP_DIR}/${SYNCWIN_UPDATE_TIMER_NAME}"
+    [ -f "${TMP_DIR}/${SYNCWIN_UPDATE_PATH_NAME}" ] && SYNCWIN_UPDATE_PATH_TEMPLATE="${TMP_DIR}/${SYNCWIN_UPDATE_PATH_NAME}"
+
+    if [ "$fetched" -eq 4 ]; then
+        success "Service templates downloaded"
+    else
+        warn "Only ${fetched}/4 service templates were downloaded from the server"
+        warn "The agent will still be installed; automatic updates may be unavailable"
+    fi
+}
+
+# supplementary_groups_directive prints the SupplementaryGroups= line for groups
+# that actually exist here.
+#
+# systemd refuses to start a unit that names a group the host does not have, so
+# a fixed `docker systemd-journal` line made the service fail to start on any
+# host without a docker group — an Arch install with no Docker, for example,
+# reported "Service installed but not running yet" and nothing more.
+supplementary_groups_directive() {
+    local groups=""
+    if getent group docker >/dev/null 2>&1; then
+        groups="docker"
+    fi
+    # systemd-journal is the narrow grant for journal reads. Fall back to adm,
+    # which also has it, only when systemd-journal is absent.
+    if getent group systemd-journal >/dev/null 2>&1; then
+        groups="${groups}${groups:+ }systemd-journal"
+    elif getent group adm >/dev/null 2>&1; then
+        groups="${groups}${groups:+ }adm"
+    fi
+    [ -n "$groups" ] && printf 'SupplementaryGroups=%s' "$groups"
+    return 0
+}
+
 verify_checksum() {
     info "Downloading checksums..."
     local checksums_path="${TMP_DIR}/checksums.txt"
@@ -461,6 +540,24 @@ WantedBy=multi-user.target'
     systemctl stop "$SYNCWIN_SERVICE_NAME" 2>/dev/null || true
 
     echo "$service_content" > "$SYNCWIN_SERVICE_FILE"
+
+    # Recompute the supplementary groups for this host. The template cannot be
+    # trusted for this: it lists docker, and systemd refuses to start a unit that
+    # names a group the host does not have. See supplementary_groups_directive.
+    local directive
+    directive="$(supplementary_groups_directive)"
+    if [ -n "$directive" ]; then
+        if grep -q '^SupplementaryGroups=' "$SYNCWIN_SERVICE_FILE"; then
+            sed -i "s|^SupplementaryGroups=.*|${directive}|" "$SYNCWIN_SERVICE_FILE"
+        else
+            sed -i "/^\[Service\]/a ${directive}" "$SYNCWIN_SERVICE_FILE"
+        fi
+        info "Supplementary groups: ${directive#SupplementaryGroups=}"
+    else
+        sed -i '/^SupplementaryGroups=/d' "$SYNCWIN_SERVICE_FILE"
+        warn "No supplementary groups available; the agent will run without docker or journal access"
+    fi
+
     systemctl daemon-reload
     success "Systemd service installed"
 }
@@ -471,16 +568,18 @@ install_auto_update() {
         return 0
     fi
     # Missing templates used to be a warning and an early return, which is how a
-    # device ended up with no way to ever receive a fix. Without the updater the
-    # only remedy is a manual reinstall, so this is a failure, not a note.
+    # device ended up with no way to ever receive a fix. It is now only reached
+    # if the download failed, and it stays a warning rather than aborting:
+    # losing automatic updates is bad, but refusing to install the agent at all
+    # is worse, and the rollback trap made the old hard failure do exactly that.
     local missing=""
     for tpl in "$SYNCWIN_UPDATE_SERVICE_TEMPLATE" "$SYNCWIN_UPDATE_TIMER_TEMPLATE" "$SYNCWIN_UPDATE_PATH_TEMPLATE"; do
-        [ -f "$tpl" ] || missing="$missing $(basename "$tpl")"
+        [ -n "$tpl" ] && [ -f "$tpl" ] || missing="$missing $(basename "${tpl:-unknown}")"
     done
     if [ -n "$missing" ]; then
-        error "Updater templates missing:${missing}"
-        error "Automatic updates cannot be enabled; reinstall from a current server."
-        return 1
+        warn "Updater templates missing:${missing}"
+        warn "Automatic updates were not enabled; re-run this installer later"
+        return 0
     fi
 
     sed \
@@ -640,9 +739,9 @@ verify_agent_readiness() {
     # reports Loaded: not-found while the process keeps running from a
     # definition held in memory) or one that predates systemd-journal is fixed
     # the same way: regenerate it from the current template.
-    if [ ! -f "$SYNCWIN_SERVICE_FILE" ] || ! grep -q "systemd-journal" "$SYNCWIN_SERVICE_FILE"; then
+    if [ ! -f "$SYNCWIN_SERVICE_FILE" ] || ! grep -qE "systemd-journal|adm" "$SYNCWIN_SERVICE_FILE"; then
         if [ -f "$SYNCWIN_SERVICE_FILE" ]; then
-            warn "The agent unit lacks 'systemd-journal'; the Logs screen will stay empty."
+            warn "The agent unit has no journal group; the Logs screen will stay empty."
         else
             warn "The agent unit file is missing; reinstalling it."
         fi
@@ -650,7 +749,7 @@ verify_agent_readiness() {
         configure_service >/dev/null 2>&1
         systemctl daemon-reload
         systemctl restart "$SYNCWIN_SERVICE_NAME" >/dev/null 2>&1
-        if [ -f "$SYNCWIN_SERVICE_FILE" ] && grep -q "systemd-journal" "$SYNCWIN_SERVICE_FILE"; then
+        if [ -f "$SYNCWIN_SERVICE_FILE" ] && grep -qE "systemd-journal|adm" "$SYNCWIN_SERVICE_FILE"; then
             success "Agent unit regenerated with journal access"
         else
             problems=$((problems + 1))
@@ -734,6 +833,7 @@ main() {
     backup_existing
     step "7" "Downloading SyncWin Agent..."
     download_binary
+    download_unit_templates
     step "8" "Verifying integrity..."
     verify_checksum
     step "9" "Installing binary and service..."

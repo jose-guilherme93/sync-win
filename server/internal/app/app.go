@@ -179,6 +179,7 @@ func Run() error {
 	mux.HandleFunc("/api/devices/", server.handleDeviceDetail)
 	mux.HandleFunc("/api/agent/install.sh", server.handleAgentInstallScript)
 	mux.HandleFunc("/api/agent/unit", server.handleAgentUnitTemplate)
+	mux.HandleFunc("/api/agent/units", server.handleAgentUnitFile)
 	mux.HandleFunc("/api/agent/download", server.handleAgentDownload)
 	mux.HandleFunc("/api/agent/enroll-token", server.handleEnrollToken)
 	mux.HandleFunc("/api/agent/enroll", server.handleEnroll)
@@ -2388,6 +2389,49 @@ func (s *Server) handleAgentUnitTemplate(w http.ResponseWriter, r *http.Request)
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write([]byte(unit))
+}
+
+// agentUnitFiles maps a short name to a unit template on the server.
+//
+// The installer runs on the device, so it cannot read these from /app: that path
+// exists only inside the server container. It fetches them instead. Serving from
+// an allowlist keeps this from becoming an arbitrary file read of /app.
+var agentUnitFiles = map[string]string{
+	"agent":          "sync-win-agent.service",
+	"update-service": "sync-win-agent-update.service",
+	"update-timer":   "sync-win-agent-update.timer",
+	"update-path":    "sync-win-agent-update.path",
+}
+
+// agentUnitDir is where the unit templates live. Overridable so the handler can
+// be tested without a container filesystem, matching SYNCWIN_AGENT_BINARY.
+func agentUnitDir() string {
+	if dir := strings.TrimSpace(os.Getenv("SYNCWIN_UNIT_DIR")); dir != "" {
+		return dir
+	}
+	return "/app"
+}
+
+// handleAgentUnitFile serves a raw unit template, placeholders included. The
+// client substitutes them, because only the client knows its own paths and
+// credentials. Not secret: the templates carry no credentials of their own.
+func (s *Server) handleAgentUnitFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	name, ok := agentUnitFiles[strings.TrimSpace(r.URL.Query().Get("name"))]
+	if !ok {
+		s.writeError(w, http.StatusNotFound, errors.New("unknown unit template"))
+		return
+	}
+	data, err := os.ReadFile(filepath.Join(agentUnitDir(), name))
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, errors.New("unit template not available"))
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write(data)
 }
 
 type enrollRequest struct {
