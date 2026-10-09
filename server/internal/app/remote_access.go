@@ -56,7 +56,7 @@ type remoteAccessRequest struct {
 // It does not carry any payload: the browser redeems the ticket on a WebSocket.
 func (s *Server) handleRemoteAccessRequest(w http.ResponseWriter, r *http.Request, deviceID string) {
 	if !s.flags.EnableRemoteAccess {
-		s.writeError(w, http.StatusServiceUnavailable, errors.New("remote access is disabled"))
+		s.writeError(w, http.StatusServiceUnavailable, errors.New("remote access is disabled on the server; set SYNCWIN_ENABLE_REMOTE_ACCESS=true"))
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -119,7 +119,7 @@ func (s *Server) handleRemoteAccessInfo(w http.ResponseWriter, r *http.Request, 
 // pushes "open a session" messages over it; payload never travels here.
 func (s *Server) handleAgentTunnel(w http.ResponseWriter, r *http.Request, deviceID string) {
 	if !s.flags.EnableRemoteAccess {
-		s.writeError(w, http.StatusServiceUnavailable, errors.New("remote access is disabled"))
+		s.writeError(w, http.StatusServiceUnavailable, errors.New("remote access is disabled on the server; set SYNCWIN_ENABLE_REMOTE_ACCESS=true"))
 		return
 	}
 	if !s.validDeviceToken(r, deviceID) {
@@ -146,7 +146,7 @@ func (s *Server) handleAgentTunnel(w http.ResponseWriter, r *http.Request, devic
 // opens it in response to an "open" message, presenting the ticket.
 func (s *Server) handleAgentTunnelSession(w http.ResponseWriter, r *http.Request, deviceID string) {
 	if !s.flags.EnableRemoteAccess {
-		s.writeError(w, http.StatusServiceUnavailable, errors.New("remote access is disabled"))
+		s.writeError(w, http.StatusServiceUnavailable, errors.New("remote access is disabled on the server; set SYNCWIN_ENABLE_REMOTE_ACCESS=true"))
 		return
 	}
 	if !s.validDeviceToken(r, deviceID) {
@@ -175,7 +175,7 @@ func (s *Server) handleAgentTunnelSession(w http.ResponseWriter, r *http.Request
 // the dashboard session and redeems the ticket issued by handleRemoteAccessRequest.
 func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request, deviceID string) {
 	if !s.flags.EnableRemoteAccess {
-		s.writeError(w, http.StatusServiceUnavailable, errors.New("remote access is disabled"))
+		s.writeError(w, http.StatusServiceUnavailable, errors.New("remote access is disabled on the server; set SYNCWIN_ENABLE_REMOTE_ACCESS=true"))
 		return
 	}
 	if !s.requireOwnedDevice(w, r, deviceID) {
