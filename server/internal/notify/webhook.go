@@ -70,8 +70,39 @@ func (p webhookProvider) parse(raw json.RawMessage) (webhookConfig, error) {
 	return cfg, nil
 }
 
+// nonPublicCIDRs are ranges that are not globally routable but that Go's
+// IsPrivate does not cover. A webhook has no reason to reach any of them, and
+// some (CGNAT, benchmarking) can sit inside a provider's internal network.
+var nonPublicCIDRs = func() []*net.IPNet {
+	blocks := []string{
+		"100.64.0.0/10",   // RFC 6598 shared address space (CGNAT)
+		"192.0.0.0/24",    // RFC 6890 IETF protocol assignments
+		"192.0.2.0/24",    // RFC 5737 TEST-NET-1
+		"198.18.0.0/15",   // RFC 2544 benchmarking
+		"198.51.100.0/24", // RFC 5737 TEST-NET-2
+		"203.0.113.0/24",  // RFC 5737 TEST-NET-3
+		"240.0.0.0/4",     // RFC 1112 reserved
+		"2001:db8::/32",   // RFC 3849 documentation
+	}
+	nets := make([]*net.IPNet, 0, len(blocks))
+	for _, block := range blocks {
+		if _, parsed, err := net.ParseCIDR(block); err == nil {
+			nets = append(nets, parsed)
+		}
+	}
+	return nets
+}()
+
 func isPrivateIP(ip net.IP) bool {
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast()
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
+		return true
+	}
+	for _, block := range nonPublicCIDRs {
+		if block.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // lookupIPAddr is a seam for tests; production uses the default resolver.

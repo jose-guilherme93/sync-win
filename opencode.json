@@ -15,7 +15,6 @@
   },
   "agents": {
     "build": {
-      "steps": 25,
       "permissions": [
         {
           "action": "webfetch",
@@ -35,7 +34,6 @@
       ]
     },
     "plan": {
-      "steps": 5,
       "permissions": [
         {
           "action": "edit",

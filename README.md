@@ -9,7 +9,7 @@ packages, containers and system logs from one dashboard.
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Docker Hub](https://img.shields.io/docker/v/joseguilherme93/sync-win?label=docker%20hub&sort=semver)](https://hub.docker.com/r/joseguilherme93/sync-win)
 [![Docker pulls](https://img.shields.io/docker/pulls/joseguilherme93/sync-win)](https://hub.docker.com/r/joseguilherme93/sync-win)
-[![Go 1.25](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![Go 1.27](https://img.shields.io/badge/Go-1.27-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![Svelte 5](https://img.shields.io/badge/Svelte-5-FF3E00?logo=svelte&logoColor=white)](https://svelte.dev)
 
 ---

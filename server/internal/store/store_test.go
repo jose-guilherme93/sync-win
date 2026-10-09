@@ -980,6 +980,64 @@ func TestListDeviceSummariesForOwner(t *testing.T) {
 	}
 }
 
+// Regression test: a device row with NULL text columns used to make the device
+// reads fail with a 500, because both scanDevice and the summary query scanned
+// SQL NULL into a plain string. Normal writers store empty strings, but a seed
+// script, a migration or a manual row can leave NULL.
+func TestDeviceReadsTolerateNullColumns(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	device, err := store.RegisterDevice("null-pc", "user", "owner-1", "")
+	if err != nil {
+		t.Fatalf("register device: %v", err)
+	}
+
+	// Simulate every nullable text column being NULL, which is what bit the
+	// seed script.
+	if _, execErr := store.db.Exec(
+		`UPDATE devices SET last_seen_at = NULL, last_sync_at = NULL, last_error = NULL,
+		 last_error_at = NULL, hardware_json = NULL, apps_json = NULL WHERE id = ?`,
+		device.ID,
+	); execErr != nil {
+		t.Fatalf("null the nullable columns: %v", execErr)
+	}
+
+	summaries, err := store.ListDeviceSummariesForOwner("owner-1")
+	if err != nil {
+		t.Fatalf("list summaries with NULL columns: %v", err)
+	}
+	if len(summaries) != 1 {
+		t.Fatalf("expected 1 summary, got %d", len(summaries))
+	}
+	if !summaries[0].LastSyncAt.IsZero() || !summaries[0].LastErrorAt.IsZero() {
+		t.Errorf("expected zero timestamps, got sync=%v error=%v", summaries[0].LastSyncAt, summaries[0].LastErrorAt)
+	}
+
+	got, err := store.GetDevice(device.ID)
+	if err != nil {
+		t.Fatalf("get device with NULL columns: %v", err)
+	}
+	if !got.LastSyncAt.IsZero() || !got.LastErrorAt.IsZero() {
+		t.Errorf("expected zero timestamps, got sync=%v error=%v", got.LastSyncAt, got.LastErrorAt)
+	}
+	if got.LastError != "" {
+		t.Errorf("expected empty last_error, got %q", got.LastError)
+	}
+	if len(got.Apps) != 0 {
+		t.Errorf("expected no apps, got %d", len(got.Apps))
+	}
+
+	detail, err := store.GetDeviceDetail(device.ID)
+	if err != nil {
+		t.Fatalf("get device detail with NULL columns: %v", err)
+	}
+	if !detail.LastSyncAt.IsZero() || !detail.LastErrorAt.IsZero() {
+		t.Errorf("expected zero timestamps, got sync=%v error=%v", detail.LastSyncAt, detail.LastErrorAt)
+	}
+}
+
 func TestSavePreferenceBatchCommitsAllInOneTransaction(t *testing.T) {
 	store, err := NewStore(t.TempDir())
 	if err != nil {
