@@ -48,7 +48,12 @@ SYNCWIN_UPDATE_REQUEST_FILE="/var/lib/sync-win/update-request"
 SYNCWIN_HELPER_SERVICE_NAME="sync-win-agent-helper.service"
 SYNCWIN_HELPER_SERVICE_FILE="/etc/systemd/system/${SYNCWIN_HELPER_SERVICE_NAME}"
 SYNCWIN_HELPER_SERVICE_TEMPLATE=""
-SYNCWIN_AUTO_UPDATE="${SYNCWIN_AUTO_UPDATE:-1}"
+# Optional capabilities. Empty means "not chosen yet": an interactive install
+# asks, a non-interactive one (or --yes) takes the defaults. The Add-device
+# screen may preset them through the install command.
+SYNCWIN_AUTO_UPDATE="${SYNCWIN_AUTO_UPDATE:-}"
+SYNCWIN_SSH_ON_INSTALL="${SYNCWIN_SSH_ON_INSTALL:-}"
+SYNCWIN_YES="${SYNCWIN_YES:-0}"
 
 # Temp directory for downloads (cleaned up on exit)
 TMP_DIR=""
@@ -679,6 +684,39 @@ install_remote_access_helper() {
     fi
 }
 
+# prompt_capabilities resolves the optional capabilities. When the install
+# command already carried a choice (SYNCWIN_* set by the Add-device screen) it is
+# kept; otherwise an interactive run asks, and a non-interactive one (a pipe) or
+# an explicit --yes takes the defaults: auto-update on, remote-access SSH off.
+prompt_capabilities() {
+    if [ -z "${SYNCWIN_AUTO_UPDATE}" ]; then
+        SYNCWIN_AUTO_UPDATE=1
+        if [ "${SYNCWIN_YES}" != "1" ] && [ -t 0 ]; then
+            local answer
+            read -r -p "Keep the SyncWin agent auto-updating? [Y/n] " answer || true
+            case "${answer}" in [Nn]*) SYNCWIN_AUTO_UPDATE=0 ;; esac
+        fi
+    fi
+    if [ -z "${SYNCWIN_SSH_ON_INSTALL}" ]; then
+        SYNCWIN_SSH_ON_INSTALL=0
+        if [ "${SYNCWIN_YES}" != "1" ] && [ -t 0 ]; then
+            local answer
+            read -r -p "Enable SSH remote access from the dashboard? [y/N] " answer || true
+            case "${answer}" in [Yy]*) SYNCWIN_SSH_ON_INSTALL=1 ;; esac
+        fi
+    fi
+    if [ "${SYNCWIN_AUTO_UPDATE}" = "1" ]; then
+        info "Automatic updates: enabled"
+    else
+        info "Automatic updates: disabled"
+    fi
+    if [ "${SYNCWIN_SSH_ON_INSTALL}" = "1" ]; then
+        info "Remote access (SSH): enabled"
+    else
+        info "Remote access (SSH): disabled (enable later with: sudo sync-win-agent set ssh on)"
+    fi
+}
+
 # read_machine_id returns the host's stable machine identifier.
 #
 # This is what lets a reinstall adopt its own device record instead of creating a
@@ -898,7 +936,14 @@ print_summary() {
 # =============================================================================
 
 main() {
+    for arg in "$@"; do
+        case "$arg" in
+            --yes|-y) SYNCWIN_YES=1 ;;
+        esac
+    done
     require_root
+    step "0" "Choosing capabilities..."
+    prompt_capabilities
     step "1" "Detecting operating system..."
     detect_os
     step "2" "Detecting architecture..."
