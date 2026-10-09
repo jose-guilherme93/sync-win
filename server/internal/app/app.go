@@ -1431,7 +1431,13 @@ func (s *Server) handleCommandResult(w http.ResponseWriter, r *http.Request, dev
 		s.writeError(w, http.StatusBadRequest, errors.New("invalid command status"))
 		return
 	}
-	if len(req.Message) > 64<<10 {
+	// A Lynis report is the largest thing an agent returns through this path.
+	// The agent is allowed report_max_bytes (1 MiB, see
+	// agent/internal/contract/contract.json); the old 64 KiB cap silently
+	// rejected real reports, so SaveSecurityAudit never ran and the dashboard
+	// showed "No security audits yet" while the command stayed queued. Match the
+	// contract here so the persisted limit and the collected limit agree.
+	if len(req.Message) > 1<<20 {
 		s.writeError(w, http.StatusRequestEntityTooLarge, errors.New("command result is too large"))
 		return
 	}
