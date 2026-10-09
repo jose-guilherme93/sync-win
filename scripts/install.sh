@@ -535,7 +535,13 @@ RestrictNamespaces=yes
 # home that does not exist, inside a filesystem ProtectSystem=strict mounted
 # read-only, and every restart forgets which files were already uploaded.
 StateDirectory=sync-win
-ReadWritePaths=/var/log/sync-win /etc/sync-win /var/run/docker.sock
+# The leading '-' makes systemd skip an entry that does not exist. Without it a
+# host with no Docker fails to start the unit at all:
+#   Failed to set up mount namespacing: /run/systemd/unit-root/run/docker.sock:
+#   No such file or directory
+# The same applies to a missing directory: an optional path must be marked
+# optional, or the agent refuses to run on a machine that simply lacks it.
+ReadWritePaths=/var/log/sync-win /etc/sync-win -/var/run/docker.sock
 
 [Install]
 WantedBy=multi-user.target'
@@ -868,6 +874,14 @@ main() {
     start_service
     install_auto_update
     verify_agent_readiness
+
+    # Reaching this point means the install completed, so the rollback trap must
+    # be disarmed. Nothing did that before, so every successful install rolled
+    # back on exit and deleted the unit it had just written. The service kept
+    # running from a definition systemd no longer had -- "Loaded: not-found"
+    # while "Active: active" -- and vanished at the next restart or boot.
+    ROLLBACK_NEEDED=""
+
     print_summary
 }
 
