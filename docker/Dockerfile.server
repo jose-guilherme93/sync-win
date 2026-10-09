@@ -9,7 +9,7 @@
 # Nothing from the build stages reaches the final image: no Go toolchain, no
 # Node, no node_modules, no package manifests, no package cache.
 
-FROM golang:1.25-alpine AS build
+FROM golang:1.27-alpine AS build
 WORKDIR /src
 
 # TARGETOS/TARGETARCH come from BuildKit. Hardcoding GOARCH would make a
@@ -55,7 +55,7 @@ RUN npm ci || npm install
 COPY web .
 RUN npm run build
 
-FROM alpine:3.20
+FROM alpine:3.24
 
 # su-exec is a static, setuid-free privilege dropper: the entrypoint needs to
 # fix data-directory ownership, then run the server unprivileged. Everything
