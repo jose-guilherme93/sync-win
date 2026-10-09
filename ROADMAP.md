@@ -328,7 +328,7 @@ uma e nomeia o endpoint que falta.
 ## Stack e decisões iniciais
 
 Server:
-- Go 1.25
+- Go 1.27
 - SQLite (modernc.org/sqlite, WAL, schema em initSchema)
 - AES-GCM para criptografia de credenciais de notificações
 

@@ -66,3 +66,6 @@ entries:
   - id: sessions/261008-quickstart-dockerhub
     path: sessions/261008-quickstart-dockerhub.md
     type: session
+  - id: sessions/261009-p0-audit
+    path: sessions/261009-p0-audit.md
+    type: session

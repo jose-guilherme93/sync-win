@@ -1047,34 +1047,41 @@ func scanDeviceRow(row interface{ Scan(dest ...any) error }) (Device, error) {
 
 func scanDevice(row interface{ Scan(dest ...any) error }) (Device, error) {
 	var d Device
-	var lastSeen, lastSync, lastErrorAt, createdAt, updatedAt string
-	var hardware, apps, tags string
+	var createdAt, updatedAt string
+	// last_seen_at, last_sync_at, last_error, last_error_at, hardware_json and
+	// apps_json are nullable in the schema. Normal writers store empty strings,
+	// but a partial writer (seed script, migration, manual row) can leave NULL,
+	// and scanning NULL into a plain string fails outright. Scan them as
+	// nullable and fold NULL onto the zero value so one odd row cannot turn a
+	// device read into a 500.
+	var lastSeen, lastSync, lastError, lastErrorAt, hardware, apps, tags sql.NullString
 	err := row.Scan(
 		&d.ID, &d.UserID, &d.OwnerID, &d.Hostname, &d.DeviceToken,
-		&lastSeen, &lastSync, &d.SyncFailures, &d.LastError, &lastErrorAt,
+		&lastSeen, &lastSync, &d.SyncFailures, &lastError, &lastErrorAt,
 		&hardware, &apps, &d.Status, &createdAt, &updatedAt, &d.HardwareFingerprint,
 		&d.DisplayName, &tags, &d.CollectionIntervalSeconds,
 	)
 	if err != nil {
 		return Device{}, err
 	}
-	d.LastSeenAt = textTime(lastSeen)
-	if lastSync != "" {
-		d.LastSyncAt = textTime(lastSync)
+	d.LastSeenAt = textTime(lastSeen.String)
+	if lastSync.Valid {
+		d.LastSyncAt = textTime(lastSync.String)
 	}
-	if lastErrorAt != "" {
-		d.LastErrorAt = textTime(lastErrorAt)
+	d.LastError = lastError.String
+	if lastErrorAt.Valid {
+		d.LastErrorAt = textTime(lastErrorAt.String)
 	}
 	d.CreatedAt = textTime(createdAt)
 	d.UpdatedAt = textTime(updatedAt)
-	if hardware != "" {
-		json.Unmarshal([]byte(hardware), &d.Hardware)
+	if hardware.Valid && hardware.String != "" {
+		_ = json.Unmarshal([]byte(hardware.String), &d.Hardware)
 	}
-	if apps != "" {
-		json.Unmarshal([]byte(apps), &d.Apps)
+	if apps.Valid && apps.String != "" {
+		_ = json.Unmarshal([]byte(apps.String), &d.Apps)
 	}
-	if tags != "" {
-		_ = json.Unmarshal([]byte(tags), &d.Tags)
+	if tags.Valid && tags.String != "" {
+		_ = json.Unmarshal([]byte(tags.String), &d.Tags)
 	}
 	if d.Tags == nil {
 		d.Tags = []string{}
@@ -2021,8 +2028,10 @@ func (s *Store) ListDeviceSummariesForOwner(ownerID string) ([]DeviceSummary, er
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	rows, err := s.db.Query(`
-		SELECT d.id, d.user_id, d.owner_id, d.hostname, d.last_seen_at, d.last_sync_at,
-		       d.sync_failures, d.last_error, d.last_error_at, d.status, d.created_at, d.updated_at,
+		SELECT d.id, d.user_id, d.owner_id, d.hostname,
+		       COALESCE(d.last_seen_at, ''), COALESCE(d.last_sync_at, ''),
+		       d.sync_failures, COALESCE(d.last_error, ''), COALESCE(d.last_error_at, ''),
+		       d.status, d.created_at, d.updated_at,
 		       d.hardware_fingerprint, COALESCE(d.hardware_json, ''), d.display_name,
 		       COALESCE(d.tags_json, '[]'), d.collection_interval_seconds,
 		       CASE WHEN d.apps_json IS NULL OR d.apps_json = '' THEN 0 ELSE json_array_length(d.apps_json) END,
