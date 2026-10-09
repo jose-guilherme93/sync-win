@@ -51,3 +51,5 @@ These need a real host and `sudo`; they are not code patches.
 
 - `decisions/security-hardening.md` — the fail-closed flag decision.
 - `sessions/260925-p0-start.md` — the P0.0 kickoff.
+- `sessions/261009-p0-audit.md` — the 2026-10-09 re-audit that verified
+  P0.1-P0.5 against a running server and hardened the webhook SSRF filter.
