@@ -69,3 +69,6 @@ entries:
   - id: sessions/261009-p0-audit
     path: sessions/261009-p0-audit.md
     type: session
+  - id: sessions/261009-dashboard-screens
+    path: sessions/261009-dashboard-screens.md
+    type: session
