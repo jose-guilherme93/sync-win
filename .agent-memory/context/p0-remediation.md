@@ -1,42 +1,53 @@
 ---
 id: context/p0-remediation
 type: context
-title: "P0 security remediation initiative"
+title: "P0 security remediation (complete)"
 description: >-
-  Active phased remediation plan: solve easy safeguards together, then execute
-  one complex security phase at a time and report the next phase afterward.
-tags: [p0, security, remediation, workflow]
+  The phased P0 security remediation is finished and released. Kept as a record
+  of what shipped and of the verification gaps that remain operational; there is
+  no open P0 phase.
+tags: [p0, security, remediation, completed]
 source: other
 created: 2026-09-25
-updated: 2026-09-25
-status: active
-expires: 2026-10-25
+updated: 2026-10-09
+status: completed
 ---
 
-## Workflow
+## Status
 
-- Execute the easy P0 safeguards as one batch.
-- Execute each complex phase separately; do not start the next complex phase before reviewing the current one.
-- After completing a phase, report changed areas, test results, remaining risks and the next recommended phase.
+P0 is complete. It shipped as `5bd1057 security: complete P0 remediation`
+(2026-09-25, 59 files, +2620/-699) and is part of the released `v0.6.10`.
+`ROADMAP.md` and `SECURITY.md` document the delivered controls.
 
-## Phase order
+This file previously described P0.1–P0.5 as pending, while they had already
+shipped. That stale handoff misled an agent on 2026-10-09 into planning work
+that was already done. Do not reintroduce a "next phase" section here; if new
+security work is needed, open a new context file for it.
 
-1. P0.0 — easy fail-closed safeguards and low-risk validation.
-2. P0.1 — strict session/owner authorization boundary.
-3. P0.2 — password, session and device-recovery hardening.
-4. P0.3 — rate limiting, SSRF and outbound-network controls.
-5. P0.4 — agent policy and Docker operation safety.
-6. P0.5 — security regression and release gate.
-7. P1 — connect preference, app and save sync functionality.
-8. P2 — durable storage, migrations, backup and restore.
-9. P3 — frontend, end-to-end tests, CI security and documentation alignment.
+## What shipped
 
-## Current handoff
+- P0.0 — fail-closed feature flags, safer token generation, password/config
+  validation, CORS/header safeguards, log redaction, enrollment TTL alignment.
+- P0.1 — strict session authentication and owner isolation (`owner_id` is
+  enforced in the store; client-supplied owner IDs are never authorization).
+- P0.2 — Argon2id password hashing, hashed session/device tokens, HttpOnly
+  cookie, CSRF, session revocation.
+- P0.3 — rate limiting and SSRF/webhook protection (`rate_limiter.go`, pinned
+  webhook IP, disabled redirects).
+- P0.4 — local fail-closed policy, Docker limits, timeouts and device-scoped
+  command results.
+- P0.5 — security regression tests and aligned documentation.
 
-P0.0 is complete. The easy safeguard batch added fail-closed feature flags, safer token generation, password/config validation, enrollment TTL alignment, CORS/header safeguards, log path redaction, redacted-log marking and a cleanup-log table fix. Server and agent race tests, web type-check/build, Compose validation and installer syntax validation passed.
+## Verification gaps still open (operational, not code)
 
-The next complex phase is P0.1: strict session authentication and owner isolation. Do not treat P0 as complete until the authorization boundary, credential recovery, SSRF and Docker policy phases are finished.
+These need a real host and `sudo`; they are not code patches.
 
-## User collaboration preference
+- The journal group ACL was diagnosed but never applied on a real device.
+- The path-unit self-update mechanism has never run on real systemd.
+- `/etc/systemd/system/sync-win-agent.service` was missing on the inspected
+  device and nothing established what removed it.
 
-Keep the user informed in Portuguese, preserve existing user changes, avoid broad rewrites, and state clearly which phase is next.
+## Related
+
+- `decisions/security-hardening.md` — the fail-closed flag decision.
+- `sessions/260925-p0-start.md` — the P0.0 kickoff.
