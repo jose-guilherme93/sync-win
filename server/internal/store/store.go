@@ -283,15 +283,22 @@ type DockerInfo struct {
 }
 
 type NetworkIface struct {
-	Name      string  `json:"name"`
-	RXBytes   uint64  `json:"rx_bytes"`
-	TXBytes   uint64  `json:"tx_bytes"`
-	RXRate    float64 `json:"rx_rate"`
-	TXRate    float64 `json:"tx_rate"`
-	RXPackets uint64  `json:"rx_packets"`
-	TXPackets uint64  `json:"tx_packets"`
-	RXErrors  uint64  `json:"rx_errors"`
-	TXErrors  uint64  `json:"tx_errors"`
+	Name      string   `json:"name"`
+	MAC       string   `json:"mac,omitempty"`
+	MTU       int      `json:"mtu,omitempty"`
+	OperState string   `json:"oper_state,omitempty"`
+	SpeedMbps int      `json:"speed_mbps,omitempty"`
+	Addresses []string `json:"addresses,omitempty"`
+	RXBytes   uint64   `json:"rx_bytes"`
+	TXBytes   uint64   `json:"tx_bytes"`
+	RXRate    float64  `json:"rx_rate"`
+	TXRate    float64  `json:"tx_rate"`
+	RXPackets uint64   `json:"rx_packets"`
+	TXPackets uint64   `json:"tx_packets"`
+	RXErrors  uint64   `json:"rx_errors"`
+	TXErrors  uint64   `json:"tx_errors"`
+	RXDropped uint64   `json:"rx_dropped"`
+	TXDropped uint64   `json:"tx_dropped"`
 }
 
 type AppInfo struct {

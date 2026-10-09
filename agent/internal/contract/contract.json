@@ -104,7 +104,8 @@
         "kube-ipvs"
       ],
       "rationale": "Container and VM plumbing reports the same bytes on the veth pair, its bridge and docker0. Summing them inflates network totals several times over. Real NICs and deliberate tunnels (tailscale, wireguard, tun/tap) are kept.",
-      "kept_examples": ["eth0", "wlan0", "enp3s0", "tailscale0", "wg0", "tun0", "tap0"]
+      "kept_examples": ["eth0", "wlan0", "enp3s0", "tailscale0", "wg0", "tun0", "tap0"],
+      "metadata": "Each kept interface also carries mac, mtu, oper_state, speed_mbps and addresses (CIDR) alongside rx/tx bytes, packets, errors and drops. Addresses and link state come from net.Interfaces() and /sys/class/net; every field is best-effort and may be empty."
     },
     "disk_partition_dedup": {
       "by_device": true,

@@ -2,6 +2,7 @@ package collectors
 
 import (
 	"bufio"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -67,16 +68,20 @@ func CollectNetwork() []NetworkInterface {
 			continue
 		}
 		fields := strings.Fields(line[colonIdx+1:])
-		if len(fields) < 10 {
+		if len(fields) < 12 {
 			continue
 		}
+		// /proc/net/dev row: rx bytes packets errs drop fifo frame compressed
+		// multicast | tx bytes packets errs drop fifo colls carrier compressed.
 		rxBytes, _ := strconv.ParseUint(fields[0], 10, 64)
 		rxPackets, _ := strconv.ParseUint(fields[1], 10, 64)
 		rxErrors, _ := strconv.ParseUint(fields[2], 10, 64)
+		rxDropped, _ := strconv.ParseUint(fields[3], 10, 64)
 		txBytes, _ := strconv.ParseUint(fields[8], 10, 64)
 		txPackets, _ := strconv.ParseUint(fields[9], 10, 64)
 		txErrors, _ := strconv.ParseUint(fields[10], 10, 64)
-		interfaces = append(interfaces, NetworkInterface{
+		txDropped, _ := strconv.ParseUint(fields[11], 10, 64)
+		interfaces = append(interfaces, enrichInterface(NetworkInterface{
 			Name:      name,
 			RXBytes:   rxBytes,
 			TXBytes:   txBytes,
@@ -84,7 +89,52 @@ func CollectNetwork() []NetworkInterface {
 			TXPackets: txPackets,
 			RXErrors:  rxErrors,
 			TXErrors:  txErrors,
-		})
+			RXDropped: rxDropped,
+			TXDropped: txDropped,
+		}))
 	}
 	return interfaces
 }
+
+// enrichInterface fills the link metadata that /proc/net/dev does not carry.
+// Every lookup is best-effort: a missing /sys file or an interface that
+// disappeared between the two reads leaves the field empty rather than failing
+// the whole collection.
+func enrichInterface(iface NetworkInterface) NetworkInterface {
+	if ni, err := net.InterfaceByName(iface.Name); err == nil {
+		iface.MTU = ni.MTU
+		iface.MAC = ni.HardwareAddr.String()
+		if addrs, err := ni.Addrs(); err == nil {
+			for _, addr := range addrs {
+				iface.Addresses = append(iface.Addresses, addr.String())
+			}
+		}
+	}
+	iface.OperState = readSysText(iface.Name, "operstate")
+	iface.SpeedMbps = readSysInt(iface.Name, "speed")
+	return iface
+}
+
+// readSysText returns the trimmed contents of /sys/class/net/<name>/<file>.
+func readSysText(name, file string) string {
+	data, err := os.ReadFile("/sys/class/net/" + name + "/" + file)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// readSysInt reads a single integer from /sys/class/net. Virtual interfaces
+// report speed as -1 or with an error; both collapse to 0 ("unknown").
+func readSysInt(name, file string) int {
+	raw := readSysText(name, file)
+	if raw == "" {
+		return 0
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
+		return 0
+	}
+	return value
+}
+

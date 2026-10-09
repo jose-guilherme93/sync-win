@@ -36,9 +36,9 @@ The project is built around three main components:
    - Svelte 5 + TypeScript 6 + Vite 8 + Chart.js 4
    - account-first: sign in / create account entry screen
    - shows online devices, last sync time, live hardware telemetry charts
-   - device detail modal with tabs: System, Files, Packages, Saves, Notes, Docker, Security
+   - device screens rendered inline by the shell: Overview, Network, Storage, Services (services and ports side by side with a detail drawer), Docker, Security (audit history plus host posture), Processes, Packages, Logs, Remote access, Settings
    - Docker container management (list, start/stop/restart/kill/remove, exec, compose, prune)
-   - Lynis security audit: run audit, view hardening index, warnings/suggestions, history
+   - Lynis security audit: run audit, read the stored report (hardening index, warnings/suggestions/categories) and history; host posture (public listeners, pending updates, failed units)
    - notification settings and inbox with real-time SSE push
    - device notes and attachments
 
@@ -80,7 +80,7 @@ sync-win/
 │   │   ├── components/
 │   │   │   ├── shell/              # Sidebar, Topbar, DeviceList (app chrome)
 │   │   │   ├── ui/                 # Icon, StatusDot, GaugeCard, StatCard, Skeleton, ConfirmDialog…
-│   │   │   ├── screens/            # Home, DeviceOverview, Alerts, Reports, Storage, Processes, Packages, Services, RemoteActions, DeviceSettings, DeviceLogs
+│   │   │   ├── screens/            # Home, DeviceOverview, Alerts, Reports, Storage, Network, Services, Security, Docker, Processes, Packages, RemoteAccess, DeviceSettings, DeviceLogs
 │   │   │   ├── DeviceModal.svelte  # Device detail tabs; variant="page" renders inline
 │   │   │   ├── DockerTab.svelte    # Docker container management
 │   │   │   ├── SystemMetrics.svelte    # Detailed hardware telemetry
