@@ -95,7 +95,7 @@ export const NAV_GROUPS: NavGroup[] = [
     deviceScoped: true,
     items: [
       { section: 'security', label: 'Security', icon: 'lock', deviceScoped: true },
-      { section: 'remote', label: 'Remote actions', icon: 'terminal', deviceScoped: true },
+      { section: 'remote', label: 'Remote access', icon: 'terminal', deviceScoped: true },
       { section: 'settings', label: 'Settings', icon: 'settings', deviceScoped: true }
     ]
   }

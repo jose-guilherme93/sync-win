@@ -69,3 +69,9 @@ entries:
   - id: sessions/261009-p0-audit
     path: sessions/261009-p0-audit.md
     type: session
+  - id: decisions/remote-access
+    path: decisions/remote-access.md
+    type: decision
+  - id: sessions/261009-remote-access
+    path: sessions/261009-remote-access.md
+    type: session

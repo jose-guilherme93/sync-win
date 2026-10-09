@@ -1,0 +1,40 @@
+[Unit]
+Description=SyncWin Remote Access Helper
+Documentation=https://github.com/jose-guilherme93/sync-win
+After=local-fs.target
+Before=sync-win-agent.service
+
+[Service]
+Type=simple
+# The helper performs the one privileged step of remote access: injecting a
+# short-lived, restricted public key into a target user's authorized_keys. It
+# runs as root because it must write files under another user's home, but it
+# answers only the agent's uid over a root-owned Unix socket and validates every
+# request before it touches a file.
+ExecStart=/usr/local/bin/sync-win-agent helper
+Restart=always
+RestartSec=5
+
+User=root
+Group=sync-win
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=no
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+
+# /run/sync-win holds the socket; it is owned root:sync-win and readable by the
+# agent's group. The helper only ever writes authorized_keys files, under user
+# homes and /root.
+RuntimeDirectory=sync-win
+RuntimeDirectoryMode=0750
+ReadWritePaths=/home /root
+
+[Install]
+WantedBy=multi-user.target

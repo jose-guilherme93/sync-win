@@ -16,6 +16,7 @@ The project is built around three main components:
    - stores small preference files and sync metadata
    - serves the web dashboard from the same origin (no CORS)
    - proxies Docker management commands to agents via command queue
+   - brokers opt-in interactive remote sessions: it issues a one-time session ticket and relays bytes between a browser terminal and the agent's outbound tunnel, never naming a host or port
    - manages user accounts with session-based auth (HttpOnly cookie/CSRF for dashboard, bearer compatibility for API clients)
    - dispatches notifications via pluggable providers (Telegram, webhook, inbox)
    - never executes arbitrary commands on clients
@@ -26,7 +27,8 @@ The project is built around three main components:
    - reports device heartbeat, hardware telemetry, and installed packages
    - monitors Docker containers via local socket
    - executes Docker management commands (start, stop, restart, kill, remove, exec, compose, prune)
-   - enforces local policy: any command type can be disabled via `~/.config/sync-win/policy.json`
+   - opt-in interactive remote access (off by default): keeps an outbound tunnel and, per session, injects an ephemeral key through the root helper and runs `ssh` against its own loopback
+   - enforces local policy: any command type can be disabled via `/etc/sync-win/policy.json`
    - survives server outages via exponential backoff with jitter
    - persists state across restarts (systemd `StateDirectory`, so
      `/var/lib/sync-win/agent-state.json` for the service, falling back to
@@ -38,6 +40,7 @@ The project is built around three main components:
    - shows online devices, last sync time, live hardware telemetry charts
    - device detail modal with tabs: System, Files, Packages, Saves, Notes, Docker, Security
    - Docker container management (list, start/stop/restart/kill/remove, exec, compose, prune)
+   - Remote access screen: SSH terminal (xterm.js) plus device actions and a recent-session audit list
    - Lynis security audit: run audit, view hardening index, warnings/suggestions, history
    - notification settings and inbox with real-time SSE push
    - device notes and attachments
@@ -80,7 +83,7 @@ sync-win/
 │   │   ├── components/
 │   │   │   ├── shell/              # Sidebar, Topbar, DeviceList (app chrome)
 │   │   │   ├── ui/                 # Icon, StatusDot, GaugeCard, StatCard, Skeleton, ConfirmDialog…
-│   │   │   ├── screens/            # Home, DeviceOverview, Alerts, Reports, Storage, Processes, Packages, Services, RemoteActions, DeviceSettings, DeviceLogs
+│   │   │   ├── screens/            # Home, DeviceOverview, Alerts, Reports, Storage, Processes, Packages, Services, RemoteAccess, DeviceSettings, DeviceLogs
 │   │   │   ├── DeviceModal.svelte  # Device detail tabs; variant="page" renders inline
 │   │   │   ├── DockerTab.svelte    # Docker container management
 │   │   │   ├── SystemMetrics.svelte    # Detailed hardware telemetry
@@ -305,7 +308,9 @@ Use the most direct command for the module being changed.
 ## Security rules
 
 - Public self-registration is disabled by default (`SYNCWIN_ENABLE_REGISTRATION=false`); the first account is bootstrapped from `SYNCWIN_ADMIN_EMAIL`/`SYNCWIN_ADMIN_PASSWORD` on startup and never overwritten.
-- Never execute arbitrary shell commands remotely.
+- Never execute arbitrary shell commands remotely. The single exception is the
+  opt-in remote-access tunnel: dual-gated by `SYNCWIN_ENABLE_REMOTE_ACCESS` and
+  the device's `allow_remote_access`, with the agent dialing its own loopback.
 - Never store secrets in plaintext.
 - Never copy the entire home directory.
 - Never include passwords, KWallet, tokens, keys, or browser credentials.
