@@ -282,6 +282,19 @@ inventário continuam independentes.
 - HTTP timeout: 15 s por requisição.
 - Backoff exponencial em falhas consecutivas de ciclo: intervalo × 2^n até 10 min, com jitter de ~10% (evita sincronização de rebanho).
 - Estado persistente: hashes separados para preferências e saves + timestamps de sincronização; restart não re-envia arquivo inalterado nem perde o agendamento.
+
+  Onde esse estado vive depende de como o agente foi iniciado. Como serviço de
+  sistema, a unit declara `StateDirectory=sync-win`, e o systemd então cria
+  `/var/lib/sync-win` com o dono do usuário do serviço, define
+  `STATE_DIRECTORY=/var/lib/sync-win` e o inclui no conjunto gravável — o agente
+  o usa. Isso é o que faz o estado sobreviver: o caminho XDG resolve sob um
+  `HOME` que o usuário de serviço não tem (o instalador cria com
+  `--no-create-home`), dentro de um filesystem que `ProtectSystem=strict` monta
+  como somente-leitura.
+
+  Sem `STATE_DIRECTORY` — execução manual, ou o modo legado de user-systemd — o
+  agente usa `$XDG_STATE_HOME/sync-win/agent-state.json` e, na ausência dele,
+  `~/.local/state/sync-win/agent-state.json`.
 - systemd user unit gerada pelo `install.sh`: `Restart=always`, `RestartSec=15`, `StartLimitIntervalSec=0` (nunca entra em ban).
 - Arquivos individuais problemáticos são pulados com log — um arquivo ruim nunca aborta o lote.
 

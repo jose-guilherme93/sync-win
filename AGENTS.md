@@ -28,7 +28,9 @@ The project is built around three main components:
    - executes Docker management commands (start, stop, restart, kill, remove, exec, compose, prune)
    - enforces local policy: any command type can be disabled via `~/.config/sync-win/policy.json`
    - survives server outages via exponential backoff with jitter
-   - persists state across restarts (`~/.local/state/sync-win/agent-state.json`)
+   - persists state across restarts (systemd `StateDirectory`, so
+     `/var/lib/sync-win/agent-state.json` for the service, falling back to
+     `$XDG_STATE_HOME/sync-win/` when run by hand)
 
 3. Web dashboard
    - Svelte 5 + TypeScript 6 + Vite 8 + Chart.js 4

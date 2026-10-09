@@ -13,9 +13,9 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -394,17 +394,22 @@ func copyFile(source, destination string, mode os.FileMode) error {
 // diagnostics for a journal it cannot read, but nothing adds the group that lets
 // it read one. This is what makes a fix like that reach devices unattended.
 //
-// The ExecStart line is preserved from the running unit when possible, because
-// a device behind a different server URL, or installed with a non-default
-// binary path, must not be silently repointed by an update.
-func refreshUnitFile(serverURL, service string, userSystemd bool, deviceID, deviceToken string) (bool, error) {
-	if userSystemd || deviceID == "" || deviceToken == "" {
+// It fetches the raw template from the public endpoint rather than the
+// credential-authenticated one. The update service on a device installed before
+// that flag existed passes no credentials, and requiring them would silently
+// skip exactly the devices that most need the unit repaired.
+//
+// The ExecStart line is preserved from the running unit, because a device behind
+// a different server URL, or installed with a non-default binary path, must not
+// be silently repointed by an update.
+func refreshUnitFile(serverURL, service string, userSystemd bool, _ string, _ string) (bool, error) {
+	if userSystemd {
 		// The user-systemd fallback unit has no group requirement and is written
 		// per user; leave it alone.
 		return false, nil
 	}
 
-	desired, err := fetchAgentUnit(serverURL, deviceID, deviceToken)
+	desired, err := fetchAgentUnit(serverURL)
 	if err != nil {
 		// An older server without the endpoint is tolerated: the binary update is
 		// the important part and must not be blocked by it. Anything else is a
@@ -418,10 +423,15 @@ func refreshUnitFile(serverURL, service string, userSystemd bool, deviceID, devi
 
 	target := "/etc/systemd/system/" + service
 	if current, err := os.ReadFile(target); err == nil {
-		if mergeExecStart(string(current), desired) == string(current) {
-			return false, nil
-		}
 		desired = mergeExecStart(string(current), desired)
+	}
+	// The template lists groups for a general host. This one may not have docker,
+	// and systemd refuses to start a unit naming a group that is absent, so the
+	// line is recomputed from what exists here.
+	desired = applySupplementaryGroups(desired, hostSupplementaryGroups())
+
+	if current, err := os.ReadFile(target); err == nil && desired == string(current) {
+		return false, nil
 	}
 
 	if err := os.WriteFile(target, []byte(desired), 0o644); err != nil {
@@ -431,6 +441,56 @@ func refreshUnitFile(serverURL, service string, userSystemd bool, deviceID, devi
 		return false, fmt.Errorf("systemctl daemon-reload after unit update: %w", err)
 	}
 	return true, nil
+}
+
+// hostSupplementaryGroups lists the groups this host actually has.
+//
+// systemd will not start a unit that names a missing group, which is how an Arch
+// machine without Docker ended up with a service that installed and never came
+// up. docker is included only when present, and systemd-journal with adm as the
+// fallback, since journal files are 0640 root:systemd-journal.
+func hostSupplementaryGroups() string {
+	var groups []string
+	if _, err := user.LookupGroup("docker"); err == nil {
+		groups = append(groups, "docker")
+	}
+	if _, err := user.LookupGroup("systemd-journal"); err == nil {
+		groups = append(groups, "systemd-journal")
+	} else if _, err := user.LookupGroup("adm"); err == nil {
+		groups = append(groups, "adm")
+	}
+	return strings.Join(groups, " ")
+}
+
+// applySupplementaryGroups replaces the SupplementaryGroups line with the given
+// groups, removes it when the host has none, and adds it under [Service] when
+// the template does not carry one.
+func applySupplementaryGroups(unit, groups string) string {
+	lines := strings.Split(unit, "\n")
+	out := make([]string, 0, len(lines)+1)
+	written := false
+	serviceIndex := -1
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "[Service]" {
+			serviceIndex = len(out)
+		}
+		if strings.HasPrefix(trimmed, "SupplementaryGroups=") {
+			if groups != "" && !written {
+				out = append(out, "SupplementaryGroups="+groups)
+				written = true
+			}
+			continue
+		}
+		out = append(out, line)
+	}
+	if groups != "" && !written && serviceIndex >= 0 {
+		insert := serviceIndex + 1
+		out = append(out, "")
+		copy(out[insert+1:], out[insert:])
+		out[insert] = "SupplementaryGroups=" + groups
+	}
+	return strings.Join(out, "\n")
 }
 
 // mergeExecStart keeps the existing ExecStart when the new template does not
@@ -453,13 +513,14 @@ func mergeExecStart(current, desired string) string {
 	return desired
 }
 
-func fetchAgentUnit(serverURL, deviceID, deviceToken string) (string, error) {
+func fetchAgentUnit(serverURL string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	// Public endpoint, raw template. The unit refresh must not depend on
+	// credentials the caller may not have.
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		serverURL+"/api/agent/unit?device_id="+url.QueryEscape(deviceID)+
-			"&device_token="+url.QueryEscape(deviceToken), nil)
+		serverURL+"/api/agent/units?name=agent", nil)
 	if err != nil {
 		return "", err
 	}

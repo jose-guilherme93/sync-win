@@ -530,7 +530,12 @@ ProtectControlGroups=yes
 RestrictSUIDSGID=yes
 RestrictRealtime=yes
 RestrictNamespaces=yes
-ReadWritePaths=/var/lib/sync-win /var/log/sync-win /etc/sync-win /var/run/docker.sock
+# StateDirectory makes systemd create /var/lib/sync-win owned by the service
+# user and add it to the writable set. Without it the state file lands under a
+# home that does not exist, inside a filesystem ProtectSystem=strict mounted
+# read-only, and every restart forgets which files were already uploaded.
+StateDirectory=sync-win
+ReadWritePaths=/var/log/sync-win /etc/sync-win /var/run/docker.sock
 
 [Install]
 WantedBy=multi-user.target'
@@ -614,13 +619,30 @@ install_auto_update() {
     fi
 }
 
+# read_machine_id returns the host's stable machine identifier.
+#
+# This is what lets a reinstall adopt its own device record instead of creating a
+# second one with the same hostname. /etc/machine-id is written once per OS
+# installation and survives agent reinstalls, unlike anything under /home.
+read_machine_id() {
+    local id=""
+    if [ -r /etc/machine-id ]; then
+        id="$(tr -d '[:space:]' < /etc/machine-id)"
+    fi
+    if [ -z "$id" ] && [ -r /var/lib/dbus/machine-id ]; then
+        id="$(tr -d '[:space:]' < /var/lib/dbus/machine-id)"
+    fi
+    printf '%s' "$id"
+}
+
 enroll_device() {
     info "Registering device with server..."
     local enroll_payload
-    local host_name kernel_ver agent_ver
+    local host_name kernel_ver agent_ver machine_id
     host_name="$(hostname | tr -d '\n')"
     kernel_ver="$(uname -r | tr -d '\n')"
     agent_ver="$(get_installed_version | tr -d '\n')"
+    machine_id="$(read_machine_id)"
     enroll_payload=$(cat <<EOF
 {
     "token": "${SYNCWIN_TOKEN}",
@@ -628,7 +650,8 @@ enroll_device() {
     "architecture": "${SYNCWIN_ARCH}",
     "os": "${SYNCWIN_DISTRO_ID}",
     "kernel": "${kernel_ver}",
-    "agent_version": "${agent_ver}"
+    "agent_version": "${agent_ver}",
+    "machine_id": "${machine_id}"
 }
 EOF
 )

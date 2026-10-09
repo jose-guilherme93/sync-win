@@ -1,6 +1,8 @@
 package contract
 
 import (
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -231,5 +233,48 @@ func TestDockerExecTimeoutDefault(t *testing.T) {
 	c.Commands.DockerExecTimeoutSeconds = 45
 	if got := c.DockerExecTimeout(); got != 45*time.Second {
 		t.Fatalf("DockerExecTimeout() = %s, want 45s", got)
+	}
+}
+
+func TestFirstStateDirectory(t *testing.T) {
+	// systemd joins several StateDirectory= entries with a colon.
+	for _, tc := range []struct{ in, want string }{
+		{"/var/lib/sync-win", "/var/lib/sync-win"},
+		{"/var/lib/a:/var/lib/b", "/var/lib/a"},
+		{"  /var/lib/a  ", "/var/lib/a"},
+		{":/var/lib/b", "/var/lib/b"},
+		{"", ""},
+		{":", ""},
+	} {
+		if got := firstStateDirectory(tc.in); got != tc.want {
+			t.Errorf("firstStateDirectory(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestStatePathPrefersSystemdStateDirectory(t *testing.T) {
+	dir := t.TempDir()
+	// The service runs under ProtectSystem=strict with no home directory for the
+	// service user, so the XDG path cannot be written. STATE_DIRECTORY is the
+	// one location systemd guarantees is writable.
+	t.Setenv("XDG_STATE_HOME", "/xdg/state")
+	t.Setenv("STATE_DIRECTORY", dir)
+
+	if got, want := StatePath(), filepath.Join(dir, "agent-state.json"); got != want {
+		t.Errorf("StatePath() = %q, want %q", got, want)
+	}
+}
+
+func TestStatePathFallsBackToXdgThenContract(t *testing.T) {
+	t.Setenv("STATE_DIRECTORY", "")
+	t.Setenv("XDG_STATE_HOME", "/xdg/state")
+	if got, want := StatePath(), filepath.Join("/xdg/state", "sync-win", "agent-state.json"); got != want {
+		t.Errorf("StatePath() with only XDG = %q, want %q", got, want)
+	}
+
+	t.Setenv("XDG_STATE_HOME", "")
+	// Falls through to the contract path, which is what a hand-run agent uses.
+	if got := StatePath(); !strings.HasSuffix(got, "agent-state.json") {
+		t.Errorf("StatePath() = %q, want it to end in agent-state.json", got)
 	}
 }

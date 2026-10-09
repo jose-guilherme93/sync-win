@@ -190,10 +190,32 @@ func ExpandPath(path string) string {
 
 // StatePath returns the agent state file location, honoring XDG_STATE_HOME.
 func StatePath() string {
+	// STATE_DIRECTORY comes from systemd's StateDirectory= directive, which
+	// creates the directory, gives it the right owner, and makes it writable
+	// even under ProtectSystem=strict. The agent relies on exactly one of its
+	// state directories surviving a restart, and the XDG path below resolves
+	// under a home the service user does not have: the installer creates it with
+	// --no-create-home, and strict protection mounts /home read-only. Preferring
+	// the systemd-provided directory is what makes the state persist at all.
+	if dir := firstStateDirectory(os.Getenv("STATE_DIRECTORY")); dir != "" {
+		return filepath.Join(dir, "agent-state.json")
+	}
 	if dir := os.Getenv("XDG_STATE_HOME"); dir != "" {
 		return filepath.Join(dir, "sync-win", "agent-state.json")
 	}
 	return ExpandPath(cachedContract.PreferencesSync.StatePath)
+}
+
+// firstStateDirectory returns the first entry of a STATE_DIRECTORY value.
+// systemd joins several StateDirectory= entries with a colon, and this agent
+// uses only the first.
+func firstStateDirectory(value string) string {
+	for _, dir := range strings.Split(value, ":") {
+		if dir = strings.TrimSpace(dir); dir != "" {
+			return dir
+		}
+	}
+	return ""
 }
 
 // cachedContract backs StatePath; loaded lazily by SetStateSource/SetContract.

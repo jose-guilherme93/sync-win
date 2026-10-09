@@ -2442,6 +2442,10 @@ type enrollRequest struct {
 	Kernel       string `json:"kernel"`
 	AgentVersion string `json:"agent_version"`
 	Fingerprint  string `json:"fingerprint"`
+	// MachineID is /etc/machine-id from the enrolling host. It identifies which
+	// of the owner's devices to adopt when the same machine enrolls again, so a
+	// reinstall replaces its own record instead of creating a duplicate.
+	MachineID string `json:"machine_id"`
 }
 
 func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
@@ -2465,7 +2469,9 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	if hostname == "" {
 		hostname = "unknown"
 	}
-	device, err := s.store.RegisterDevice(hostname, "", ownerID, req.Fingerprint)
+	// A device re-enrolling with the same machine identifier adopts its existing
+	// record, so reinstalling the agent does not leave a duplicate behind.
+	device, adopted, err := s.store.EnrollDevice(hostname, ownerID, req.MachineID, req.Fingerprint)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
@@ -2477,7 +2483,11 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		}
 		s.log.Warn(logging.CatAgent, logging.EventAgentEnrollFailed, "enrollment token consume failed", map[string]any{"token_prefix": prefix, "error": err.Error()})
 	}
-	s.log.Audit(logging.CatAgent, logging.EventAgentEnrollComplete, "device enrolled", map[string]any{"device_id": device.ID, "hostname": hostname, "architecture": req.Architecture})
+	if adopted {
+		s.log.Audit(logging.CatAgent, logging.EventDeviceRegistered, "device re-enrolled, existing record adopted", map[string]any{"device_id": device.ID, "hostname": hostname})
+	} else {
+		s.log.Audit(logging.CatAgent, logging.EventAgentEnrollComplete, "device enrolled", map[string]any{"device_id": device.ID, "hostname": hostname, "architecture": req.Architecture})
+	}
 	s.notifier.Emit(ownerID, notify.Event{Type: notify.EventDeviceEnrolled, DeviceID: device.ID, Hostname: hostname, Message: "was enrolled"})
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"device_id": device.ID, "device_token": device.DeviceToken})
