@@ -186,8 +186,8 @@ Fontes: `apt-mark showmanual`, `flatpak --user list`, `pacman -Qqe` (menos `-Qmq
 
 ## Inventário de sistema (`POST /api/devices/{id}/system-inventory`)
 
-Duas seções independentes, ambas declaradas em `system_inventory` no
-`contract.json`: unidades systemd e sockets em escuta. Intervalo padrão 300 s.
+Três seções independentes, declaradas em `system_inventory` no `contract.json`:
+unidades systemd, sockets em escuta e contas de login. Intervalo padrão 300 s.
 
 Fontes: `systemctl list-units --type=service --all` +
 `systemctl list-unit-files --type=service` para as unidades, `ss -tulpnH` para os
@@ -219,6 +219,17 @@ endereços IPv6 vêm entre colchetes, às vezes com zone ID (`[::%eth0]:22`,
 `127.0.0.53%lo:53`). O parser trata os dois casos e normaliza o wildcard para
 endereço vazio.
 
+### Contas de login (remote access)
+
+Campos: `{enabled, default_user?, logins[]}`. `enabled` reflete a política local
+(`allow_remote_access`) e `default_user` o alvo configurado (`ssh_user`), de modo
+que o dashboard sabe o estado do device sem poder alterá-lo. `logins` lista as
+contas que uma sessão remota pode usar: lidas de `/etc/passwd`, apenas uid ≥
+`users.min_uid` (padrão 1000), com shell de login real; `nologin`/`false`, contas
+de sistema e `root` são excluídas. Limitado a `users.max_users`. Nenhum dado de
+usuário além do nome é coletado. A lista é enviada mesmo com o acesso desligado,
+para o operador ver as opções antes de habilitar.
+
 ### Ferramenta ausente não é falha
 
 `systemctl` ou `ss` ausentes retornam lista vazia sem erro: o agent roda também em
@@ -226,8 +237,9 @@ sistemas sem systemd e um binário faltando não pode virar erro de ciclo a cada
 5 minutos. Já um comando presente que falha é erro — a seção correspondente é
 omitida do payload e o server preserva o snapshot anterior dela.
 
-O payload aceita `services` e `ports` ausentes. Uma seção omitida preserva o
-último valor; um array vazio é um relatório real e substitui o snapshot.
+O payload aceita `services`, `ports` e `users` ausentes. Uma seção omitida
+preserva o último valor; um array vazio é um relatório real e substitui o
+snapshot.
 
 ## Heartbeat (`POST /api/devices/{id}/heartbeat`)
 
@@ -273,7 +285,7 @@ inventário continuam independentes.
 
 `install_app` usa apenas comandos fixos por fonte. Flatpak e AUR rodam no user service; APT e Pacman exigem root ou `sudo -n` configurado. AppImage é recusado porque não há fonte.download confiável. A feature flag `SYNCWIN_ENABLE_REMOTE_MUTATIONS` também precisa estar habilitada no servidor.
 
-- **Policy local** (`~/.config/sync-win/policy.json`, criada pelo operador): `{"allow_install_app": false, "allow_exclude_file": false, "allow_restore_saves": false, "allow_lynis_audit": true, "allow_restart_agent": false, "allow_package_updates": false, "allow_reboot_device": false, "allow_docker_read": true, "allow_docker_lifecycle": false, "allow_docker_exec": false, "allow_docker_prune": false, "allow_docker_compose": false, "command_timeout_seconds": 900}`. Arquivo ausente ou inválido usa defaults fail-closed. Comando recusado é reportado ao servidor com motivo — nada executa sem consentimento local.
+- **Policy local** (`/etc/sync-win/policy.json`, criada pelo operador; o caminho legado `~/.config/sync-win/policy.json` ainda é lido): `{"allow_install_app": false, "allow_exclude_file": false, "allow_restore_saves": false, "allow_lynis_audit": true, "allow_restart_agent": false, "allow_package_updates": false, "allow_reboot_device": false, "allow_docker_read": true, "allow_docker_lifecycle": false, "allow_docker_exec": false, "allow_docker_prune": false, "allow_docker_compose": false, "allow_remote_access": false, "ssh_user": "<usuário>", "command_timeout_seconds": 900}`. Arquivo ausente ou inválido usa defaults fail-closed. Comando recusado é reportado ao servidor com motivo — nada executa sem consentimento local. Alterada no device por `sync-win-agent set <ssh|ssh-user>`, que reescreve o arquivo por cima dos defaults (nunca zera as outras capabilities) de forma atômica em modo `0600`.
 - **Docker**: IDs de container/exec são validados, requests têm deadline, respostas são limitadas e compose aceita apenas filenames/roots aprovados sem symlink escape. Results são vinculados ao device que os solicitou.
 - Transporte: token via header `Authorization: Bearer`; polling apenas; o servidor nunca empurra nada.
 

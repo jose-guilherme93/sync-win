@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bufio"
 	"compress/gzip"
 	"context"
 	"crypto/subtle"
@@ -10,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	neturl "net/url"
 	"os"
@@ -26,6 +28,7 @@ import (
 	"sync-win/server/internal/logging"
 	"sync-win/server/internal/notify"
 	"sync-win/server/internal/store"
+	"sync-win/server/internal/tunnel"
 )
 
 const maxRequestBytes = 2 << 20
@@ -40,6 +43,7 @@ type Server struct {
 	dockerBroadcaster *docker.Broadcaster
 	streamTickets     *streamTicketStore
 	rateLimiter       *rateLimiter
+	tunnelHub         *tunnel.Hub
 	flags             featureFlags
 	trustProxy        bool
 }
@@ -150,7 +154,7 @@ func Run() error {
 	dockerBroadcaster := docker.NewBroadcaster()
 	flags := loadFeatureFlags()
 	bootstrapAdmin(dataStore, structLogger, flags.EnableRegistration)
-	server := &Server{store: dataStore, logStore: logStore, log: structLogger, aggregator: aggregator, notifier: notifier, dockerQueue: dockerQueue, dockerBroadcaster: dockerBroadcaster, streamTickets: newStreamTicketStore(), rateLimiter: newRateLimiter(), flags: flags, trustProxy: envBool("SYNCWIN_TRUST_PROXY", false)}
+	server := &Server{store: dataStore, logStore: logStore, log: structLogger, aggregator: aggregator, notifier: notifier, dockerQueue: dockerQueue, dockerBroadcaster: dockerBroadcaster, streamTickets: newStreamTicketStore(), rateLimiter: newRateLimiter(), tunnelHub: tunnel.NewHub(), flags: flags, trustProxy: envBool("SYNCWIN_TRUST_PROXY", false)}
 
 	// Log application startup
 	structLogger.Info(logging.CatSystem, logging.EventAppStarted,
@@ -383,6 +387,7 @@ func gzipMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/api/") ||
 			r.URL.Path == "/api/notifications/stream" ||
+			isWebSocketUpgrade(r) ||
 			!strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 			next.ServeHTTP(w, r)
 			return
@@ -394,6 +399,12 @@ func gzipMiddleware(next http.Handler) http.Handler {
 			_ = gz.Close()
 		}
 	})
+}
+
+// isWebSocketUpgrade reports whether the request is a WebSocket handshake.
+func isWebSocketUpgrade(r *http.Request) bool {
+	return strings.EqualFold(r.Header.Get("Upgrade"), "websocket") &&
+		strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade")
 }
 
 // gzipResponseWriter decides lazily whether a response should be compressed,
@@ -459,6 +470,21 @@ func (g *gzipResponseWriter) Flush() {
 	if f, ok := g.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+// Unwrap lets http.ResponseController reach the underlying writer.
+func (g *gzipResponseWriter) Unwrap() http.ResponseWriter {
+	return g.ResponseWriter
+}
+
+// Hijack forwards to the underlying writer so a WebSocket upgrade can take the
+// connection even if this wrapper is still in the chain.
+func (g *gzipResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := g.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, http.ErrNotSupported
+	}
+	return hj.Hijack()
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
@@ -899,6 +925,30 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeviceDetail(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/devices/")
 	parts := strings.Split(path, "/")
+	if len(parts) == 2 && parts[1] == "tunnel" {
+		s.handleAgentTunnel(w, r, parts[0])
+		return
+	}
+	if len(parts) == 3 && parts[1] == "tunnel" && parts[2] == "session" {
+		s.handleAgentTunnelSession(w, r, parts[0])
+		return
+	}
+	if len(parts) == 2 && parts[1] == "terminal" {
+		s.handleTerminal(w, r, parts[0])
+		return
+	}
+	if len(parts) == 2 && parts[1] == "remote-access" {
+		s.handleRemoteAccessInfo(w, r, parts[0])
+		return
+	}
+	if len(parts) == 3 && parts[1] == "remote-access" && parts[2] == "session" {
+		s.handleRemoteAccessRequest(w, r, parts[0])
+		return
+	}
+	if len(parts) == 3 && parts[1] == "remote-access" && parts[2] == "sessions" {
+		s.handleRemoteAccessSessions(w, r, parts[0])
+		return
+	}
 	if len(parts) == 2 && parts[1] == "telemetry" {
 		s.handleTelemetry(w, r, parts[0])
 		return
@@ -1526,6 +1576,7 @@ type systemInventoryRequest struct {
 	DeviceToken string               `json:"device_token"`
 	Services    *[]store.ServiceUnit `json:"services,omitempty"`
 	Ports       *[]store.OpenPort    `json:"ports,omitempty"`
+	Users       *store.LoginUsers    `json:"users,omitempty"`
 }
 
 // handleSystemInventory accepts the agent's systemd and port snapshots.
@@ -1542,11 +1593,15 @@ func (s *Server) handleSystemInventory(w http.ResponseWriter, r *http.Request, d
 		s.writeError(w, http.StatusUnauthorized, errors.New("invalid device token"))
 		return
 	}
-	if req.Services == nil && req.Ports == nil {
+	if req.Services == nil && req.Ports == nil && req.Users == nil {
 		s.writeError(w, http.StatusBadRequest, errors.New("no system inventory section in payload"))
 		return
 	}
 	if err := s.store.UpdateSystemInventory(r.Context(), deviceID, req.Services, req.Ports); err != nil {
+		s.writeError(w, http.StatusNotFound, err)
+		return
+	}
+	if err := s.store.UpdateLoginUsers(r.Context(), deviceID, req.Users); err != nil {
 		s.writeError(w, http.StatusNotFound, err)
 		return
 	}
@@ -2324,13 +2379,25 @@ func (s *Server) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	script := fmt.Sprintf(`#!/usr/bin/env bash
+	// Optional capabilities chosen on the "Add device" screen travel as query
+	// parameters so the operator's install-time consent is baked into the
+	// command. They only ever turn things on for the device being installed.
+	query := r.URL.Query()
+	sshOn := "0"
+	if query.Get("ssh") == "1" {
+		sshOn = "1"
+	}
+	preamble := fmt.Sprintf(`#!/usr/bin/env bash
 set -Eeuo pipefail
 
 SYNCWIN_SERVER="%s"
 SYNCWIN_TOKEN="%s"
-
-`, shellDoubleQuote(serverURL), token)
+SYNCWIN_SSH_ON_INSTALL="%s"
+`, shellDoubleQuote(serverURL), token, sshOn)
+	if query.Get("autoupdate") == "0" {
+		preamble += "SYNCWIN_AUTO_UPDATE=\"0\"\n"
+	}
+	script := preamble + "\n"
 	// Append the static installer from the embedded filesystem.
 	data, err := os.ReadFile("/app/install.sh")
 	if err != nil {
@@ -2401,6 +2468,7 @@ var agentUnitFiles = map[string]string{
 	"update-service": "sync-win-agent-update.service",
 	"update-timer":   "sync-win-agent-update.timer",
 	"update-path":    "sync-win-agent-update.path",
+	"helper":         "sync-win-agent-helper.service",
 }
 
 // agentUnitDir is where the unit templates live. Overridable so the handler can

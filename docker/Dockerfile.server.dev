@@ -34,6 +34,7 @@ COPY server/sync-win-agent.service /app/sync-win-agent.service
 COPY server/sync-win-agent-update.service /app/sync-win-agent-update.service
 COPY server/sync-win-agent-update.timer /app/sync-win-agent-update.timer
 COPY server/sync-win-agent-update.path /app/sync-win-agent-update.path
+COPY server/sync-win-agent-helper.service /app/sync-win-agent-helper.service
 RUN sha256sum /app/sync-win-agent | awk '{print $1 "  sync-win-agent"}' > /app/checksums.txt
 
 EXPOSE 8080

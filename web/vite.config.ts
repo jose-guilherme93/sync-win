@@ -19,6 +19,10 @@ export default defineConfig({
       '/api': {
         target: apiTarget,
         changeOrigin: true,
+        // The remote-access terminal is a WebSocket under /api. Without ws:true
+        // the proxy forwards the HTTP handshake but not the upgrade, so the
+        // terminal never connects in dev.
+        ws: true,
         // The notification stream is a long-lived SSE connection; proxying it
         // must not buffer or time out.
         configure: (proxy) => {

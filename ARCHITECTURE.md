@@ -45,7 +45,8 @@ The agent runs on each Linux device. It is the only component allowed to touch t
 - reporting Docker container status and engine info in telemetry
 - collecting installed application inventory (apt, flatpak, pacman, AUR, AppImages)
 - reconnecting to the server only through a fresh enrollment flow after credential loss
-- enforcing local policy: any command type can be disabled via `~/.config/sync-win/policy.json`
+- enforcing local policy: any command type can be disabled via `/etc/sync-win/policy.json`
+- interactive remote access (opt-in, off by default): keeps an outbound tunnel, and for each session injects an ephemeral key through a root helper and runs `ssh` against its own loopback
 - surviving server outages via exponential backoff with jitter
 - persisting state across restarts (`~/.local/state/sync-win/agent-state.json`)
 
@@ -70,7 +71,7 @@ Key UI components:
 - `components/screens/DeviceOverview.svelte`: gauges, per-core load, storage/network cards, history chart
 - `components/screens/Alerts.svelte`, `Reports.svelte`: fleet-wide findings and inventory reports
 - `components/screens/Storage.svelte`, `Processes.svelte`, `Packages.svelte`, `Services.svelte`: per-device hardware and system views
-- `components/screens/RemoteActions.svelte`, `DeviceSettings.svelte`: confirmed remote actions with an audit trail, and device identity/removal
+- `components/screens/RemoteAccess.svelte`, `DeviceSettings.svelte`: the SSH terminal plus the confirmed device actions with an audit trail, and device identity/removal
 - `DeviceModal.svelte`: device detail; still owns the Files / Packages / Saves / Notes / Docker / Security tabs, and can render inline via `variant="page"` rather than as a popup
 - `DockerTab.svelte`: container management (list, start/stop/restart/kill/remove, exec, compose editor, prune)
 - `SecurityTab.svelte`: Lynis security audit runner, hardening index gauge, warnings/suggestions, history
@@ -78,7 +79,7 @@ Key UI components:
 - `NotificationsModal.svelte`: notification provider settings and inbox
 - `NotificationToast.svelte`: real-time toast notifications via SSE
 
-**Status:** the shell and every fleet and device screen are implemented. Four screens render honest "not collected yet" states for the parts whose API does not exist: `Services` (systemd units, open ports), `RemoteActions` (reboot / update-packages / restart-agent command types), the pending-updates half of `Packages`, and the SMART half of `Storage`. Those are marked in the UI with the missing endpoint, and `lib/flags.ts` (`VITE_MOCK_*`) can swap in labelled sample data for layout review. `cpu`, `memory`, `network` and `sensors` currently all resolve to the same `DeviceOverview`; `containers` and `security` still resolve to `DeviceModal` tabs. `logs` is a dedicated screen (`DeviceLogs`) that the sidebar section and the modal tab both render.
+**Status:** the shell and every fleet and device screen are implemented. A few screens render honest "not collected yet" states for the parts whose API does not exist: `Services` (systemd units, open ports), the pending-updates half of `Packages`, and the SMART half of `Storage`. `RemoteAccess` hosts the SSH terminal (over the remote-access tunnel) and the confirmed device actions (reboot / update-packages / restart-agent). Those are marked in the UI with the missing endpoint, and `lib/flags.ts` (`VITE_MOCK_*`) can swap in labelled sample data for layout review. `cpu`, `memory`, `network` and `sensors` currently all resolve to the same `DeviceOverview`; `containers` and `security` still resolve to `DeviceModal` tabs. `logs` is a dedicated screen (`DeviceLogs`) that the sidebar section and the modal tab both render.
 
 Note that `svelte-check` does not reliably catch malformed Svelte block structure in this repo; `vite build` is the trustworthy gate for template changes.
 
@@ -93,6 +94,7 @@ Note that `svelte-check` does not reliably catch malformed Svelte block structur
 - web serving and health endpoints
 - user authentication (register, login, HttpOnly session cookies, CSRF-protected mutations)
 - Docker command queue management and broadcast to agents
+- interactive remote-session brokering: one-time tickets and a byte relay between the browser terminal and the agent's outbound tunnel, with the server never naming a host or port
 - notification dispatch (Telegram, webhook, web inbox) with 15-minute throttle window
 - device notes and file attachments
 - structured JSON logging with secret redaction
@@ -124,6 +126,7 @@ Note that `svelte-check` does not reliably catch malformed Svelte block structur
 - device notes and attachments
 - notification provider configuration and inbox
 - real-time notification push via SSE
+- the **Remote access** screen: an SSH terminal (xterm.js) plus the device action commands and the recent-session audit list
 
 ## Communication
 
@@ -135,14 +138,17 @@ Communication is API-first and intentionally simple:
 4. The web dashboard reads the server data and shows the current device state.
 5. Docker management commands flow from the dashboard to the server (command queue), then to the agent (polling), and results flow back.
 6. Notifications flow from the server dispatcher to enabled providers asynchronously.
+7. For remote access, the agent keeps an outbound tunnel; the server issues a one-time ticket, and bytes flow browser → server → agent → loopback sshd. The server never names a host or port.
 
-No direct server-to-client shell execution is allowed.
+No direct server-to-client shell execution is allowed, with one scoped exception:
+the opt-in remote-access tunnel, which is mediated by the device's local policy
+and terminates in the device's own sshd (see SECURITY.md).
 
 ## Architectural principles
 
 - Agent-first architecture.
 - Server is passive and safe.
-- No remote arbitrary shell execution.
+- No remote arbitrary shell execution, except the opt-in remote-access tunnel, which is gated by the device's local policy and terminates in the device's own sshd.
 - Only small text files are saved (up to 256 KiB) and binary saves as base64 (up to 1 MiB).
 - Device state is tracked by online status and last synchronization.
 - Only explicit preference files are synced (allowlist-based).
@@ -189,7 +195,8 @@ The current project intentionally does not include:
 
 - restore of full system environments
 - snapshots or full machine images
-- remote command execution (except Docker management via the proxy)
+- remote command execution (except Docker management via the proxy, and the
+  opt-in remote-access SSH tunnel)
 - large binary or media backups
 - real-time sync for every file in the home directory
 
@@ -206,7 +213,10 @@ The current project intentionally does not include:
 
 ## Security rules
 
-- Never execute shell commands on client machines from the server.
+- Never execute shell commands on client machines from the server. The one
+  exception is the opt-in remote-access tunnel (dual-gated by
+  `SYNCWIN_ENABLE_REMOTE_ACCESS` and the device's `allow_remote_access`), where
+  the agent — not the server — dials the actual connection.
 - Never store secrets, tokens, passwords, or private keys.
 - Ignore sensitive data by default.
 - Validate and sanitize every uploaded file.

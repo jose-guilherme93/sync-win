@@ -184,6 +184,14 @@ func reconcileUnit(serverURL, service string, userSystemd bool, deviceID, device
 	if err != nil {
 		return fmt.Errorf("could not refresh the systemd unit: %w", err)
 	}
+	// The remote-access helper is its own unit. A device installed before it
+	// existed never got it from the installer, and a binary-only update does not
+	// create a service, so reconcile it here too.
+	if !userSystemd {
+		if _, herr := reconcileHelperUnit(serverURL); herr != nil {
+			return fmt.Errorf("could not reconcile the remote-access helper: %w", herr)
+		}
+	}
 	if !changed {
 		return nil
 	}
@@ -191,6 +199,46 @@ func reconcileUnit(serverURL, service string, userSystemd bool, deviceID, device
 		return fmt.Errorf("restart after unit refresh: %w", err)
 	}
 	fmt.Println("SyncWin agent unit refreshed")
+	return nil
+}
+
+// reconcileHelperUnit installs or updates the remote-access helper unit so an
+// already-installed device gains the helper without re-running the installer.
+// Best-effort on servers that do not serve the template.
+func reconcileHelperUnit(serverURL string) (bool, error) {
+	const target = "/etc/systemd/system/sync-win-agent-helper.service"
+	desired, err := fetchUnitTemplate(serverURL, "helper")
+	if err != nil {
+		if errors.Is(err, errUnitEndpointUnsupported) {
+			return false, nil
+		}
+		return false, err
+	}
+	if current, err := os.ReadFile(target); err == nil && desired == string(current) {
+		return false, nil
+	}
+	if err := os.WriteFile(target, []byte(desired), 0o644); err != nil {
+		return false, fmt.Errorf("write helper unit: %w", err)
+	}
+	if err := runSystemctlArgs("daemon-reload"); err != nil {
+		return false, err
+	}
+	if err := runSystemctlArgs("enable", "--now", "sync-win-agent-helper.service"); err != nil {
+		return false, fmt.Errorf("enable remote-access helper: %w", err)
+	}
+	fmt.Println("SyncWin remote-access helper unit installed")
+	return true, nil
+}
+
+// runSystemctlArgs runs systemctl with arbitrary arguments (the single-argument
+// runSystemctl cannot express `enable --now <unit>`).
+func runSystemctlArgs(args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "systemctl", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("systemctl %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
 	return nil
 }
 
@@ -514,13 +562,18 @@ func mergeExecStart(current, desired string) string {
 }
 
 func fetchAgentUnit(serverURL string) (string, error) {
+	return fetchUnitTemplate(serverURL, "agent")
+}
+
+// fetchUnitTemplate fetches a raw systemd unit template by its short name from
+// the public endpoint, which must not depend on credentials the caller may not
+// have.
+func fetchUnitTemplate(serverURL, name string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Public endpoint, raw template. The unit refresh must not depend on
-	// credentials the caller may not have.
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		serverURL+"/api/agent/units?name=agent", nil)
+		serverURL+"/api/agent/units?name="+name, nil)
 	if err != nil {
 		return "", err
 	}

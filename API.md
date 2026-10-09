@@ -560,6 +560,69 @@ clients; the dashboard uses the session and must own the device.
 **Response:** `200 OK` (command object with `queued`, `completed`, or `failed`
 status and the result message when present)
 
+### Remote Access
+
+Interactive SSH is opt-in and dual-gated: `SYNCWIN_ENABLE_REMOTE_ACCESS` on the
+server and `allow_remote_access` in the device policy. With either off, the
+endpoints fail closed. The server never names a host or port; the agent always
+dials its own loopback.
+
+#### `GET /api/devices/{id}/remote-access`
+
+Requires a session token and device ownership. Reports the state the dashboard
+needs to offer a session.
+
+**Response:** `200 OK`
+```json
+{
+  "server_enabled": true,
+  "device_enabled": false,
+  "default_user": "alice",
+  "users": ["alice", "bob"],
+  "connected": true
+}
+```
+
+#### `POST /api/devices/{id}/remote-access/session`
+
+Requires a session token, CSRF, and device ownership. Issues a one-time ticket.
+
+**Request:**
+```json
+{ "user": "alice" }
+```
+
+**Response:** `200 OK`
+```json
+{ "ticket": "<hex>", "user": "alice", "idle_timeout_seconds": 900 }
+```
+
+`409 Conflict` when the device is not connected to the tunnel.
+
+#### `GET /api/devices/{id}/remote-access/sessions`
+
+Requires a session token and device ownership. Returns the recent session audit
+rows (no terminal content).
+
+**Response:** `200 OK`
+```json
+{ "sessions": [{ "id": "…", "device_id": "…", "owner_id": "…", "user": "alice", "started_at": "…", "ended_at": "…", "reason": "closed" }] }
+```
+
+#### `GET /api/devices/{id}/terminal?ticket=…`
+
+WebSocket, browser end. Authenticates with the dashboard session cookie and
+redeems the ticket; relays terminal bytes to the agent's data pipe.
+
+#### `GET /api/devices/{id}/tunnel`
+
+WebSocket, agent control link. Authenticates with the device token. The server
+pushes `{"type":"open","ticket":"…","user":"…"}`.
+
+#### `GET /api/devices/{id}/tunnel/session?ticket=…`
+
+WebSocket, agent data pipe. Authenticates with the device token and the ticket.
+
 ### Files
 
 #### `GET /api/devices/{id}/files`

@@ -19,6 +19,7 @@ import (
 
 	"sync-win/server/internal/logging"
 	"sync-win/server/internal/store"
+	"sync-win/server/internal/tunnel"
 )
 
 func newTestServer(t *testing.T) *Server {
@@ -36,7 +37,7 @@ func newTestServer(t *testing.T) *Server {
 	structLogger := logging.New(logCfg, logStore)
 	t.Cleanup(func() { structLogger.Stop() })
 
-	return &Server{store: st, logStore: logStore, log: structLogger, streamTickets: newStreamTicketStore(), rateLimiter: newRateLimiter(), flags: featureFlags{EnableRegistration: true}}
+	return &Server{store: st, logStore: logStore, log: structLogger, streamTickets: newStreamTicketStore(), rateLimiter: newRateLimiter(), tunnelHub: tunnel.NewHub(), flags: featureFlags{EnableRegistration: true}}
 }
 
 func TestAgentInstallScriptRegistersAndVerifies(t *testing.T) {
@@ -1285,6 +1286,43 @@ func TestAgentUnitTemplateRendersForAuthenticatedDevice(t *testing.T) {
 	s.handleAgentUnitTemplate(missingRec, missing)
 	if missingRec.Code != http.StatusBadRequest {
 		t.Errorf("missing credentials status = %d, want 400", missingRec.Code)
+	}
+}
+
+func TestInstallScriptEmbedsCapabilityChoices(t *testing.T) {
+	s := newTestServer(t)
+	user, err := s.store.CreateUser("install@example.com", "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := s.store.CreateEnrollmentToken(user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/install/"+token+"?ssh=1&autoupdate=0", nil)
+	rec := httptest.NewRecorder()
+	s.handleInstallScript(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `SYNCWIN_SSH_ON_INSTALL="1"`) {
+		t.Fatalf("ssh choice missing from installer:\n%s", body[:min(400, len(body))])
+	}
+	if !strings.Contains(body, `SYNCWIN_AUTO_UPDATE="0"`) {
+		t.Fatalf("autoupdate opt-out missing from installer:\n%s", body[:min(400, len(body))])
+	}
+
+	// Defaults must be safe: ssh off, and auto-update not forced off.
+	defaultToken, err := s.store.CreateEnrollmentToken(user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultRec := httptest.NewRecorder()
+	s.handleInstallScript(defaultRec, httptest.NewRequest(http.MethodGet, "/install/"+defaultToken, nil))
+	if got := defaultRec.Body.String(); !strings.Contains(got, `SYNCWIN_SSH_ON_INSTALL="0"`) || strings.Contains(got, `SYNCWIN_AUTO_UPDATE="0"`) {
+		t.Fatalf("unsafe installer defaults:\n%s", got[:min(400, len(got))])
 	}
 }
 
