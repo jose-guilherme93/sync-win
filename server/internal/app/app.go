@@ -2383,17 +2383,18 @@ func (s *Server) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 	// parameters so the operator's install-time consent is baked into the
 	// command. They only ever turn things on for the device being installed.
 	query := r.URL.Query()
-	sshOn := "0"
-	if query.Get("ssh") == "1" {
-		sshOn = "1"
-	}
 	preamble := fmt.Sprintf(`#!/usr/bin/env bash
 set -Eeuo pipefail
 
 SYNCWIN_SERVER="%s"
 SYNCWIN_TOKEN="%s"
-SYNCWIN_SSH_ON_INSTALL="%s"
-`, shellDoubleQuote(serverURL), token, sshOn)
+`, shellDoubleQuote(serverURL), token)
+	// Only carry a capability the Add-device screen actually chose. An unset one
+	// lets the installer ask (interactively) or take its default, so a bare
+	// install does not silently pin a choice the operator never made.
+	if query.Get("ssh") == "1" {
+		preamble += "SYNCWIN_SSH_ON_INSTALL=\"1\"\n"
+	}
 	if query.Get("autoupdate") == "0" {
 		preamble += "SYNCWIN_AUTO_UPDATE=\"0\"\n"
 	}

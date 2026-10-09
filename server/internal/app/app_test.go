@@ -1314,15 +1314,16 @@ func TestInstallScriptEmbedsCapabilityChoices(t *testing.T) {
 		t.Fatalf("autoupdate opt-out missing from installer:\n%s", body[:min(400, len(body))])
 	}
 
-	// Defaults must be safe: ssh off, and auto-update not forced off.
+	// No choice carried: the capability is left unset so the installer can ask
+	// (or default), and auto-update is not forced off.
 	defaultToken, err := s.store.CreateEnrollmentToken(user.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defaultRec := httptest.NewRecorder()
 	s.handleInstallScript(defaultRec, httptest.NewRequest(http.MethodGet, "/install/"+defaultToken, nil))
-	if got := defaultRec.Body.String(); !strings.Contains(got, `SYNCWIN_SSH_ON_INSTALL="0"`) || strings.Contains(got, `SYNCWIN_AUTO_UPDATE="0"`) {
-		t.Fatalf("unsafe installer defaults:\n%s", got[:min(400, len(got))])
+	if got := defaultRec.Body.String(); strings.Contains(got, "SYNCWIN_SSH_ON_INSTALL=") || strings.Contains(got, `SYNCWIN_AUTO_UPDATE="0"`) {
+		t.Fatalf("installer must not pin capabilities it was not given:\n%s", got[:min(400, len(got))])
 	}
 }
 
