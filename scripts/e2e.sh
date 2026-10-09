@@ -429,7 +429,7 @@ section "Every sidebar section renders"
 FLEET_SECTIONS=("Home" "Devices" "Alerts" "Findings" "Reports")
 DEVICE_SECTIONS=("Overview" "CPU & Thermal" "Memory" "Storage" "Network" "All sensors" \
                  "Containers" "Processes" "Services" "Packages" "Logs" "Security" \
-                 "Remote actions" "Settings")
+                 "Remote access" "Settings")
 
 # Re-select the device after the reload above, which drops the selection.
 eval_js "(()=>{const r=[...document.querySelectorAll('tr,[role=row]')].find(x=>x.textContent.includes(${HOSTNAME@Q}));if(!r)return 'MISSING';r.click();return 'CLICKED';})()" >/dev/null
@@ -575,16 +575,23 @@ else
   fail "storage screen names the missing SMART data" "no SMART reference in: ${STORAGE_TEXT:0:120}"
 fi
 
-# Remote actions: the three actions are real now, so the screen must list them
-# and state the conditions (server flag + local policy) instead of claiming the
-# actions are disabled.
-click_text 'Remote actions' >/dev/null
+# Remote access: the screen hosts both the SSH terminal and the device actions.
+# The actions must be listed with their policy conditions (server flag + local
+# policy), and the terminal controls must render. The live session itself needs
+# a real agent on a real machine, so it is exercised by the remote-access e2e,
+# not here.
+click_text 'Remote access' >/dev/null
 sleep 2
 REMOTE_TEXT=$(unquote "$(eval_js "(()=>{const m=document.querySelector('main')||document.body;return m.innerText.replace(/\s+/g,' ');})()")")
-if [[ "${REMOTE_TEXT}" == *"Restart agent"* && "${REMOTE_TEXT}" == *"Apply package updates"* && "${REMOTE_TEXT}" == *"Reboot device"* && "${REMOTE_TEXT}" == *"local policy"* ]]; then
-  ok "remote actions screen lists the actions and their policy conditions"
+if [[ "${REMOTE_TEXT}" == *"SSH terminal"* && "${REMOTE_TEXT}" == *"Open terminal"* ]]; then
+  ok "remote access screen renders the SSH terminal"
 else
-  fail "remote actions screen lists the actions and their policy conditions" "${REMOTE_TEXT:0:200}"
+  fail "remote access screen renders the SSH terminal" "${REMOTE_TEXT:0:200}"
+fi
+if [[ "${REMOTE_TEXT}" == *"Restart agent"* && "${REMOTE_TEXT}" == *"Apply package updates"* && "${REMOTE_TEXT}" == *"Reboot device"* && "${REMOTE_TEXT}" == *"local policy"* ]]; then
+  ok "remote access screen lists the actions and their policy conditions"
+else
+  fail "remote access screen lists the actions and their policy conditions" "${REMOTE_TEXT:0:200}"
 fi
 
 # ---------------------------------------------------------------------------

@@ -46,6 +46,9 @@ small text files and nothing else.
 
 - start, stop, restart, kill and remove containers; exec, compose, prune
 - restart the agent, run package updates, reboot a device
+- open an **SSH terminal** to a device from the dashboard — no port is opened on
+  the device; enable it on the device with `sudo sync-win-agent set ssh on` and
+  on the server with `SYNCWIN_ENABLE_REMOTE_ACCESS=true`
 
 ---
 
@@ -116,6 +119,7 @@ Only `SYNCWIN_SECRET_KEY` is required.
 | `SYNCWIN_SESSION_TTL_HOURS` | `720` | Dashboard session lifetime (30 days). |
 | `SYNCWIN_ENABLE_REMOTE_MUTATIONS` | `false` | Allow reboot / package updates / agent restart. |
 | `SYNCWIN_ENABLE_DOCKER_MUTATIONS` | `false` | Allow container start/stop/remove, exec, prune. |
+| `SYNCWIN_ENABLE_REMOTE_ACCESS` | `false` | Expose the interactive SSH tunnel endpoints. The device must also enable it locally. |
 | `SYNCWIN_ENABLE_FINGERPRINT_RECONNECT` | `false` | Let a device re-enroll by hardware fingerprint. |
 | `SYNCWIN_CORS_ALLOWED_ORIGIN` | — | Comma-separated origins, needed only when the dashboard is served from a different host. |
 | `SYNCWIN_HTTPS` | `false` | Set `true` behind TLS so session cookies get the `Secure` flag. |
