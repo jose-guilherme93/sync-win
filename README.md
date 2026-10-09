@@ -103,6 +103,21 @@ The installer is idempotent: running it again updates the agent in place. It
 installs a systemd service, grants the agent the journal group so device logs
 work, and enables automatic updates.
 
+Run interactively, it asks whether to keep the agent auto-updating and whether to
+enable SSH remote access. The **Add device** screen can preset those (so it never
+asks), and passing **`--yes`** skips the questions and accepts the defaults
+(auto-update on, remote access off):
+
+```bash
+sudo bash /tmp/sync-win-install.sh --yes
+```
+
+Agent auto-updates are signed. Deployers must set the `AGENT_UPDATE_KEY`
+repository secret (a base64 Ed25519 private key from
+`go run ./cmd/agentsign -genkey`); the matching public key is embedded in the
+agent at build time. Without it the agent is shipped unsigned and the updater
+refuses to install, so every device must be re-installed by hand.
+
 ---
 
 ## Configuration
