@@ -169,6 +169,27 @@ func TestWebhookValidateAcceptsGoodURL(t *testing.T) {
 	}
 }
 
+// TestWebhookValidateRejectsNonPublicRanges covers ranges that are not globally
+// routable but that Go's IsPrivate does not flag. A webhook must not be able to
+// reach them, so the SSRF filter rejects them explicitly.
+func TestWebhookValidateRejectsNonPublicRanges(t *testing.T) {
+	p := Lookup("webhook")
+	hosts := []string{
+		"100.64.0.1",  // CGNAT
+		"192.0.0.1",   // IETF protocol assignments
+		"198.18.0.1",  // benchmarking
+		"203.0.113.1", // TEST-NET-3
+		"240.0.0.1",   // reserved
+		"[2001:db8::1]",
+	}
+	for _, host := range hosts {
+		cfg := json.RawMessage(`{"url":"http://` + host + `/hook"}`)
+		if err := p.Validate(cfg); err == nil {
+			t.Errorf("expected %s to be rejected as non-public", host)
+		}
+	}
+}
+
 func TestWebhookPostRejectsPrivateTargetBeforeRequest(t *testing.T) {
 	called := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
