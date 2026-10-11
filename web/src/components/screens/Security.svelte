@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte'
   import { apiFetch, apiURL } from '../../lib/api'
   import { type SecurityPosture } from '../../lib/security-posture'
+  import { portIdentity } from '../../lib/ports'
   import { formatDuration, formatRelative } from '../../lib/format'
   import type { Device } from '../../lib/types'
   import { nav, type Section } from '../../lib/router'
@@ -378,7 +379,7 @@
         {#if publicPortCount > 0}
           <span class="exposure-title">Public listeners</span>
           <div class="exposure-list">
-            {#each publicPorts as p (`${p.port}/${p.protocol}`)}
+            {#each publicPorts as p (portIdentity(p))}
               <span class="tag mono">{p.port}/{p.protocol}</span>
             {/each}
           </div>

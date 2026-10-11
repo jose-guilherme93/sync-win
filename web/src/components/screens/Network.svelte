@@ -3,18 +3,11 @@
   import { apiFetch, apiURL } from '../../lib/api'
   import { formatBytes, formatRate } from '../../lib/format'
   import type { Device, NetworkIface } from '../../lib/types'
+  import { portIdentity, uniquePorts, type OpenPort as Port } from '../../lib/ports'
   import EmptyState from '../ui/EmptyState.svelte'
   import MiniSparkline from '../ui/MiniSparkline.svelte'
 
   export let device: Device
-
-  type Port = {
-    protocol: string
-    local_address: string
-    port: number
-    process?: string
-    pid?: number
-  }
 
   const MAX_SAMPLES = 60
   // A best-effort hint for what a listening port usually serves. The agent runs
@@ -105,7 +98,9 @@
       const res = await apiFetch(apiURL(`/api/devices/${device.id}/ports`))
       if (!res.ok) throw new Error(`ports request failed (${res.status})`)
       const list: Port[] = await res.json()
-      ports = list.sort((a, b) => a.port - b.port)
+      // An older agent can report one socket twice; see lib/ports.ts for why a
+      // repeated key erases this screen rather than skipping a row.
+      ports = uniquePorts(list).sort((a, b) => a.port - b.port)
     } catch (e: any) {
       portsError = e?.message || 'Unable to load listening sockets'
     } finally {
@@ -220,7 +215,7 @@
             <tr><th>Port</th><th>Proto</th><th>Address</th><th>Likely service</th><th>Process</th></tr>
           </thead>
           <tbody>
-            {#each ports as p (`${p.protocol}-${p.local_address}-${p.port}`)}
+            {#each ports as p (portIdentity(p))}
               <tr>
                 <td class="mono port">{p.port}</td>
                 <td class="mono proto">{p.protocol}</td>

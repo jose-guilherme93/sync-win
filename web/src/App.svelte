@@ -30,6 +30,7 @@
   import { selectedRange, rangeById, DEFAULT_RANGE, type RangeId } from './lib/timerange'
   import type { AppInfo, Device, HardwareStats } from './lib/types'
   import type { SecurityPosture } from './lib/security-posture'
+  import { uniquePorts } from './lib/ports'
   import { generateInsights } from './lib/insights'
 
 
@@ -778,10 +779,9 @@
       error: ''
     }
     if (portsRes.status === 'fulfilled' && Array.isArray(portsRes.value)) {
-      next.publicPorts = portsRes.value
-        .filter((p: any) => ['', '0.0.0.0', '::', '*', '[::]'].includes(p.local_address || ''))
-        .map((p: any) => ({ port: p.port, protocol: p.protocol }))
-        .sort((a: any, b: any) => a.port - b.port)
+      next.publicPorts = uniquePorts(
+        portsRes.value.filter((p: any) => ['', '0.0.0.0', '::', '*', '[::]'].includes(p.local_address || ''))
+      ).sort((a: any, b: any) => a.port - b.port)
     }
     if (updatesRes.status === 'fulfilled' && updatesRes.value) {
       next.pendingStatus = updatesRes.value.status || ''
@@ -1447,17 +1447,6 @@
     expandedGroups = { ...expandedGroups, [key]: !expandedGroups[key] }
   }
 
-
-  // Client-side status fallback: compute status from last_seen_at
-  // This ensures devices show as offline even if the server status is stale
-  function computedStatus(device: { status: string; last_seen_at: string }): string {
-    // Don't override error or duplicate states
-    if (device.status === 'error' || device.status === 'duplicate') return device.status
-    const age = (Date.now() - Date.parse(device.last_seen_at)) / 1000
-    if (age > 300) return 'offline'  // 5 minutes
-    if (age > 30) return 'stale'     // 30 seconds
-    return 'online'
-  }
 
   // Both delegate to lib/format so the Go zero time collapses to "never"
   // instead of reporting an age of ~739893 days.

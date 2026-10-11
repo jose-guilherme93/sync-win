@@ -57,13 +57,6 @@
 
   let viewport: HTMLDivElement | null = null
 
-  $: levelCounts = {
-    all: total,
-    error: counts.error || 0,
-    warn: counts.warn || 0,
-    info: counts.info || 0
-  }
-
   $: hasMore = offset + entries.length < total
   $: filtered = entries.length > 0 && entries.filter((e) => matchesFilter(e, level, source, search)).length
 
@@ -199,7 +192,11 @@
   }
 
   function rowClass(entry: DeviceLogEntry): string {
-    const parts = [`level-${entry.level}`]
+    // `row-*`, not `level-*`: app.css already defines global `.level-info`,
+    // `.level-warn` and `.level-error` for the server-log view, and reusing those
+    // names here made every row inherit that palette — blue-tinted info rows in a
+    // single-accent design. The component owns its own row classes now.
+    const parts = [`row-${entry.level}`]
     // Dim rows the active filters would exclude rather than hiding them, so the
     // surrounding context of a matching line stays readable.
     if (level !== 'all' || source || search.trim()) {
@@ -247,21 +244,43 @@
 </script>
 
 <section class="logs-screen">
+  <!-- The counts are the screen's headline, like the tiles on Services and the
+       summary on Network. They used to ride on the filter chips, which made one
+       control carry both the number and the filter and left the screen with no
+       headline at all. -->
+  <div class="summary">
+    <article class="stat">
+      <span class="label">Stored</span>
+      <span class="value">{total}</span>
+      <span class="sub">
+        {#if !loaded}
+          loading…
+        {:else if total === 0}
+          none stored
+        {:else if entries.length < total}
+          showing {entries.length}
+        {:else}
+          all loaded
+        {/if}
+      </span>
+    </article>
+    <article class="stat">
+      <span class="label">Errors</span>
+      <span class="value" class:text-crit={counts.error > 0}>{counts.error || 0}</span>
+    </article>
+    <article class="stat">
+      <span class="label">Warnings</span>
+      <span class="value" class:text-warn={counts.warn > 0}>{counts.warn || 0}</span>
+    </article>
+    <article class="stat">
+      <span class="label">Info</span>
+      <span class="value">{counts.info || 0}</span>
+    </article>
+  </div>
+
   <article class="card">
     <header class="card-head">
-      <div class="titles">
-        <h2>Device logs</h2>
-        <p class="sub">
-          {#if loading && !loaded}
-            Loading…
-          {:else if total === 0}
-            No entries stored yet
-          {:else}
-            {total} stored {total === 1 ? 'entry' : 'entries'}
-            {#if entries.length < total}· showing {entries.length}{/if}
-          {/if}
-        </p>
-      </div>
+      <h2>Device logs</h2>
 
       <div class="tools">
         <input
@@ -303,7 +322,6 @@
         <button class="chip chip-{id}" class:active={level === id} on:click={() => setLevel(id)}>
           <span class="dot" aria-hidden="true"></span>
           {id}
-          <span class="num">{levelCounts[id]}</span>
         </button>
       {/each}
       <span class="spacer"></span>
@@ -392,16 +410,14 @@
       </div>
 
       <footer class="foot">
+        <!-- Only what the headline cannot say: the total and the loaded count
+             already sit in the summary above, so restating them here was the
+             same fact twice. -->
         <span class="status">
           {#if loading}
             Refreshing…
-          {:else if hasMore}
-            Showing the newest {entries.length} of {total}
-          {:else}
-            All {entries.length} {entries.length === 1 ? 'entry' : 'entries'} loaded
-          {/if}
-          {#if filtered && filtered < entries.length}
-            · {filtered} match the filters
+          {:else if filtered && filtered < entries.length}
+            {filtered} of the {entries.length} loaded match the filters
           {/if}
         </span>
         <span class="actions">
@@ -422,15 +438,24 @@
 <style>
   .logs-screen { display: grid; gap: 0.85rem; }
 
+  /* Same headline row the other device screens open with. */
+  .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.6rem; }
+  .stat {
+    display: grid; gap: 0.25rem; align-content: start;
+    padding: 0.8rem 0.9rem; background: var(--card);
+    border: 1px solid var(--border); border-radius: var(--radius);
+  }
+  .stat .value { font-size: 1.45rem; }
+  .stat .sub { color: var(--text-faint); font-size: 0.72rem; }
+
   .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 
   .card-head {
-    display: flex; align-items: flex-start; justify-content: space-between;
+    display: flex; align-items: center; justify-content: space-between;
     gap: 0.75rem; padding: 0.7rem 0.9rem; border-bottom: 1px solid var(--border);
     flex-wrap: wrap;
   }
-  .titles h2 { margin: 0; font-size: 0.82rem; font-weight: 600; color: var(--text); }
-  .sub { margin: 0.15rem 0 0; font-size: 0.72rem; color: var(--text-faint); }
+  .card-head h2 { margin: 0; font-size: 0.82rem; font-weight: 600; color: var(--text); }
 
   .tools { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
   .tools input[type='search'], .tools select {
@@ -473,8 +498,6 @@
   .chip-error .dot { background: var(--crit); }
   .chip-warn .dot { background: var(--warn); }
   .chip-info .dot { background: var(--accent); }
-  .chip .num { color: var(--text-faint); font-variant-numeric: tabular-nums; }
-  .chip.active .num { color: var(--text-muted); }
   .spacer { flex: 1; }
   .toggle { display: flex; align-items: center; gap: 0.25rem; color: var(--text-faint); font-size: 0.71rem; cursor: pointer; }
 
@@ -523,10 +546,13 @@
   }
   .message { color: var(--text); word-break: break-word; }
 
-  .level-error .level { color: var(--crit); }
-  .level-warn .level { color: var(--warn); }
-  .level-info .level { color: var(--text-faint); }
-  .level-error { background: var(--crit-dim); }
+  .row-error .level { color: var(--crit); }
+  .row-warn .level { color: var(--warn); }
+  .row-info .level { color: var(--text-faint); }
+  /* A faint wash, not a filled stripe. The level label already carries the
+     severity, and a saturated row background made the list read as unevenly
+     coloured rather than as a log. */
+  .row-error { background: rgba(248, 113, 113, 0.05); }
 
   .rows:not(.wrap) .message { white-space: pre; overflow-x: hidden; text-overflow: ellipsis; }
 

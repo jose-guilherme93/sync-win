@@ -72,16 +72,43 @@ func CollectApps(sources []string) ([]AppInfo, error) {
 	return unique, nil
 }
 
+// collectAPTApps lists the manually installed packages. `apt-mark showmanual`
+// prints names only, so the dashboard's version column stayed empty on every
+// Debian-family machine; the versions are joined in from dpkg.
+//
+// The dpkg read is enrichment, not a prerequisite: if dpkg is absent or fails,
+// the inventory is still reported with names. Losing the whole list to a missing
+// version would be the worse failure, and an absent version is visible in the UI
+// as an absent version rather than as an empty inventory.
 func collectAPTApps() ([]AppInfo, error) {
 	output, available, err := commandOutput("apt-mark", "showmanual")
 	if err != nil || !available {
 		return nil, err
 	}
+	versions := dpkgVersions()
 	var apps []AppInfo
 	for _, name := range strings.Fields(string(output)) {
-		apps = append(apps, AppInfo{Source: "apt", Name: name})
+		apps = append(apps, AppInfo{Source: "apt", Name: name, Version: versions[name]})
 	}
 	return apps, nil
+}
+
+// dpkgVersions reads the installed version of every package, keyed by name. A
+// missing or failing dpkg yields an empty map, following parseUnitFiles: the
+// caller keeps its inventory and only the enrichment is lost.
+func dpkgVersions() map[string]string {
+	output, available, err := commandOutput("dpkg-query", "-W", "-f=${Package}\t${Version}\n")
+	if err != nil || !available {
+		return nil
+	}
+	versions := make(map[string]string)
+	for _, line := range strings.Split(string(output), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 {
+			versions[fields[0]] = fields[1]
+		}
+	}
+	return versions
 }
 
 func collectFlatpakApps() ([]AppInfo, error) {

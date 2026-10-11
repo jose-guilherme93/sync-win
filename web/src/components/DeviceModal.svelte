@@ -7,7 +7,7 @@
   import { apiFetch, apiURL, serverBase } from '../lib/api'
   // Shared shapes so a Device passed from the shell type-checks against this
   // component. The fields this view reads are a subset of HardwareStats.
-  import type { Device, HardwareStats } from '../lib/types'
+  import { computedStatus, type Device, type HardwareStats } from '../lib/types'
   import { formatRelative } from '../lib/format'
 
   type AppInfo = { name: string; version: string; source: string; path?: string }
@@ -176,15 +176,6 @@
     if (status === 'offline' || status === 'stale') return 'orange'
     if (status === 'error') return 'red'
     return 'gray'
-  }
-
-  // Client-side status fallback: compute status from last_seen_at
-  function computedStatus(device: { status: string; last_seen_at: string }): string {
-    if (device.status === 'error' || device.status === 'duplicate') return device.status
-    const age = (Date.now() - Date.parse(device.last_seen_at)) / 1000
-    if (age > 300) return 'offline'  // 5 minutes
-    if (age > 30) return 'stale'     // 30 seconds
-    return 'online'
   }
 
   // Delegates to lib/format so a null or Go zero timestamp renders "never".
@@ -924,7 +915,7 @@
               {authHeaders}
               lynisAvailable={hw?.lynis_available ?? false}
               lynisInstallCmd={hw?.lynis_install_cmd ?? ''}
-              agentStatus={device.status}
+              agentStatus={computedStatus(device)}
             />
           </div>
 

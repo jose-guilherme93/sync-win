@@ -77,16 +77,38 @@ describe('DeviceLogs', () => {
     expect(calls[0]).toContain('/api/devices/dev-1/logs')
   })
 
-  it('shows the stored total in the header', async () => {
+  it('shows the stored total in the headline', async () => {
     render(DeviceLogs, { props: { deviceId: 'dev-1' } })
-    await vi.waitFor(() => expect(screen.getByText(/3 stored entries/)).toBeTruthy())
+    await vi.waitFor(() => {
+      const stored = screen.getByText('Stored').closest('.stat') as HTMLElement
+      expect(stored.textContent).toMatch(/Stored\s*3/)
+    })
   })
 
-  it('renders per-level counts on the severity chips', async () => {
+  it('breaks the counts down by level in the headline', async () => {
+    // The counts used to ride on the filter chips; they are the screen's
+    // headline now, so the chips stay plain filters.
     render(DeviceLogs, { props: { deviceId: 'dev-1' } })
+    await vi.waitFor(() => {
+      const errors = screen.getByText('Errors').closest('.stat') as HTMLElement
+      const warnings = screen.getByText('Warnings').closest('.stat') as HTMLElement
+      const info = screen.getByText('Info').closest('.stat') as HTMLElement
+      expect(errors.textContent).toMatch(/Errors\s*1/)
+      expect(warnings.textContent).toMatch(/Warnings\s*1/)
+      expect(info.textContent).toMatch(/Info\s*1/)
+    })
+  })
+
+  it('states the loaded count once, not in both the header and the footer', async () => {
+    respond = () => json(page({ entries, total: 400, counts: { error: 1, warn: 1, info: 1 }, sources: ['kernel'] }))
+    render(DeviceLogs, { props: { deviceId: 'dev-1' } })
+
     await vi.waitFor(() => expect(screen.getByText(/EXT4-fs error/)).toBeTruthy())
-    const errorChip = screen.getByRole('button', { name: /^error/ })
-    expect(errorChip.textContent).toContain('1')
+    // The summary says it; the footer must not say it again.
+    const summary = document.querySelector('.logs-screen .summary') as HTMLElement
+    expect(summary.textContent).toMatch(/showing 3/)
+    expect(screen.queryByText(/Showing the newest 3 of 400/)).toBeNull()
+    expect(screen.queryByText(/All 3 entries loaded/)).toBeNull()
   })
 
   it('requests the level filter when a chip is clicked', async () => {
@@ -185,6 +207,19 @@ describe('DeviceLogs', () => {
     await fireEvent.click(screen.getAllByRole('button', { name: /retry/i })[0])
 
     await vi.waitFor(() => expect(screen.getByText(/EXT4-fs error/)).toBeTruthy())
+  })
+
+  it('does not reuse the global log-level classes on its rows', async () => {
+    // app.css defines global `.level-info` / `.level-error` / `.level-warn` for
+    // the server-log view. Reusing those names here made every row inherit that
+    // palette, which is how a single-accent screen ended up with blue-tinted
+    // info rows.
+    render(DeviceLogs, { props: { deviceId: 'dev-1' } })
+    await vi.waitFor(() => expect(screen.getByText(/EXT4-fs error/)).toBeTruthy())
+
+    const row = screen.getByText(/EXT4-fs error/).closest('li') as HTMLElement
+    expect(row.className).toContain('row-error')
+    expect(row.className).not.toContain('level-')
   })
 
   it('copies the loaded lines as text', async () => {

@@ -3,7 +3,7 @@
   import { Terminal } from '@xterm/xterm'
   import { FitAddon } from '@xterm/addon-fit'
   import '@xterm/xterm/css/xterm.css'
-  import { deviceLabel, type Device } from '../../lib/types'
+  import { computedStatus, deviceLabel, type Device } from '../../lib/types'
   import { formatRelative } from '../../lib/format'
   import { apiFetch, apiURL } from '../../lib/api'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
@@ -226,7 +226,7 @@
     const action = pending
     const deviceId = device.id
     const target = deviceLabel(device)
-    const agentStatus = device.status
+    const agentStatus = computedStatus(device)
     pending = null
     error = ''
     const entryId = nextEntryId++

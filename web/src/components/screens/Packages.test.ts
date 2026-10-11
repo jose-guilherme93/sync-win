@@ -81,3 +81,57 @@ describe('Packages screen — pending updates', () => {
     expect(await screen.findByText('Up to date')).toBeTruthy()
   })
 })
+
+describe('Packages screen — installed list', () => {
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllGlobals()
+  })
+
+  // What a Debian machine actually reported before the collector joined versions
+  // in from dpkg: a name and nothing else.
+  const APPS = [
+    { source: 'pacman', name: 'vim', version: '9.1.1-1' },
+    { source: 'apt', name: 'curl' },
+    { source: 'pacman', name: 'zsh', version: '5.9-4' }
+  ]
+
+  function stubApps() {
+    stubAPI((url) => (url.includes('/apps') ? json(APPS) : json({ status: 'ready', updates: [] })))
+  }
+
+  it('shows the reported version next to the package', async () => {
+    stubApps()
+    render(Packages, { props: { deviceId: 'dev-1' } })
+
+    expect(await screen.findByText('vim')).toBeTruthy()
+    expect(screen.getByText('9.1.1-1')).toBeTruthy()
+    expect(screen.getByText('5.9-4')).toBeTruthy()
+  })
+
+  it('holds the version column when a package has none', async () => {
+    stubApps()
+    render(Packages, { props: { deviceId: 'dev-1' } })
+
+    // An absent version must read as absent, not as an empty cell that looks
+    // like the column is broken.
+    const row = (await screen.findByText('curl')).closest('li') as HTMLElement
+    expect(row.textContent).toContain('—')
+  })
+
+  it('says how many packages have no version instead of leaving it unexplained', async () => {
+    stubApps()
+    render(Packages, { props: { deviceId: 'dev-1' } })
+    expect(await screen.findByText(/1 without a version/)).toBeTruthy()
+  })
+
+  it('counts the installed packages in the headline', async () => {
+    stubApps()
+    render(Packages, { props: { deviceId: 'dev-1' } })
+
+    await screen.findByText('vim')
+    const installed = screen.getByText('Installed').closest('.stat') as HTMLElement
+    expect(installed.textContent).toMatch(/Installed\s*3/)
+    expect(installed.textContent).toMatch(/2 sources/)
+  })
+})

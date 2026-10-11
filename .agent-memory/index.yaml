@@ -78,3 +78,6 @@ entries:
   - id: sessions/261009-dashboard-screens
     path: sessions/261009-dashboard-screens.md
     type: session
+  - id: sessions/261011-socket-duplicate-keys
+    path: sessions/261011-socket-duplicate-keys.md
+    type: session
