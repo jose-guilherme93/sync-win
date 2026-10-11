@@ -900,6 +900,68 @@ func TestCleanupDeviceTelemetry(t *testing.T) {
 	}
 }
 
+// TestRetentionCleanupReclaimsOrphanedTelemetry covers the sweep that runs at
+// the end of retention. A deleted device leaves telemetry behind (no foreign
+// key), and the sweep must reclaim it without touching a device that still
+// exists — over-deletion here would silently erase a live device's history.
+func TestRetentionCleanupReclaimsOrphanedTelemetry(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+
+	gone, err := store.RegisterDevice("pc-gone", "user-1", "owner-1", "")
+	if err != nil {
+		t.Fatalf("register gone device: %v", err)
+	}
+	live, err := store.RegisterDevice("pc-live", "user-1", "owner-1", "")
+	if err != nil {
+		t.Fatalf("register live device: %v", err)
+	}
+
+	for _, id := range []string{gone.ID, live.ID} {
+		if err := store.AppendTelemetry(id, []byte(`{"cpu_usage_percent":10}`)); err != nil {
+			t.Fatalf("append raw telemetry: %v", err)
+		}
+		if err := store.AppendTelemetryDownsampled(TelemetryDownsampled{
+			DeviceID: id, Timestamp: time.Now().UTC().Format(time.RFC3339), Resolution: "1m", CPUAvg: 10,
+		}); err != nil {
+			t.Fatalf("append downsampled telemetry: %v", err)
+		}
+	}
+
+	// Deleting the device removes the device row but not its telemetry.
+	if err := store.DeleteDevice(gone.ID); err != nil {
+		t.Fatalf("delete device: %v", err)
+	}
+	if n := countTelemetry(t, store, gone.ID); n == 0 {
+		t.Fatal("test setup: telemetry should still exist before the sweep")
+	}
+
+	if _, err := store.RunRetentionCleanup(); err != nil {
+		t.Fatalf("retention cleanup: %v", err)
+	}
+
+	if n := countTelemetry(t, store, gone.ID); n != 0 {
+		t.Fatalf("orphaned telemetry survived the sweep: %d rows", n)
+	}
+	if n := countTelemetry(t, store, live.ID); n != 2 {
+		t.Fatalf("live device telemetry was damaged: got %d rows, want 2", n)
+	}
+}
+
+func countTelemetry(t *testing.T, store *Store, deviceID string) int {
+	t.Helper()
+	var raw, down int
+	if err := store.db.QueryRow("SELECT COUNT(*) FROM telemetry_raw WHERE device_id = ?", deviceID).Scan(&raw); err != nil {
+		t.Fatalf("count raw: %v", err)
+	}
+	if err := store.db.QueryRow("SELECT COUNT(*) FROM telemetry_downsampled WHERE device_id = ?", deviceID).Scan(&down); err != nil {
+		t.Fatalf("count downsampled: %v", err)
+	}
+	return raw + down
+}
+
 func TestResolutionForInterval(t *testing.T) {
 	now := time.Now().UTC()
 

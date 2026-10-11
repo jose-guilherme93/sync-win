@@ -284,15 +284,22 @@ type DockerInfo struct {
 }
 
 type NetworkIface struct {
-	Name      string  `json:"name"`
-	RXBytes   uint64  `json:"rx_bytes"`
-	TXBytes   uint64  `json:"tx_bytes"`
-	RXRate    float64 `json:"rx_rate"`
-	TXRate    float64 `json:"tx_rate"`
-	RXPackets uint64  `json:"rx_packets"`
-	TXPackets uint64  `json:"tx_packets"`
-	RXErrors  uint64  `json:"rx_errors"`
-	TXErrors  uint64  `json:"tx_errors"`
+	Name      string   `json:"name"`
+	MAC       string   `json:"mac,omitempty"`
+	MTU       int      `json:"mtu,omitempty"`
+	OperState string   `json:"oper_state,omitempty"`
+	SpeedMbps int      `json:"speed_mbps,omitempty"`
+	Addresses []string `json:"addresses,omitempty"`
+	RXBytes   uint64   `json:"rx_bytes"`
+	TXBytes   uint64   `json:"tx_bytes"`
+	RXRate    float64  `json:"rx_rate"`
+	TXRate    float64  `json:"tx_rate"`
+	RXPackets uint64   `json:"rx_packets"`
+	TXPackets uint64   `json:"tx_packets"`
+	RXErrors  uint64   `json:"rx_errors"`
+	TXErrors  uint64   `json:"tx_errors"`
+	RXDropped uint64   `json:"rx_dropped"`
+	TXDropped uint64   `json:"tx_dropped"`
 }
 
 type AppInfo struct {
@@ -416,6 +423,11 @@ type Session struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// maxSQLiteConns caps the connection pool. SQLite has a single writer, so a
+// large pool buys nothing and costs memory and lock contention; a handful of
+// connections is enough for the concurrent readers WAL allows.
+const maxSQLiteConns = 8
+
 func NewStore(root string) (*Store, error) {
 	if root == "" {
 		return nil, errors.New("store root is required")
@@ -436,6 +448,13 @@ func NewStore(root string) (*Store, error) {
 	if err := db.Ping(); err != nil {
 		return nil, fmt.Errorf("ping sqlite: %w", err)
 	}
+	// Bound the pool. database/sql defaults to unlimited connections; against a
+	// single-writer SQLite file that only adds memory and lock contention, and at
+	// fleet scale it turns the busy timeout into a queue. WAL still lets the
+	// readers run alongside the one writer, so a small pool keeps the parallelism
+	// that matters without the pile-up.
+	db.SetMaxOpenConns(maxSQLiteConns)
+	db.SetMaxIdleConns(maxSQLiteConns)
 	s := &Store{db: db, path: root}
 	if err := s.initSchema(); err != nil {
 		return nil, fmt.Errorf("init schema: %w", err)
@@ -760,6 +779,8 @@ func (s *Store) initSchema() error {
 	CREATE INDEX IF NOT EXISTS idx_commands_status ON commands(device_id, status);
 	CREATE INDEX IF NOT EXISTS idx_telemetry_raw_device ON telemetry_raw(device_id);
 	CREATE INDEX IF NOT EXISTS idx_telemetry_downsampled_device ON telemetry_downsampled(device_id, resolution);
+	CREATE INDEX IF NOT EXISTS idx_telemetry_raw_device_ts ON telemetry_raw(device_id, received_at);
+	CREATE INDEX IF NOT EXISTS idx_telemetry_downsampled_device_res_ts ON telemetry_downsampled(device_id, resolution, timestamp);
 	CREATE INDEX IF NOT EXISTS idx_notification_events_owner ON notification_events(owner_id);
 	CREATE TABLE IF NOT EXISTS enrollment_tokens (
 		id         TEXT PRIMARY KEY,
@@ -2592,19 +2613,58 @@ func (s *Store) RunRetentionCleanup() (int64, error) {
 		}
 	}
 
-	// Clean up orphaned telemetry data for devices that no longer exist.
-	res, err := s.db.Exec(`DELETE FROM telemetry_raw WHERE device_id NOT IN (SELECT id FROM devices)`)
-	if err == nil {
-		n, _ := res.RowsAffected()
-		totalDeleted += n
-	}
-	res, err = s.db.Exec(`DELETE FROM telemetry_downsampled WHERE device_id NOT IN (SELECT id FROM devices)`)
-	if err == nil {
-		n, _ := res.RowsAffected()
+	// Clean up orphaned telemetry for devices that no longer exist.
+	if n, err := s.deleteOrphanedTelemetryLocked(); err == nil {
 		totalDeleted += n
 	}
 
 	return totalDeleted, nil
+}
+
+// deleteOrphanedTelemetryLocked removes telemetry rows whose device is gone.
+//
+// `device_id NOT IN (SELECT id FROM devices)` reads naturally but is a full scan
+// of the telemetry table — millions of rows at fleet scale — and it runs while
+// the store mutex is held, so every writer waits for the whole scan. The set of
+// distinct devices present in telemetry is tiny by comparison, so this walks
+// that set (served by the device_id index) and deletes per missing device, which
+// the same index answers directly.
+func (s *Store) deleteOrphanedTelemetryLocked() (int64, error) {
+	var deleted int64
+	for _, table := range []string{"telemetry_raw", "telemetry_downsampled"} {
+		rows, err := s.db.Query("SELECT DISTINCT device_id FROM " + table)
+		if err != nil {
+			return deleted, err
+		}
+		var ids []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return deleted, err
+			}
+			ids = append(ids, id)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return deleted, err
+		}
+		rows.Close()
+
+		for _, id := range ids {
+			var one int
+			if err := s.db.QueryRow("SELECT 1 FROM devices WHERE id = ?", id).Scan(&one); err == nil {
+				continue // the device still exists
+			}
+			res, err := s.db.Exec("DELETE FROM "+table+" WHERE device_id = ?", id)
+			if err != nil {
+				continue
+			}
+			n, _ := res.RowsAffected()
+			deleted += n
+		}
+	}
+	return deleted, nil
 }
 
 // QueueInstallApp queues an app install command.

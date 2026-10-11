@@ -47,15 +47,15 @@ const PORTS = [
 ]
 
 function stubFetch(
-  handler: (url: string) => Response | Promise<Response>
+  handler: (url: string, init?: RequestInit) => Response | Promise<Response>
 ): { calls: string[] } {
   const calls: string[] = []
   vi.stubGlobal(
     'fetch',
-    vi.fn(async (input: RequestInfo | URL) => {
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       calls.push(url)
-      return handler(url)
+      return handler(url, init)
     })
   )
   return { calls }
@@ -71,6 +71,7 @@ describe('Services screen', () => {
   afterEach(() => {
     cleanup()
     vi.unstubAllGlobals()
+    vi.useRealTimers()
   })
 
   it('requests both endpoints for the selected device', async () => {
@@ -100,9 +101,13 @@ describe('Services screen', () => {
     stubFetch((url) => route(url, SERVICES, PORTS))
     render(Services, { props: { deviceId: 'dev-1' } })
 
-    await vi.waitFor(() => expect(screen.getByText('1 failed')).toBeTruthy())
-    expect(screen.getByText('1 running')).toBeTruthy()
-    expect(screen.getByText('3 total')).toBeTruthy()
+    await vi.waitFor(() => expect(screen.getByText('nginx.service')).toBeTruthy())
+    const failedTile = screen.getByText('Failed').closest('.tile') as HTMLElement
+    const runningTile = screen.getByText('Running').closest('.tile') as HTMLElement
+    const stoppedTile = screen.getByText('Stopped').closest('.tile') as HTMLElement
+    expect(failedTile.textContent).toMatch(/Failed\s*1/)
+    expect(runningTile.textContent).toMatch(/Running\s*1/)
+    expect(stoppedTile.textContent).toMatch(/Stopped\s*1/)
   })
 
   it('shows a wildcard listener rather than an empty host', async () => {
@@ -119,7 +124,7 @@ describe('Services screen', () => {
     render(Services, { props: { deviceId: 'dev-1' } })
 
     await vi.waitFor(() => expect(screen.getByText('No services reported')).toBeTruthy())
-    expect(screen.getByText('No listening sockets reported')).toBeTruthy()
+    expect(screen.getByText('No listening sockets')).toBeTruthy()
   })
 
   it('surfaces a failed request instead of claiming nothing was collected', async () => {
@@ -156,10 +161,32 @@ describe('Services screen', () => {
     render(Services, { props: { deviceId: 'dev-1' } })
 
     await vi.waitFor(() => expect(screen.getByText('sshd.service')).toBeTruthy())
-    await fireEvent.click(screen.getByRole('checkbox', { name: /problems only/i }))
+    await fireEvent.click(screen.getByRole('checkbox', { name: /problems/i }))
 
     await vi.waitFor(() => expect(screen.queryByText('sshd.service')).toBeNull())
     expect(screen.getByText('nginx.service')).toBeTruthy()
+  })
+
+  it('renders instead of blanking when the agent reports one socket twice', async () => {
+    // Real `ss` output: the collector folds 0.0.0.0 and * onto the empty host, so
+    // mDNS on 5353 arrives twice. A keyed each throws each_key_duplicate on that,
+    // which aborts the component's render — the screen stayed frozen on
+    // "Loading system inventory…" and never recovered.
+    const duplicated = [
+      { protocol: 'udp', local_address: '', port: 5353 },
+      { protocol: 'udp', local_address: '', port: 5353 },
+      { protocol: 'udp', local_address: '::', port: 5353 },
+      { protocol: 'udp', local_address: '::', port: 5353 },
+      ...PORTS
+    ]
+    stubFetch((url) => route(url, SERVICES, duplicated))
+    render(Services, { props: { deviceId: 'dev-1' } })
+
+    await vi.waitFor(() => expect(screen.getByText('nginx.service')).toBeTruthy())
+    expect(screen.queryByText('Loading system inventory…')).toBeNull()
+    // Four reported rows collapse to the two real sockets: one IPv4 wildcard and
+    // one IPv6 wildcard, each shown once.
+    expect(screen.getAllByText('5353')).toHaveLength(2)
   })
 
   it('does not request anything without a device id', async () => {
@@ -168,5 +195,44 @@ describe('Services screen', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 40))
     expect(calls.length).toBe(0)
+  })
+
+  it('keeps the card that loaded when only the other endpoint fails', async () => {
+    // Promise.all would reject here and discard the ports answer entirely.
+    stubFetch((url) => (url.includes('/ports') ? json(PORTS) : json([], 500)))
+    render(Services, { props: { deviceId: 'dev-1' } })
+
+    await vi.waitFor(() => expect(screen.getByText('8080')).toBeTruthy())
+    // The failure names its own endpoint and keeps the status code.
+    expect(screen.getByText('services request failed (500)')).toBeTruthy()
+    // An unreadable endpoint must not read as a device that reported nothing.
+    expect(screen.queryByText('No services reported')).toBeNull()
+    // A half that loaded is not a total outage, so no blanket error banner.
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('gives up on a request that never settles instead of loading forever', async () => {
+    vi.useFakeTimers()
+    // A response that never resolves and only ends when aborted is the case that
+    // used to freeze the screen on "Loading system inventory…" indefinitely.
+    stubFetch((url, init) =>
+      url.includes('/services')
+        ? new Promise<Response>((_, reject) => {
+            init?.signal?.addEventListener('abort', () => {
+              // What a real fetch rejects with when the signal fires.
+              const aborted = new Error('This operation was aborted')
+              aborted.name = 'AbortError'
+              reject(aborted)
+            })
+          })
+        : json(PORTS)
+    )
+    render(Services, { props: { deviceId: 'dev-1' } })
+
+    await vi.advanceTimersByTimeAsync(9000)
+
+    // A deadline is reported as a deadline, not as a generic crash string.
+    expect(screen.getByText('services timed out after 8s')).toBeTruthy()
+    expect(screen.queryByText('Loading system inventory…')).toBeNull()
   })
 })

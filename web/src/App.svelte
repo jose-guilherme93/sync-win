@@ -14,6 +14,12 @@
   import Findings from './components/screens/Findings.svelte'
   import Reports from './components/screens/Reports.svelte'
   import Storage from './components/screens/Storage.svelte'
+  import Network from './components/screens/Network.svelte'
+  import Security from './components/screens/Security.svelte'
+  import Docker from './components/screens/Docker.svelte'
+  import CpuThermal from './components/screens/CpuThermal.svelte'
+  import Memory from './components/screens/Memory.svelte'
+  import Sensors from './components/screens/Sensors.svelte'
   import Processes from './components/screens/Processes.svelte'
   import Packages from './components/screens/Packages.svelte'
   import Services from './components/screens/Services.svelte'
@@ -21,7 +27,10 @@
   import RemoteAccess from './components/screens/RemoteAccess.svelte'
   import DeviceSettings from './components/screens/DeviceSettings.svelte'
   import { nav, type Section } from './lib/router'
+  import { selectedRange, rangeById, DEFAULT_RANGE, type RangeId } from './lib/timerange'
   import type { AppInfo, Device, HardwareStats } from './lib/types'
+  import type { SecurityPosture } from './lib/security-posture'
+  import { uniquePorts } from './lib/ports'
   import { generateInsights } from './lib/insights'
 
 
@@ -55,7 +64,10 @@
   let enableAutoUpdate = true
   // Poll interval is user-selectable in the topbar, so it is mutable rather
   // than a constant. The backoff ceiling still applies when the server errors.
-  let POLL_MS = 10000
+  // The poll cadence follows the selected time range: a live minute refreshes
+  // every few seconds, a 30-day window every few minutes.
+  let currentRange: RangeId = DEFAULT_RANGE
+  let POLL_MS = rangeById(DEFAULT_RANGE).refreshMs
   const MAX_POLL_MS = 60000
   const PANEL_REFRESH_MS = 60000
   // The device list is polled every 10s but written to localStorage far less
@@ -127,6 +139,9 @@
       void loadDeviceDetail(value.deviceId)
       selectPanels(value.deviceId)
     }
+    if (value.section === 'security' && value.deviceId && !(deviceDetails[value.deviceId] as any)?.securityPosture) {
+      void loadDeviceDetail(value.deviceId, true)
+    }
   })
   onDestroy(unsubNav)
 
@@ -159,16 +174,25 @@
 
   $: isDeviceSection = Boolean(navState.deviceId) && navState.section !== 'home' && navState.section !== 'devices' && navState.section !== 'alerts' && navState.section !== 'findings' && navState.section !== 'reports'
 
-  // Hardware sections render the redesigned overview cards. The remaining
-  // device sections still use DeviceModal's tabs as an interim measure until
-  // their dedicated screens exist.
-  const HARDWARE_SECTIONS = new Set(['overview', 'cpu', 'memory', 'storage', 'network', 'sensors'])
+  // Only the overview still uses the shared telemetry cards. Every other
+  // device section now has a dedicated screen, so nothing else falls through.
+  const HARDWARE_SECTIONS = new Set(['overview'])
   $: isHardwareSection = HARDWARE_SECTIONS.has(navState.section)
   // The modal prefers the full detail payload (logs, processes, Docker state)
   // and falls back to the lightweight list entry while it loads.
   $: modalDevice = selectedDeviceId
     ? deviceDetails[selectedDeviceId] || devices.find((d) => d.id === selectedDeviceId) || null
     : null
+  // The Security screen's posture is stored on the device-detail object so it
+  // rides the same reactive path as the rest of the detail payload.
+  $: activeSecurityPosture = ((modalDevice as any)?.securityPosture as SecurityPosture) || {
+    publicPorts: [],
+    pendingUpdates: 0,
+    pendingStatus: '',
+    failedServices: [],
+    loaded: false,
+    error: ''
+  }
 
   let toastMessage = ''
   let toastKind: 'success' | 'error' = 'success'
@@ -212,7 +236,6 @@
   let retention1hDays = 365
   let retentionSaving = false
   let retentionError = ''
-
   const authHeaders = (token: string): Record<string, string> => (token ? { Authorization: `Bearer ${token}` } : {})
   $: ownerHeaders = authHeaders(authToken)
   $: normalizedInstallServer = (() => {
@@ -450,7 +473,11 @@
     if (deviceModalOpen && selectedDeviceId) {
       void loadDeviceDetail(selectedDeviceId)
     }
-    schedulePoll(Math.min(POLL_MS * 2 ** Math.min(consecutiveFailures, 4), MAX_POLL_MS))
+    // Back off on failure, but never below the range's own cadence: a 30-day
+    // window polls every 5 minutes, so capping at the 60s ceiling would make a
+    // failing server get polled *more* often than a healthy one.
+    const backoffCap = Math.max(POLL_MS, MAX_POLL_MS)
+    schedulePoll(Math.min(POLL_MS * 2 ** Math.min(consecutiveFailures, 4), backoffCap))
   }
 
   function schedulePoll(delay: number) {
@@ -709,17 +736,65 @@
     mobileNavOpen = false
   }
 
-  async function loadDeviceDetail(deviceId: string) {
+  async function loadDeviceDetail(deviceId: string, includePosture = false) {
     if (!deviceId) return
     try {
       const response = await apiFetch(apiURL(`/api/devices/${deviceId}/detail`), { headers: ownerHeaders })
       if (!response.ok) return
       const payload = await response.json()
       if (!payload || typeof payload !== 'object' || Array.isArray(payload) || !payload.id) return
-      deviceDetails = { ...deviceDetails, [deviceId]: payload }
+      // Preserve any posture already stored. The poll calls this without
+      // includePosture, and replacing the entry wholesale wiped the posture the
+      // Security section had just fetched, so the screen lost its listeners and
+      // failed units within one poll.
+      const existing = deviceDetails[deviceId] as any
+      const entry = includePosture
+        ? { ...payload, securityPosture: await fetchPosture(deviceId) }
+        : { ...payload, securityPosture: existing?.securityPosture }
+      deviceDetails = { ...deviceDetails, [deviceId]: entry as Device }
     } catch {
       // Keep the last known detail; the list summary still renders.
     }
+  }
+
+  // Posture for the Security screen: public listeners, pending updates and
+  // failed units. Returns the value; the caller stores it on the device detail.
+  async function fetchPosture(deviceId: string): Promise<SecurityPosture> {
+    const get = async (path: string) => {
+      const res = await apiFetch(apiURL(`/api/devices/${deviceId}${path}`), { headers: ownerHeaders })
+      if (!res.ok) throw new Error(`${path} failed (${res.status})`)
+      return res.json()
+    }
+    const [portsRes, updatesRes, servicesRes] = await Promise.allSettled([
+      get('/ports'),
+      get('/updates'),
+      get('/services')
+    ])
+    const next: SecurityPosture = {
+      publicPorts: [],
+      pendingUpdates: 0,
+      pendingStatus: '',
+      failedServices: [],
+      loaded: true,
+      error: ''
+    }
+    if (portsRes.status === 'fulfilled' && Array.isArray(portsRes.value)) {
+      next.publicPorts = uniquePorts(
+        portsRes.value.filter((p: any) => ['', '0.0.0.0', '::', '*', '[::]'].includes(p.local_address || ''))
+      ).sort((a: any, b: any) => a.port - b.port)
+    }
+    if (updatesRes.status === 'fulfilled' && updatesRes.value) {
+      next.pendingStatus = updatesRes.value.status || ''
+      next.pendingUpdates = Array.isArray(updatesRes.value.updates) ? updatesRes.value.updates.length : 0
+    }
+    if (servicesRes.status === 'fulfilled' && Array.isArray(servicesRes.value)) {
+      next.failedServices = servicesRes.value.filter((s: any) => s.status === 'failed').map((s: any) => s.name)
+    }
+    const failed = [portsRes, updatesRes, servicesRes].filter((r) => r.status === 'rejected')
+    next.error = failed.length
+      ? `Some posture data could not be read (${(failed[0] as PromiseRejectedResult).reason?.message || 'request failed'})`
+      : ''
+    return next
   }
 
   async function refreshDeviceSettings() {
@@ -733,13 +808,16 @@
     selectedDeviceId = ''
   }
 
-  // Topbar refresh selector. The poller reschedules itself each cycle, so
-  // setting the interval and kicking it once makes the change take effect
-  // immediately instead of after the current (possibly 60s) wait.
-  function setRefreshMs(ms: number) {
-    POLL_MS = ms
+  // Topbar range selector. The poller reschedules itself each cycle, so setting
+  // the cadence and kicking it once makes the change take effect immediately
+  // instead of after the current (possibly minutes-long) wait. The chosen range
+  // is also published to the shared store so the charts follow it.
+  function setRange(id: RangeId) {
+    currentRange = id
+    selectedRange.set(id)
+    POLL_MS = rangeById(id).refreshMs
     if (pollTimer) window.clearTimeout(pollTimer)
-    schedulePoll(ms)
+    schedulePoll(POLL_MS)
   }
 
   // Global search (Ctrl+K). Until a dedicated command palette exists, this
@@ -1370,17 +1448,6 @@
   }
 
 
-  // Client-side status fallback: compute status from last_seen_at
-  // This ensures devices show as offline even if the server status is stale
-  function computedStatus(device: { status: string; last_seen_at: string }): string {
-    // Don't override error or duplicate states
-    if (device.status === 'error' || device.status === 'duplicate') return device.status
-    const age = (Date.now() - Date.parse(device.last_seen_at)) / 1000
-    if (age > 300) return 'offline'  // 5 minutes
-    if (age > 30) return 'stale'     // 30 seconds
-    return 'online'
-  }
-
   // Both delegate to lib/format so the Go zero time collapses to "never"
   // instead of reporting an age of ~739893 days.
   const timeAgo = formatRelative
@@ -1514,8 +1581,8 @@
       <Topbar
         device={isDeviceSection ? modalDevice : null}
         sectionTitle={sectionTitleFor(navState.section)}
-        refreshMs={POLL_MS}
-        onRefreshChange={setRefreshMs}
+        rangeId={currentRange}
+        onRangeChange={setRange}
         onManualRefresh={() => loadDevices(true)}
         onOpenSearch={openGlobalSearch}
         onOpenNotifications={toggleBell}
@@ -1631,6 +1698,18 @@
           {#if isDeviceSection && modalDevice}
             {#if navState.section === 'storage'}
               <Storage device={modalDevice} />
+            {:else if navState.section === 'network'}
+              <Network device={modalDevice} />
+            {:else if navState.section === 'containers'}
+              <Docker device={modalDevice} authHeaders={ownerHeaders} />
+            {:else if navState.section === 'security'}
+              <Security
+                device={modalDevice}
+                authHeaders={ownerHeaders}
+                posture={activeSecurityPosture}
+                lynisAvailable={modalDevice.hardware?.lynis_available ?? false}
+                lynisInstallCmd={modalDevice.hardware?.lynis_install_cmd ?? 'sudo apt install lynis'}
+              />
             {:else if navState.section === 'processes'}
               <Processes device={modalDevice} />
             {:else if navState.section === 'packages'}
@@ -1643,6 +1722,12 @@
               <RemoteAccess device={modalDevice} authHeaders={ownerHeaders} />
             {:else if navState.section === 'settings'}
               <DeviceSettings device={modalDevice} authHeaders={ownerHeaders} onRemove={removeDeviceConfirmed} on:saved={refreshDeviceSettings} />
+            {:else if navState.section === 'cpu'}
+              <CpuThermal device={modalDevice} />
+            {:else if navState.section === 'memory'}
+              <Memory device={modalDevice} />
+            {:else if navState.section === 'sensors'}
+              <Sensors device={modalDevice} />
             {:else if isHardwareSection}
               <DeviceOverview device={modalDevice} authHeaders={ownerHeaders} />
             {:else}

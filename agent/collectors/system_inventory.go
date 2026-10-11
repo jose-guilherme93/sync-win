@@ -147,6 +147,7 @@ func CollectOpenPorts(states []string, max int, timeout time.Duration) ([]OpenPo
 			ports = append(ports, port)
 		}
 	}
+	ports = dedupeOpenPorts(ports)
 	sort.Slice(ports, func(i, j int) bool {
 		if ports[i].Protocol != ports[j].Protocol {
 			return ports[i].Protocol < ports[j].Protocol
@@ -160,6 +161,28 @@ func CollectOpenPorts(states []string, max int, timeout time.Duration) ([]OpenPo
 		ports = ports[:max]
 	}
 	return ports, nil
+}
+
+// dedupeOpenPorts drops records that are identical in every field.
+//
+// `ss -tulpnH` lists a socket once per bound address, and the normalisation in
+// splitSocketAddress folds several of those spellings onto the same value
+// (`0.0.0.0`, `*` and an empty host all become ""), so one socket can be
+// emitted twice. The rows are indistinguishable, and a duplicate key blanks the
+// dashboard screen that renders them, so the record is its own identity: two
+// OpenPorts that compare equal are the same socket and only the first is kept.
+// A differing process is a different socket and is preserved.
+func dedupeOpenPorts(ports []OpenPort) []OpenPort {
+	seen := make(map[OpenPort]struct{}, len(ports))
+	unique := ports[:0]
+	for _, port := range ports {
+		if _, duplicate := seen[port]; duplicate {
+			continue
+		}
+		seen[port] = struct{}{}
+		unique = append(unique, port)
+	}
+	return unique
 }
 
 // socketStateRe matches the ss state column (LISTEN, UNCONN, ESTAB, ...). Some

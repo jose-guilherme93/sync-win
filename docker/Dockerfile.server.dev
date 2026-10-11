@@ -6,10 +6,28 @@ WORKDIR /src
 # jq extracts the agent version from contract.json below, which is the single
 # source of truth for it.
 RUN apk add --no-cache jq
-COPY agent/go.mod ./
-RUN go mod download
+COPY server/go.mod server/go.sum ./server/
+COPY agent/go.mod ./agent/
+RUN cd server && go mod download
+RUN cd agent && go mod download
+# agentsign is standalone (stdlib only) and lives in the server module. It signs
+# the agent so the dev stack exercises the real update path.
+COPY server/cmd/agentsign ./server/cmd/agentsign
 COPY agent ./agent
-RUN cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/sync-win-agent ./cmd/agent
+RUN cd server && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/agentsign ./cmd/agentsign
+# Sign the agent when a key is supplied as the BuildKit secret
+# id=agent_update_key. Without it the agent is unsigned and the updater fails
+# closed, so a device installed from the dev server could never auto-update —
+# a gap production does not have (see docker/Dockerfile.server). The private key
+# never lands in an image layer.
+RUN --mount=type=secret,id=agent_update_key,required=false \
+    set -e; \
+    key=""; ldf=""; \
+    if [ -f /run/secrets/agent_update_key ]; then key="$(cat /run/secrets/agent_update_key)"; fi; \
+    if [ -n "$key" ]; then ldf="-X main.agentUpdatePublicKey=$(/out/agentsign -derive-public -key "$key")"; fi; \
+    cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="$ldf -s -w" -o /out/sync-win-agent ./cmd/agent; \
+    : > /out/sync-win-agent.sig; \
+    if [ -n "$key" ]; then /out/agentsign -key "$key" -in /out/sync-win-agent -out /out/sync-win-agent.sig; fi
 # The server reports this version and the updater rejects a downloaded binary
 # whose version differs from it. Deriving it from the contract here, rather than
 # relying on the env var, is what keeps the advertised version and the served
@@ -28,6 +46,7 @@ RUN go mod download
 
 # These files are served by the development install endpoint.
 COPY --from=agent-build /out/sync-win-agent /app/sync-win-agent
+COPY --from=agent-build /out/sync-win-agent.sig /app/sync-win-agent.sig
 COPY --from=agent-build /out/agent-version.txt /app/agent-version.txt
 COPY scripts/install.sh /app/install.sh
 COPY server/sync-win-agent.service /app/sync-win-agent.service
