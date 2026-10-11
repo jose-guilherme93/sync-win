@@ -30,6 +30,7 @@
   import { selectedRange, rangeById, DEFAULT_RANGE, type RangeId } from './lib/timerange'
   import type { AppInfo, Device, HardwareStats } from './lib/types'
   import type { SecurityPosture } from './lib/security-posture'
+  import { uniquePorts } from './lib/ports'
   import { generateInsights } from './lib/insights'
 
 
@@ -778,10 +779,9 @@
       error: ''
     }
     if (portsRes.status === 'fulfilled' && Array.isArray(portsRes.value)) {
-      next.publicPorts = portsRes.value
-        .filter((p: any) => ['', '0.0.0.0', '::', '*', '[::]'].includes(p.local_address || ''))
-        .map((p: any) => ({ port: p.port, protocol: p.protocol }))
-        .sort((a: any, b: any) => a.port - b.port)
+      next.publicPorts = uniquePorts(
+        portsRes.value.filter((p: any) => ['', '0.0.0.0', '::', '*', '[::]'].includes(p.local_address || ''))
+      ).sort((a: any, b: any) => a.port - b.port)
     }
     if (updatesRes.status === 'fulfilled' && updatesRes.value) {
       next.pendingStatus = updatesRes.value.status || ''

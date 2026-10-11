@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { apiFetch, apiURL } from '../../lib/api'
+  import { portIdentity, uniquePorts, type OpenPort as Port } from '../../lib/ports'
   import EmptyState from '../ui/EmptyState.svelte'
   import SeverityBadge from '../ui/SeverityBadge.svelte'
 
@@ -15,13 +16,6 @@
     unit_file_state?: string
     description?: string
     enabled: boolean
-  }
-  type Port = {
-    protocol: string
-    local_address: string
-    port: number
-    process?: string
-    pid?: number
   }
 
   // Well-known port names. The agent runs unprivileged and cannot attribute a
@@ -46,6 +40,10 @@
   let ports: Port[] = []
   let loading = true
   let error = ''
+  // Per-card reasons. The screen shows two independent inventories, so each card
+  // reports its own failure; `error` is the both-failed banner built from these.
+  let servicesError = ''
+  let portsError = ''
   let loaded = false
   let groupBy: 'name' | 'port' = 'name'
 
@@ -53,29 +51,69 @@
   let selectedPort: Port | null = null
   let drawerOpen = false
 
-  onMount(load)
+  onMount(() => {
+    void load()
+  })
+
+  // Fetch JSON with a hard timeout. The services/ports screen was sticking on
+  // "Loading system inventory…" because one response body could hang forever and
+  // the awaited .json() never settled; a timeout turns that into a visible,
+  // recoverable error instead of a frozen screen.
+  // The reason travels with the endpoint name. A 403 and a 500 are different
+  // problems, and a timeout is not the same as either, so the message says which
+  // one happened instead of collapsing them into "services did not load".
+  async function fetchJSON(label: string, url: string, ms = 8000): Promise<any> {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), ms)
+    try {
+      const res = await apiFetch(url, { signal: controller.signal })
+      if (!res.ok) throw new Error(`${label} request failed (${res.status})`)
+      return await res.json()
+    } catch (e: any) {
+      // Abort surfaces as a bare AbortError whose text ("This operation was
+      // aborted") reads like a crash rather than the deadline it actually is.
+      if (e?.name === 'AbortError') throw new Error(`${label} timed out after ${ms / 1000}s`)
+      throw e
+    } finally {
+      clearTimeout(timer)
+    }
+  }
 
   async function load() {
     if (!deviceId) return
     loading = true
     error = ''
-    try {
-      const [svcRes, portRes] = await Promise.all([
-        apiFetch(apiURL(`/api/devices/${deviceId}/services`)),
-        apiFetch(apiURL(`/api/devices/${deviceId}/ports`))
-      ])
-      if (!svcRes.ok) throw new Error(`services request failed (${svcRes.status})`)
-      if (!portRes.ok) throw new Error(`ports request failed (${portRes.status})`)
-      services = await svcRes.json()
-      ports = await portRes.json()
-    } catch (e: any) {
-      error = e?.message || 'Failed to load the system inventory'
+    // allSettled, not all: one endpoint failing must not blank the other card.
+    // Promise.all would reject on the first failure and discard the endpoint
+    // that did answer.
+    const [svcRes, portRes] = await Promise.allSettled([
+      fetchJSON('services', apiURL(`/api/devices/${deviceId}/services`)),
+      fetchJSON('ports', apiURL(`/api/devices/${deviceId}/ports`))
+    ])
+    if (svcRes.status === 'fulfilled') {
+      services = svcRes.value
+      servicesError = ''
+    } else {
       services = []
-      ports = []
-    } finally {
-      loading = false
-      loaded = true
+      servicesError = svcRes.reason?.message || 'services request failed'
     }
+    if (portRes.status === 'fulfilled') {
+      // The agent de-duplicates at the source, but an older agent still reports
+      // one socket twice, and a repeated key aborts this component's render.
+      ports = uniquePorts(portRes.value)
+      portsError = ''
+    } else {
+      ports = []
+      portsError = portRes.reason?.message || 'ports request failed'
+    }
+    // Only raise the banner when nothing at all loaded. A partial failure stays
+    // on its own card, so a working half is not dressed up as a total outage.
+    error =
+      servicesError && portsError
+        ? `Could not load the system inventory — ${servicesError}; ${portsError}`
+        : ''
+    loading = false
+    loaded = true
   }
 
   $: filteredServices = services.filter((s) => {
@@ -188,8 +226,19 @@
           </div>
         </header>
 
-        {#if error && services.length === 0}
-          <EmptyState icon="⚠" title="Could not load services" message={error} />
+        {#if servicesError}
+          <!-- A partial failure keeps its Retry here, because the banner only
+               appears when both cards failed and would be a second, duplicate
+               button next to the ports one. -->
+          <EmptyState
+            icon="⚠"
+            title="Could not load services"
+            message={servicesError}
+            actionLabel={error ? '' : 'Retry'}
+            onAction={error ? null : load}
+          />
+        {:else if services.length === 0 && loading}
+          <p class="loading">Loading services…</p>
         {:else if services.length === 0}
           <EmptyState
             icon="⚙"
@@ -222,15 +271,23 @@
           </div>
         </header>
 
-        {#if error && ports.length === 0}
-          <EmptyState icon="⚠" title="Could not load ports" message={error} />
+        {#if portsError}
+          <EmptyState
+            icon="⚠"
+            title="Could not load ports"
+            message={portsError}
+            actionLabel={error ? '' : 'Retry'}
+            onAction={error ? null : load}
+          />
+        {:else if ports.length === 0 && loading}
+          <p class="loading">Loading ports…</p>
         {:else if ports.length === 0}
           <EmptyState icon="🔌" title="No listening sockets" message="The agent found no sockets, or ss is not installed." />
         {:else if filteredPorts.length === 0}
           <EmptyState icon="🔍" title="No match" message="Adjust the filter." />
         {:else}
           <ul class="ports">
-            {#each filteredPorts as p (`${p.protocol}-${p.local_address}-${p.port}`)}
+            {#each filteredPorts as p (portIdentity(p))}
               <li>
                 <button class="row" class:sel={selectedPort && selectedPort.port === p.port && selectedPort.protocol === p.protocol && selectedPort.local_address === p.local_address} on:click={() => selectPort(p)}>
                   <span class="port mono">{p.port}</span>
@@ -271,7 +328,7 @@
       <h4 class="drawer-sub">Related open ports</h4>
       {#if relatedPorts.length > 0}
         <ul class="rel">
-          {#each relatedPorts as p (`${p.protocol}-${p.local_address}-${p.port}`)}
+          {#each relatedPorts as p (portIdentity(p))}
             <li><span class="mono port">{p.port}</span><span class="proto mono">{p.protocol}</span><span class="addr mono">{host(p.local_address)}</span></li>
           {/each}
         </ul>
