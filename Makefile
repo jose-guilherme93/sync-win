@@ -27,6 +27,13 @@ export DEV_HTTP_PORT
 DEV_HOST ?=
 export DEV_HOST
 
+# Dev agent update signing key. Generated once by `make dev-key` (a prerequisite
+# of the dev targets), gitignored, and stable across builds so a device
+# installed from the dev stack can auto-update.
+DEV_KEY_DIR  := $(ROOT)/.dev-keys
+DEV_KEY_FILE := $(DEV_KEY_DIR)/agent_update_key
+export SYNCWIN_AGENT_UPDATE_KEY_FILE := $(DEV_KEY_FILE)
+
 DEV   := $(COMPOSE) -f $(DEV_FILE)
 PROD  := $(COMPOSE) -f $(PROD_FILE)
 LOCAL := $(COMPOSE) -f $(LOCAL_FILE)
@@ -94,19 +101,28 @@ help: ## Show this help
 # Environments
 # -----------------------------------------------------------------------------
 
+.PHONY: dev-key
+dev-key: ## Generate the dev agent update signing key (gitignored, stable)
+	@mkdir -p "$(DEV_KEY_DIR)"
+	@if [ ! -s "$(DEV_KEY_FILE)" ]; then \
+		(cd server && go run ./cmd/agentsign -genkey) | awk -F: '/^private:/{print $$2}' > "$(DEV_KEY_FILE)"; \
+		chmod 600 "$(DEV_KEY_FILE)"; \
+		printf "$(G)Generated dev agent signing key$(N) at %s\n" "$(DEV_KEY_FILE)"; \
+	fi
+
 .PHONY: dev
-dev: ## Start the full development stack (foreground, rebuilt)
+dev: dev-key ## Start the full development stack (foreground, rebuilt)
 	@mkdir -p data-dev
 	$(DEV) up --build
 
 .PHONY: dev-d
-dev-d: ## Start the full development stack detached
+dev-d: dev-key ## Start the full development stack detached
 	@mkdir -p data-dev
 	$(DEV) up --build -d
 	@printf "$(G)Dev stack up:$(N) dashboard http://localhost:%s · api http://localhost:%s\n" "$${WEB_PORT:-5173}" "$${DEV_HTTP_PORT:-8088}"
 
 .PHONY: dev-tailnet
-dev-tailnet: ## Start the dev stack reachable by this machine's Tailscale name
+dev-tailnet: dev-key ## Start the dev stack reachable by this machine's Tailscale name
 	@host="$$(tailscale status --json 2>/dev/null | jq -r .Self.DNSName | sed 's/\.$$//')"; \
 	if [ -z "$$host" ]; then \
 		printf "$(Y)Could not read the Tailscale name. Is tailscale up?$(N)\n"; exit 1; \

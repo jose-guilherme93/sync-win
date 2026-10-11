@@ -25,6 +25,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.server.dev
+      secrets:
+        - agent_update_key
     init: true
     ports:
       - "${DEV_HTTP_PORT:-8088}:8080"
@@ -98,3 +100,11 @@ services:
 volumes:
   web_node_modules:
     driver: local
+
+# Ed25519 key that signs the agent the dev server hands out. Signing is what
+# lets a device installed from the dev stack auto-update; without it the agent
+# is unsigned and the updater fails closed. The key is generated once by
+# `make dev-key` (run automatically by the dev targets) and is gitignored.
+secrets:
+  agent_update_key:
+    file: ${SYNCWIN_AGENT_UPDATE_KEY_FILE:-.dev-keys/agent_update_key}
