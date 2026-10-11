@@ -84,6 +84,10 @@ type Contract struct {
 			TimeoutSeconds  int      `json:"timeout_seconds"`
 			ListeningStates []string `json:"listening_states"`
 		} `json:"ports"`
+		Users struct {
+			MaxUsers int `json:"max_users"`
+			MinUID   int `json:"min_uid"`
+		} `json:"users"`
 	} `json:"system_inventory"`
 	PreferencesSync struct {
 		IntervalSecondsDefault int    `json:"interval_seconds_default"`
@@ -97,6 +101,7 @@ type Contract struct {
 		DockerLogsMaxTail        int      `json:"docker_logs_max_tail"`
 		DockerExecTimeoutSeconds int      `json:"docker_exec_timeout_seconds"`
 		PolicyPath               string   `json:"policy_path"`
+		LegacyPolicyPath         string   `json:"legacy_policy_path"`
 		PolicyDefaults           struct {
 			AllowInstallApp       bool `json:"allow_install_app"`
 			AllowExcludeFile      bool `json:"allow_exclude_file"`
@@ -110,9 +115,21 @@ type Contract struct {
 			AllowDockerExec       bool `json:"allow_docker_exec"`
 			AllowDockerPrune      bool `json:"allow_docker_prune"`
 			AllowDockerCompose    bool `json:"allow_docker_compose"`
+			AllowRemoteAccess     bool `json:"allow_remote_access"`
 			CommandTimeoutSeconds int  `json:"command_timeout_seconds"`
 		} `json:"policy_defaults"`
 	} `json:"commands"`
+	RemoteAccess struct {
+		EnabledDefault       bool   `json:"enabled_default"`
+		Transport            string `json:"transport"`
+		SSHHost              string `json:"ssh_host"`
+		SSHPort              int    `json:"ssh_port"`
+		IdleTimeoutSeconds   int    `json:"idle_timeout_seconds"`
+		MaxSessions          int    `json:"max_sessions"`
+		HelperSocketPath     string `json:"helper_socket_path"`
+		KeyType              string `json:"key_type"`
+		AuthorizedKeysOption string `json:"authorized_keys_options"`
+	} `json:"remote_access"`
 	Resilience struct {
 		HTTPTimeoutSeconds    int     `json:"http_timeout_seconds"`
 		BackoffBaseMultiplier int     `json:"backoff_base_multiplier"`
@@ -129,6 +146,30 @@ type Contract struct {
 		LynisTimeoutSeconds int  `json:"lynis_timeout_seconds"`
 		ReportMaxBytes      int  `json:"report_max_bytes"`
 	} `json:"security_audit"`
+}
+
+// MaxLoginUsers caps how many target accounts the agent reports.
+func (c *Contract) MaxLoginUsers() int {
+	if c.SystemInventory.Users.MaxUsers > 0 {
+		return c.SystemInventory.Users.MaxUsers
+	}
+	return 50
+}
+
+// RemoteIdleSeconds is the keyboard-inactivity timeout for a remote session.
+func (c *Contract) RemoteIdleSeconds() int {
+	if c.RemoteAccess.IdleTimeoutSeconds > 0 {
+		return c.RemoteAccess.IdleTimeoutSeconds
+	}
+	return 900
+}
+
+// RemoteMaxSessions caps concurrent remote sessions per device.
+func (c *Contract) RemoteMaxSessions() int {
+	if c.RemoteAccess.MaxSessions > 0 {
+		return c.RemoteAccess.MaxSessions
+	}
+	return 3
 }
 
 // SaveUploadFileBytes is the smaller of the local and mirrored server caps

@@ -300,6 +300,24 @@ A funcionalidade P1 está concluída. A próxima etapa é uma nova priorização
 - [x] dashboard: `Services.svelte` consome os dois endpoints, com estados distintos para "ainda não coletado", "coleção vazia" e "requisição falhou"
 - [x] testes de collector, parsing, filtros, cap, migração e isolamento entre owners
 
+## FASE 24 — Remote access (SSH via túnel)
+- [x] conexão persistente de saída do agent (WebSocket) para o server; nenhuma porta aberta no device
+- [x] broker no server: ticket de sessão de uso único, registry `device_id → link de controle`, relay de bytes por sessão
+- [x] endpoints: `POST /api/devices/{id}/remote-access/session`, `GET /api/devices/{id}/tunnel*`, `GET /api/devices/{id}/terminal`, `GET /api/devices/{id}/remote-access[/sessions]`
+- [x] flag `SYNCWIN_ENABLE_REMOTE_ACCESS` (default `false`) e capability local fail-closed (`allow_remote_access`)
+- [x] policy moveu para `/etc/sync-win/policy.json`; comando local `sync-win-agent set ssh on` / `set ssh-user <nome>` (modelo Tailscale `set`)
+- [x] helper root persistente (`sync-win-agent helper`) via socket Unix, com checagem de UID do par e linha restrita de `authorized_keys` (`restrict,pty,from="127.0.0.1"`, `expiry-time`, marcador por sessão)
+- [x] chave ed25519 efêmera por sessão; `ssh -tt` para `127.0.0.1`
+- [x] idle de 15 min por teclado e no máximo 3 sessões simultâneas
+- [x] inventário de contas de login (`system_inventory.users`) para o seletor do dashboard
+- [x] auditoria `remote_sessions` (owner, device, conta, início, fim, motivo) — conteúdo do terminal nunca é gravado
+- [x] dashboard: tela **Remote Access** hospeda os comandos de ação e o terminal (xterm.js)
+- [ ] fase 2: screen sharing (VNC/noVNC) — o transporte já é multiplexável por tipo de sessão
+
+**Exceção de produto:** esta fase cria a primeira exceção às regras "nunca executar shell
+arbitrário remoto" e "sem execução remota de shell, exceto Docker". A exceção é o login
+via sshd, mediado pela política local do device e pela flag do servidor.
+
 ## Pendências de backend conhecidas
 
 Fases ainda não implementadas, levantadas na auditoria do dashboard. Nenhuma
@@ -349,5 +367,5 @@ Não adicionar inicialmente:
 - snapshots completos
 - backups integrais da home
 - restore de ambientes inteiros
-- execução remota de shell (exceto Docker management via proxy)
+- execução remota de shell (exceto Docker management via proxy e o Remote access SSH da FASE 24, opt-in e fail-closed)
 - Redis, RabbitMQ e microserviços

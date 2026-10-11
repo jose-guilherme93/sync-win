@@ -18,7 +18,7 @@
   import Packages from './components/screens/Packages.svelte'
   import Services from './components/screens/Services.svelte'
   import DeviceLogs from './components/screens/DeviceLogs.svelte'
-  import RemoteActions from './components/screens/RemoteActions.svelte'
+  import RemoteAccess from './components/screens/RemoteAccess.svelte'
   import DeviceSettings from './components/screens/DeviceSettings.svelte'
   import { nav, type Section } from './lib/router'
   import type { AppInfo, Device, HardwareStats } from './lib/types'
@@ -48,6 +48,11 @@
   // locally on the Docker host.
   const localAccess = /^(localhost|127\.0\.0\.1|::1|\[::1\])$/.test(window.location.hostname)
   let installServer = serverBase
+  // Install-time capabilities. SSH is genuinely opt-in (off); auto-update is
+  // on by default because a device that stops updating is stranded, but the
+  // operator can turn it off here.
+  let enableSsh = false
+  let enableAutoUpdate = true
   // Poll interval is user-selectable in the topbar, so it is mutable rather
   // than a constant. The backoff ceiling still applies when the server errors.
   let POLL_MS = 10000
@@ -220,8 +225,14 @@
   let enrollmentLoading = false
   let enrollmentAttempted = false
   let enrollmentError = ''
+  $: installQuery = (() => {
+    const params = new URLSearchParams()
+    if (enableSsh) params.set('ssh', '1')
+    if (!enableAutoUpdate) params.set('autoupdate', '0')
+    return params.toString()
+  })()
   $: installCommand = signedIn && enrollmentToken
-    ? `curl -fsSL "${normalizedInstallServer}/install/${enrollmentToken}" -o /tmp/sync-win-install.sh && sudo bash /tmp/sync-win-install.sh`
+    ? `curl -fsSL "${normalizedInstallServer}/install/${enrollmentToken}${installQuery ? `?${installQuery}` : ''}" -o /tmp/sync-win-install.sh && sudo bash /tmp/sync-win-install.sh`
     : ''
   // Fetch the enrollment token once per open. The `enrollmentAttempted` guard
   // is essential: without it a failed request leaves loading=false and token
@@ -1629,7 +1640,7 @@
             {:else if navState.section === 'logs'}
               <DeviceLogs deviceId={modalDevice.id} authHeaders={ownerHeaders} />
             {:else if navState.section === 'remote'}
-              <RemoteActions device={modalDevice} authHeaders={ownerHeaders} />
+              <RemoteAccess device={modalDevice} authHeaders={ownerHeaders} />
             {:else if navState.section === 'settings'}
               <DeviceSettings device={modalDevice} authHeaders={ownerHeaders} onRemove={removeDeviceConfirmed} on:saved={refreshDeviceSettings} />
             {:else if isHardwareSection}
@@ -1809,22 +1820,50 @@
           <h2 id="install-modal-title">Add a Linux device</h2>
           <small>Run this once on the target machine. A temporary enrollment token is generated for each install.</small>
         </div>
-        <button class="secondary" on:click={closeAddDevice}>Close</button>
+        <button class="ghost" on:click={closeAddDevice}>Close</button>
       </div>
+
       {#if installServerIsLocal}
         <div class="warn-banner" role="alert">
           <strong>Dashboard accessed via localhost — this command only works on this machine.</strong>
-          To install the agent on another network device, replace the address below with the Docker server's <strong>Tailscale IP</strong>
+          To install on another device, replace the address below with the server's reachable address
           (e.g. <code>http://100.x.x.x:8080</code>).
         </div>
       {/if}
-      <label class="server-address-row">
-        <span>Agent connects to</span>
-        <input type="text" bind:value={installServer} spellcheck="false" aria-label="Server address used by installed agents" />
-      </label>
+
+      <div class="install-section">
+        <span class="section-label">Capabilities</span>
+        <div class="cap-toggles">
+          <label class="toggle-row">
+            <input type="checkbox" bind:checked={enableSsh} />
+            <span class="toggle-text">
+              <strong>SSH remote access</strong>
+              <em>Open a terminal from this dashboard. No port is opened on the device.</em>
+            </span>
+          </label>
+          <label class="toggle-row">
+            <input type="checkbox" bind:checked={enableAutoUpdate} />
+            <span class="toggle-text">
+              <strong>Automatic updates</strong>
+              <em>Keep the agent current. Turning this off means the device stops receiving fixes.</em>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div class="install-section">
+        <label class="server-address-row">
+          <span class="section-label">Agent connects to</span>
+          <input type="text" bind:value={installServer} spellcheck="false" aria-label="Server address used by installed agents" />
+        </label>
+        <small class="install-hint">
+          Dev stack: API on host port <strong>8088</strong>, server container on <strong>8080</strong>, dashboard on <strong>5173</strong>.
+        </small>
+      </div>
+
       {#if enrollmentLoading}
         <div class="command-box">
-          <pre>Generating enrollment token...</pre>
+          <pre>Generating enrollment token…</pre>
         </div>
       {:else if enrollmentError}
         <div class="command-box">
@@ -1834,12 +1873,31 @@
       {:else if installCommand}
         <div class="command-box">
           <pre>{installCommand}</pre>
-          <div style="display:flex;gap:0.5rem;">
-            <button on:click={() => copyText(installCommand)}>Copy install command</button>
+          <div class="command-actions">
+            <button on:click={() => copyText(installCommand)}>Copy command</button>
             <button class="ghost" on:click={refreshInstallToken}>New token</button>
           </div>
         </div>
       {/if}
+
+      <details class="change-later">
+        <summary>Change these later</summary>
+        <div class="cap-row">
+          <div class="cap-text">
+            <strong>SSH remote access</strong>
+            <code>sudo sync-win-agent set ssh on</code>
+          </div>
+          <button class="ghost" on:click={() => copyText('sudo sync-win-agent set ssh on')}>Copy</button>
+        </div>
+        <div class="cap-row">
+          <div class="cap-text">
+            <strong>Automatic updates</strong>
+            <code>sudo sync-win-agent update</code>
+          </div>
+          <button class="ghost" on:click={() => copyText('sudo sync-win-agent update')}>Copy</button>
+        </div>
+        <p class="muted">The agent never changes a capability on its own.</p>
+      </details>
     </div>
   </div>
 {/if}

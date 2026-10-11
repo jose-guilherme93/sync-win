@@ -1,9 +1,11 @@
 package logging
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -183,6 +185,16 @@ func (rw *responseWriter) Flush() {
 // Unwrap allows http.ResponseController to work correctly.
 func (rw *responseWriter) Unwrap() http.ResponseWriter {
 	return rw.ResponseWriter
+}
+
+// Hijack forwards to the underlying writer so WebSocket upgrades work through
+// this middleware. Without it the upgrade finds no Hijacker and fails.
+func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := rw.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, http.ErrNotSupported
+	}
+	return hj.Hijack()
 }
 
 func generateRequestID() string {

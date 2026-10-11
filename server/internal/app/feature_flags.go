@@ -14,6 +14,10 @@ type featureFlags struct {
 	EnableRemoteMutations      bool
 	EnableDockerMutations      bool
 	EnableRegistration         bool
+	// EnableRemoteAccess exposes the interactive-tunnel endpoints. Off by
+	// default: the broker can open a shell on a device, so it is opt-in on the
+	// server as well as on the device (policy.json allow_remote_access).
+	EnableRemoteAccess bool
 }
 
 func loadFeatureFlags() featureFlags {
@@ -23,6 +27,7 @@ func loadFeatureFlags() featureFlags {
 		EnableRemoteMutations:      envBool("SYNCWIN_ENABLE_REMOTE_MUTATIONS", false),
 		EnableDockerMutations:      envBool("SYNCWIN_ENABLE_DOCKER_MUTATIONS", false),
 		EnableRegistration:         envBool("SYNCWIN_ENABLE_REGISTRATION", false),
+		EnableRemoteAccess:         envBool("SYNCWIN_ENABLE_REMOTE_ACCESS", false),
 	}
 }
 

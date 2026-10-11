@@ -46,6 +46,9 @@ small text files and nothing else.
 
 - start, stop, restart, kill and remove containers; exec, compose, prune
 - restart the agent, run package updates, reboot a device
+- open an **SSH terminal** to a device from the dashboard — no port is opened on
+  the device; enable it on the device with `sudo sync-win-agent set ssh on` and
+  on the server with `SYNCWIN_ENABLE_REMOTE_ACCESS=true`
 
 ---
 
@@ -100,6 +103,21 @@ The installer is idempotent: running it again updates the agent in place. It
 installs a systemd service, grants the agent the journal group so device logs
 work, and enables automatic updates.
 
+Run interactively, it asks whether to keep the agent auto-updating and whether to
+enable SSH remote access. The **Add device** screen can preset those (so it never
+asks), and passing **`--yes`** skips the questions and accepts the defaults
+(auto-update on, remote access off):
+
+```bash
+sudo bash /tmp/sync-win-install.sh --yes
+```
+
+Agent auto-updates are signed. Deployers must set the `AGENT_UPDATE_KEY`
+repository secret (a base64 Ed25519 private key from
+`go run ./cmd/agentsign -genkey`); the matching public key is embedded in the
+agent at build time. Without it the agent is shipped unsigned and the updater
+refuses to install, so every device must be re-installed by hand.
+
 ---
 
 ## Configuration
@@ -116,6 +134,7 @@ Only `SYNCWIN_SECRET_KEY` is required.
 | `SYNCWIN_SESSION_TTL_HOURS` | `720` | Dashboard session lifetime (30 days). |
 | `SYNCWIN_ENABLE_REMOTE_MUTATIONS` | `false` | Allow reboot / package updates / agent restart. |
 | `SYNCWIN_ENABLE_DOCKER_MUTATIONS` | `false` | Allow container start/stop/remove, exec, prune. |
+| `SYNCWIN_ENABLE_REMOTE_ACCESS` | `false` | Expose the interactive SSH tunnel endpoints. The device must also enable it locally. |
 | `SYNCWIN_ENABLE_FINGERPRINT_RECONNECT` | `false` | Let a device re-enroll by hardware fingerprint. |
 | `SYNCWIN_CORS_ALLOWED_ORIGIN` | — | Comma-separated origins, needed only when the dashboard is served from a different host. |
 | `SYNCWIN_HTTPS` | `false` | Set `true` behind TLS so session cookies get the `Secure` flag. |

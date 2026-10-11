@@ -62,6 +62,72 @@ func TestLocalPolicyControlsCommands(t *testing.T) {
 	}
 }
 
+func TestWebsocketBase(t *testing.T) {
+	cases := map[string]string{
+		"http://localhost:8080":  "ws://localhost:8080",
+		"https://x.example":      "wss://x.example",
+		"http://localhost:8080/": "ws://localhost:8080",
+		"wss://already":          "wss://already",
+	}
+	for in, want := range cases {
+		if got := websocketBase(in); got != want {
+			t.Fatalf("websocketBase(%q)=%q want %q", in, got, want)
+		}
+	}
+}
+
+func TestSetCommandTogglesRemoteAccess(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("SYNCWIN_POLICY_PATH", filepath.Join(home, "etc-sync-win", "policy.json"))
+
+	if policy := loadLocalPolicy(); policy.AllowRemoteAccess {
+		t.Fatal("remote access must default to off")
+	}
+
+	if err := cmdSet([]string{"ssh", "on"}); err != nil {
+		t.Fatalf("set ssh on: %v", err)
+	}
+	policy := loadLocalPolicy()
+	if !policy.AllowRemoteAccess {
+		t.Fatal("set ssh on did not enable remote access")
+	}
+	// Enabling one capability must not silently disable the others: a partial
+	// policy file would make loadLocalPolicy authoritative over only its keys.
+	if !policy.AllowDockerRead || !policy.AllowLynisAudit {
+		t.Fatalf("set clobbered other policy fields: %+v", policy)
+	}
+
+	if err := cmdSet([]string{"ssh-user", "alice"}); err != nil {
+		t.Fatalf("set ssh-user: %v", err)
+	}
+	if policy = loadLocalPolicy(); policy.SSHUser != "alice" {
+		t.Fatalf("ssh-user not persisted: %+v", policy)
+	}
+
+	if err := cmdSet([]string{"ssh", "off"}); err != nil {
+		t.Fatalf("set ssh off: %v", err)
+	}
+	policy = loadLocalPolicy()
+	if policy.AllowRemoteAccess {
+		t.Fatal("set ssh off did not disable remote access")
+	}
+	if policy.SSHUser != "alice" {
+		t.Fatalf("ssh-user lost on toggle: %+v", policy)
+	}
+
+	if err := cmdSet([]string{"bogus", "on"}); err == nil {
+		t.Fatal("unknown setting must fail")
+	}
+	if err := cmdSet([]string{"ssh", "maybe"}); err == nil {
+		t.Fatal("invalid on/off must fail")
+	}
+	if err := cmdSet([]string{"ssh-user", "bad name"}); err == nil {
+		t.Fatal("invalid user must fail")
+	}
+}
+
 func TestDockerPolicyDefaults(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

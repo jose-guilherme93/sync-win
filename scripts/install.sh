@@ -45,7 +45,15 @@ SYNCWIN_UPDATE_PATH_NAME="sync-win-agent-update.path"
 SYNCWIN_UPDATE_PATH_FILE="/etc/systemd/system/${SYNCWIN_UPDATE_PATH_NAME}"
 SYNCWIN_UPDATE_PATH_TEMPLATE=""
 SYNCWIN_UPDATE_REQUEST_FILE="/var/lib/sync-win/update-request"
-SYNCWIN_AUTO_UPDATE="${SYNCWIN_AUTO_UPDATE:-1}"
+SYNCWIN_HELPER_SERVICE_NAME="sync-win-agent-helper.service"
+SYNCWIN_HELPER_SERVICE_FILE="/etc/systemd/system/${SYNCWIN_HELPER_SERVICE_NAME}"
+SYNCWIN_HELPER_SERVICE_TEMPLATE=""
+# Optional capabilities. Empty means "not chosen yet": an interactive install
+# asks, a non-interactive one (or --yes) takes the defaults. The Add-device
+# screen may preset them through the install command.
+SYNCWIN_AUTO_UPDATE="${SYNCWIN_AUTO_UPDATE:-}"
+SYNCWIN_SSH_ON_INSTALL="${SYNCWIN_SSH_ON_INSTALL:-}"
+SYNCWIN_YES="${SYNCWIN_YES:-0}"
 
 # Temp directory for downloads (cleaned up on exit)
 TMP_DIR=""
@@ -395,6 +403,7 @@ download_unit_templates() {
         "update-service:${SYNCWIN_UPDATE_SERVICE_NAME}"
         "update-timer:${SYNCWIN_UPDATE_TIMER_NAME}"
         "update-path:${SYNCWIN_UPDATE_PATH_NAME}"
+        "helper:${SYNCWIN_HELPER_SERVICE_NAME}"
     )
 
     for entry in "${mapping[@]}"; do
@@ -413,11 +422,12 @@ download_unit_templates() {
     [ -f "${TMP_DIR}/${SYNCWIN_UPDATE_SERVICE_NAME}" ] && SYNCWIN_UPDATE_SERVICE_TEMPLATE="${TMP_DIR}/${SYNCWIN_UPDATE_SERVICE_NAME}"
     [ -f "${TMP_DIR}/${SYNCWIN_UPDATE_TIMER_NAME}" ] && SYNCWIN_UPDATE_TIMER_TEMPLATE="${TMP_DIR}/${SYNCWIN_UPDATE_TIMER_NAME}"
     [ -f "${TMP_DIR}/${SYNCWIN_UPDATE_PATH_NAME}" ] && SYNCWIN_UPDATE_PATH_TEMPLATE="${TMP_DIR}/${SYNCWIN_UPDATE_PATH_NAME}"
+    [ -f "${TMP_DIR}/${SYNCWIN_HELPER_SERVICE_NAME}" ] && SYNCWIN_HELPER_SERVICE_TEMPLATE="${TMP_DIR}/${SYNCWIN_HELPER_SERVICE_NAME}"
 
-    if [ "$fetched" -eq 4 ]; then
+    if [ "$fetched" -eq 5 ]; then
         success "Service templates downloaded"
     else
-        warn "Only ${fetched}/4 service templates were downloaded from the server"
+        warn "Only ${fetched}/5 service templates were downloaded from the server"
         warn "The agent will still be installed; automatic updates may be unavailable"
     fi
 }
@@ -622,6 +632,88 @@ install_auto_update() {
         success "Automatic agent updates enabled (timer every 15 minutes, plus on demand)"
     else
         warn "Automatic updates are only partially enabled; check the units above"
+    fi
+}
+
+# install_remote_access_helper installs the privileged helper used by
+# interactive remote access, records the account that ran the installer as the
+# default SSH target, and checks for an ssh client.
+#
+# None of this is fatal: remote access is opt-in and off by default, so a host
+# where it cannot be set up loses a feature, not its agent.
+install_remote_access_helper() {
+    if [ -n "$SYNCWIN_HELPER_SERVICE_TEMPLATE" ] && [ -f "$SYNCWIN_HELPER_SERVICE_TEMPLATE" ]; then
+        cp "$SYNCWIN_HELPER_SERVICE_TEMPLATE" "$SYNCWIN_HELPER_SERVICE_FILE"
+        systemctl daemon-reload
+        if systemctl enable --now "$SYNCWIN_HELPER_SERVICE_NAME" >/dev/null 2>&1; then
+            success "Remote access helper installed"
+        else
+            warn "Could not start ${SYNCWIN_HELPER_SERVICE_NAME}; remote access will be unavailable"
+        fi
+    else
+        warn "Remote access helper unit was not downloaded; remote access will be unavailable"
+    fi
+
+    # The terminal runs ssh and ssh-keygen; both come from the OpenSSH client.
+    if ! command -v ssh >/dev/null 2>&1 || ! command -v ssh-keygen >/dev/null 2>&1; then
+        warn "OpenSSH client not found; install openssh-client to use remote access"
+    fi
+
+    # Record the account that ran the installer as the default SSH target. This
+    # goes through the agent's own `set`, so the policy path and the fail-closed
+    # defaults live in one place. It never enables remote access itself.
+    local target_user="${SUDO_USER:-}"
+    if [ -n "$target_user" ] && [ "$target_user" != "root" ] && id "$target_user" >/dev/null 2>&1; then
+        if "$SYNCWIN_BINARY" set ssh-user "$target_user" >/dev/null 2>&1; then
+            success "Default remote-access user set to '$target_user'"
+        else
+            warn "Could not record the default remote-access user"
+        fi
+    fi
+
+    # Remote access is off unless the operator enabled it on the Add-device
+    # screen, which is the install-time consent baked into this command.
+    if [ "${SYNCWIN_SSH_ON_INSTALL:-0}" = "1" ]; then
+        if "$SYNCWIN_BINARY" set ssh on >/dev/null 2>&1; then
+            success "Remote access enabled (SSH)"
+        else
+            warn "Could not enable remote access; run: sudo $SYNCWIN_BINARY set ssh on"
+        fi
+    else
+        info "Remote access stays off until you run: sudo $SYNCWIN_BINARY set ssh on"
+    fi
+}
+
+# prompt_capabilities resolves the optional capabilities. When the install
+# command already carried a choice (SYNCWIN_* set by the Add-device screen) it is
+# kept; otherwise an interactive run asks, and a non-interactive one (a pipe) or
+# an explicit --yes takes the defaults: auto-update on, remote-access SSH off.
+prompt_capabilities() {
+    if [ -z "${SYNCWIN_AUTO_UPDATE}" ]; then
+        SYNCWIN_AUTO_UPDATE=1
+        if [ "${SYNCWIN_YES}" != "1" ] && [ -t 0 ]; then
+            local answer
+            read -r -p "Keep the SyncWin agent auto-updating? [Y/n] " answer || true
+            case "${answer}" in [Nn]*) SYNCWIN_AUTO_UPDATE=0 ;; esac
+        fi
+    fi
+    if [ -z "${SYNCWIN_SSH_ON_INSTALL}" ]; then
+        SYNCWIN_SSH_ON_INSTALL=0
+        if [ "${SYNCWIN_YES}" != "1" ] && [ -t 0 ]; then
+            local answer
+            read -r -p "Enable SSH remote access from the dashboard? [y/N] " answer || true
+            case "${answer}" in [Yy]*) SYNCWIN_SSH_ON_INSTALL=1 ;; esac
+        fi
+    fi
+    if [ "${SYNCWIN_AUTO_UPDATE}" = "1" ]; then
+        info "Automatic updates: enabled"
+    else
+        info "Automatic updates: disabled"
+    fi
+    if [ "${SYNCWIN_SSH_ON_INSTALL}" = "1" ]; then
+        info "Remote access (SSH): enabled"
+    else
+        info "Remote access (SSH): disabled (enable later with: sudo sync-win-agent set ssh on)"
     fi
 }
 
@@ -844,7 +936,14 @@ print_summary() {
 # =============================================================================
 
 main() {
+    for arg in "$@"; do
+        case "$arg" in
+            --yes|-y) SYNCWIN_YES=1 ;;
+        esac
+    done
     require_root
+    step "0" "Choosing capabilities..."
+    prompt_capabilities
     step "1" "Detecting operating system..."
     detect_os
     step "2" "Detecting architecture..."
@@ -871,6 +970,9 @@ main() {
     step "10" "Enrolling device and starting service..."
     enroll_device
     configure_service
+    # Set up the remote-access helper and its policy before the agent starts, so
+    # the agent's very first inventory already carries the operator's choice.
+    install_remote_access_helper
     start_service
     install_auto_update
     verify_agent_readiness

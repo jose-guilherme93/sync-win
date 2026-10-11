@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -325,6 +326,27 @@ type OpenPort struct {
 	PID      int    `json:"pid,omitempty"`
 }
 
+// LoginUsers is the agent's view of which accounts a remote session may target,
+// plus whether the device has remote access enabled locally and which account is
+// the default. It is reported on the system-inventory cycle.
+type LoginUsers struct {
+	Enabled     bool     `json:"enabled"`
+	DefaultUser string   `json:"default_user,omitempty"`
+	Logins      []string `json:"logins"`
+}
+
+// RemoteSession is one audited interactive session. Terminal content is never
+// stored; only who opened a shell on which device, as which account, and when.
+type RemoteSession struct {
+	ID        string `json:"id"`
+	DeviceID  string `json:"device_id"`
+	OwnerID   string `json:"owner_id"`
+	User      string `json:"user"`
+	StartedAt string `json:"started_at"`
+	EndedAt   string `json:"ended_at,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+}
+
 type PreferenceInput struct {
 	Category     string `json:"category"`
 	Filename     string `json:"filename"`
@@ -494,6 +516,7 @@ func (s *Store) migrateAddSystemInventoryColumns(ctx context.Context) error {
 	for _, column := range []struct{ name, definition string }{
 		{"services_json", "TEXT"},
 		{"ports_json", "TEXT"},
+		{"login_users_json", "TEXT"},
 	} {
 		var count int
 		if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM pragma_table_info('devices') WHERE name=?", column.name).Scan(&count); err != nil {
@@ -642,6 +665,7 @@ func (s *Store) initSchema() error {
 		apps_json TEXT,
 		services_json TEXT,
 		ports_json TEXT,
+		login_users_json TEXT,
 		status TEXT NOT NULL DEFAULT 'online',
 		created_at TEXT NOT NULL,
 		updated_at TEXT NOT NULL,
@@ -813,6 +837,17 @@ func (s *Store) initSchema() error {
 	-- line arrives many times. This unique key is what makes ingestion
 	-- idempotent; without it the table grows without bound.
 	CREATE UNIQUE INDEX IF NOT EXISTS idx_device_logs_dedupe ON device_logs(device_id, ts, source, message);
+	CREATE TABLE IF NOT EXISTS remote_sessions (
+		id         TEXT PRIMARY KEY,
+		device_id  TEXT NOT NULL,
+		owner_id   TEXT NOT NULL,
+		username   TEXT NOT NULL DEFAULT '',
+		started_at TEXT NOT NULL,
+		ended_at   TEXT,
+		reason     TEXT NOT NULL DEFAULT ''
+	);
+	CREATE INDEX IF NOT EXISTS idx_remote_sessions_device ON remote_sessions(device_id, started_at DESC);
+	CREATE INDEX IF NOT EXISTS idx_remote_sessions_owner ON remote_sessions(owner_id, started_at DESC);
 	CREATE TABLE IF NOT EXISTS logs (
 		id             INTEGER PRIMARY KEY AUTOINCREMENT,
 		ts             TEXT NOT NULL,
@@ -2739,6 +2774,159 @@ func (s *Store) GetPorts(ctx context.Context, deviceID string) ([]OpenPort, erro
 		}
 		return ports, nil
 	})
+}
+
+// StartRemoteSession records the beginning of an interactive session.
+func (s *Store) StartRemoteSession(ctx context.Context, deviceID, ownerID, user string) (RemoteSession, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return RemoteSession{}, err
+	}
+	session := RemoteSession{
+		ID:        hex.EncodeToString(b),
+		DeviceID:  deviceID,
+		OwnerID:   ownerID,
+		User:      strings.TrimSpace(user),
+		StartedAt: timeText(time.Now().UTC()),
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.ExecContext(ctx,
+		"INSERT INTO remote_sessions (id, device_id, owner_id, username, started_at) VALUES (?, ?, ?, ?, ?)",
+		session.ID, session.DeviceID, session.OwnerID, session.User, session.StartedAt,
+	)
+	return session, err
+}
+
+// EndRemoteSession closes a session with a reason.
+func (s *Store) EndRemoteSession(ctx context.Context, id, reason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.ExecContext(ctx,
+		"UPDATE remote_sessions SET ended_at = ?, reason = ? WHERE id = ?",
+		timeText(time.Now().UTC()), reason, id,
+	)
+	return err
+}
+
+// ListRemoteSessions returns a device's recent sessions, newest first.
+func (s *Store) ListRemoteSessions(ctx context.Context, deviceID, ownerID string, limit int) ([]RemoteSession, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, device_id, owner_id, username, started_at, COALESCE(ended_at, ''), COALESCE(reason, '')
+		 FROM remote_sessions WHERE device_id = ? AND owner_id = ?
+		 ORDER BY started_at DESC LIMIT ?`,
+		deviceID, ownerID, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	sessions := make([]RemoteSession, 0, 8)
+	for rows.Next() {
+		var session RemoteSession
+		if err := rows.Scan(&session.ID, &session.DeviceID, &session.OwnerID, &session.User, &session.StartedAt, &session.EndedAt, &session.Reason); err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, session)
+	}
+	return sessions, rows.Err()
+}
+
+// maxLoginUsers bounds the stored list of accounts a remote session may target.
+const maxLoginUsers = 50
+
+func normalizeLoginUsers(users LoginUsers) LoginUsers {
+	out := LoginUsers{Enabled: users.Enabled, DefaultUser: strings.TrimSpace(users.DefaultUser)}
+	if len(out.DefaultUser) > 64 {
+		out.DefaultUser = out.DefaultUser[:64]
+	}
+	seen := make(map[string]struct{}, len(users.Logins))
+	out.Logins = make([]string, 0, len(users.Logins))
+	for _, name := range users.Logins {
+		name = strings.TrimSpace(name)
+		if name == "" || len(name) > 64 || !validAccountName(name) {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out.Logins = append(out.Logins, name)
+		if len(out.Logins) >= maxLoginUsers {
+			break
+		}
+	}
+	sort.Strings(out.Logins)
+	return out
+}
+
+// validAccountName matches the helper's rule exactly: a lowercase name that
+// starts with a letter or underscore. A leading '-' is rejected because the
+// name is later handed to ssh and any command that would read it as a flag.
+func validAccountName(name string) bool {
+	if name == "" || len(name) > 32 {
+		return false
+	}
+	for i, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case (r >= '0' && r <= '9') || r == '_' || r == '-':
+			if i == 0 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// UpdateLoginUsers stores the target-account list and local enable state. A nil
+// section is left untouched, mirroring UpdateSystemInventory.
+func (s *Store) UpdateLoginUsers(ctx context.Context, deviceID string, users *LoginUsers) error {
+	if users == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := json.Marshal(normalizeLoginUsers(*users))
+	if err != nil {
+		return err
+	}
+	now := timeText(time.Now().UTC())
+	_, err = s.db.ExecContext(ctx, "UPDATE devices SET login_users_json = ?, updated_at = ? WHERE id = ?", string(data), now, deviceID)
+	return err
+}
+
+// GetLoginUsers returns the last reported target-account list. A device that
+// never reported one yields an empty value, not an error.
+func (s *Store) GetLoginUsers(ctx context.Context, deviceID string) (LoginUsers, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var raw sql.NullString
+	err := s.db.QueryRowContext(ctx, "SELECT login_users_json FROM devices WHERE id = ?", deviceID).Scan(&raw)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return LoginUsers{Logins: []string{}}, nil
+		}
+		return LoginUsers{}, err
+	}
+	if !raw.Valid || raw.String == "" {
+		return LoginUsers{Logins: []string{}}, nil
+	}
+	var users LoginUsers
+	if err := json.Unmarshal([]byte(raw.String), &users); err != nil {
+		return LoginUsers{}, err
+	}
+	if users.Logins == nil {
+		users.Logins = []string{}
+	}
+	return users, nil
 }
 
 func systemInventoryColumn[T any](ctx context.Context, s *Store, deviceID, column string, decode func(string) ([]T, error)) ([]T, error) {

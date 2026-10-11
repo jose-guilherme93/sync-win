@@ -190,6 +190,68 @@ not need CORS.
 - Logs are append-only and never modified.
 - The audit log is queryable via the API.
 
+## Interactive remote access
+
+Remote access opens an SSH terminal on a device from the dashboard. It is the
+first, deliberate exception to "never execute arbitrary shell remotely"; it is
+scoped to logins through the device's own sshd and gated at every layer.
+
+### Consent is local and required twice
+
+- The server flag `SYNCWIN_ENABLE_REMOTE_ACCESS` defaults to `false`. With it
+  off, every remote-access endpoint fails closed.
+- The device policy `allow_remote_access` (in `/etc/sync-win/policy.json`)
+  defaults to `false`. The dashboard never enables it remotely; the device owner
+  runs `sudo sync-win-agent set ssh on`. The agent refuses a session the local
+  policy disables.
+
+### No inbound port, no chosen destination
+
+- The agent keeps an **outbound** WebSocket to the server. No port is opened on
+  the device, and a host firewall stays closed.
+- The server **never** names a host or port. The agent always dials its own
+  loopback (`127.0.0.1`). A compromised server therefore cannot use the agent to
+  reach the device's LAN.
+
+### Credentials and the ephemeral key
+
+- The browser authenticates with the dashboard session cookie and redeems a
+  one-time session ticket (short TTL, bound to owner and device).
+- The agent authenticates its tunnel with the device token, as it does elsewhere.
+- Per session the agent generates an **ed25519 key** with `ssh-keygen`. A
+  root-owned helper appends exactly one line to the target user's
+  `authorized_keys` — `restrict,pty,from="127.0.0.1",expiry-time=…` plus a
+  `syncwin:<id>` marker; the key is rebuilt only from validated fields, so a key
+  cannot smuggle options or extra lines. The line is removed when the session
+  ends and expires on its own if it is not.
+- The helper listens on a root-owned Unix socket, answers **only** the agent's
+  uid (checked with `SO_PEERCRED`), and validates every request before touching
+  a file. It is the only privileged component and its job is exactly this.
+
+### Reverse-proxy requirement
+
+TLS terminates at a reverse proxy in front of the server. The proxy must allow
+the WebSocket upgrade on `/api/devices/*/tunnel`, `/api/devices/*/tunnel/session`
+and `/api/devices/*/terminal`, and must not buffer those responses. The browser
+terminal additionally checks its `Origin` against `SYNCWIN_CORS_ALLOWED_ORIGIN`;
+a proxy that rewrites the `Host` header (the Vite dev proxy does) needs the
+dashboard origin listed there, which the dev compose file already sets.
+
+### What the relay can see
+
+Because the server is the transport relay for the terminal (the agent runs the
+SSH client on the device), **the server observes the terminal's input and
+output in clear text**. The operator accepted this trade-off in exchange for not
+running an SSH client in the browser. Terminal content is not stored; only the
+audit row is.
+
+### Limits and audit
+
+- Idle timeout 15 minutes on keyboard inactivity; at most 3 concurrent sessions
+  per device. There is no detach/resume.
+- Every connected session writes a `remote_sessions` row (owner, device, target
+  account, start, end, reason). Root login is out of scope.
+
 ## Deployment security
 
 ### Docker
@@ -223,7 +285,9 @@ The server never stores:
 - private keys or certificates
 - browser credentials or cookies
 - KWallet data
-- SSH keys
+- SSH keys — the remote-access keys live only on the device and only for the
+  duration of a session; the server never receives a private key or a public key
+  for storage
 - API tokens or secrets (except encrypted notification provider configs)
 - full home directories
 - large binary files (except base64-encoded saves up to 1 MiB)

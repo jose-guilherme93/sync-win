@@ -194,6 +194,7 @@ func TestDurationHelpers(t *testing.T) {
 			DockerLogsMaxTail        int      `json:"docker_logs_max_tail"`
 			DockerExecTimeoutSeconds int      `json:"docker_exec_timeout_seconds"`
 			PolicyPath               string   `json:"policy_path"`
+			LegacyPolicyPath         string   `json:"legacy_policy_path"`
 			PolicyDefaults           struct {
 				AllowInstallApp       bool `json:"allow_install_app"`
 				AllowExcludeFile      bool `json:"allow_exclude_file"`
@@ -207,6 +208,7 @@ func TestDurationHelpers(t *testing.T) {
 				AllowDockerExec       bool `json:"allow_docker_exec"`
 				AllowDockerPrune      bool `json:"allow_docker_prune"`
 				AllowDockerCompose    bool `json:"allow_docker_compose"`
+				AllowRemoteAccess     bool `json:"allow_remote_access"`
 				CommandTimeoutSeconds int  `json:"command_timeout_seconds"`
 			} `json:"policy_defaults"`
 		}{TimeoutSecondsDefault: 900},

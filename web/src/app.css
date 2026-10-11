@@ -2070,14 +2070,252 @@ button.secondary {
 }
 
 /* ── Install modal ── */
+/* ── Add-device (installation) modal ──
+   Styled with the design tokens so it belongs with the rest of the panel
+   instead of the legacy slate modal palette. */
 .install-modal {
-  background: #0f172a;
-  border: 1px solid rgba(148, 163, 184, 0.15);
-  border-radius: 16px;
-  padding: 1.5rem;
-  width: min(600px, 90vw);
-  max-height: 85vh;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 1.4rem;
+  width: min(560px, 94vw);
+  max-height: 88vh;
   overflow-y: auto;
+  overflow-x: hidden;
+  box-shadow: var(--shadow-pop);
+  color: var(--text);
+  font-family: var(--font);
+}
+.install-modal .modal-header h2 {
+  margin: 0.15rem 0;
+  font-size: 1.05rem;
+  color: var(--text-bright);
+}
+.install-modal .modal-header small {
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+.install-modal .eyebrow {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.install-section {
+  margin-top: 1rem;
+}
+.install-section .section-label {
+  display: block;
+  margin-bottom: 0.45rem;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.cap-toggles {
+  display: grid;
+  gap: 0.5rem;
+}
+.toggle-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  cursor: pointer;
+  transition: background var(--t-fast), border-color var(--t-fast);
+}
+.toggle-row:hover {
+  background: var(--card-hover);
+  border-color: var(--border-strong);
+}
+.toggle-row input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0.15rem 0 0;
+  accent-color: var(--accent);
+}
+.toggle-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+.toggle-text strong {
+  color: var(--text-bright);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.toggle-text em {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  font-style: normal;
+  line-height: 1.45;
+}
+
+.install-modal .server-address-row {
+  display: block;
+  margin: 0;
+  color: var(--text-muted);
+}
+.install-modal .server-address-row input {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  margin-top: 0.4rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--card-inset);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+}
+.install-modal .server-address-row input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.install-hint {
+  display: block;
+  margin: 0.5rem 0 0;
+  color: var(--text-faint);
+  font-size: 0.74rem;
+  line-height: 1.5;
+}
+.install-hint strong {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.install-modal .warn-banner {
+  margin-top: 0.9rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  border-radius: var(--radius-sm);
+  background: var(--warn-dim);
+  color: var(--warn);
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+.install-modal .warn-banner code {
+  color: var(--warn);
+}
+
+.install-modal .command-box {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 0.9rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card-inset);
+}
+.install-modal .command-box pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+.install-modal .command-box pre.error {
+  color: var(--crit);
+}
+.command-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.install-modal button {
+  padding: 0.42rem 0.8rem;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-sm);
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: background var(--t-fast);
+}
+.install-modal button:hover {
+  background: rgba(52, 211, 153, 0.24);
+}
+.install-modal button.ghost,
+.install-modal button.secondary {
+  border-color: var(--border-strong);
+  background: transparent;
+  color: var(--text-muted);
+}
+.install-modal button.ghost:hover,
+.install-modal button.secondary:hover {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+
+.change-later {
+  margin-top: 1rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--border);
+}
+.change-later summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  list-style: none;
+}
+.change-later summary::-webkit-details-marker {
+  display: none;
+}
+.change-later summary::before {
+  content: '▸';
+  margin-right: 0.4rem;
+  color: var(--text-faint);
+}
+.change-later[open] summary::before {
+  content: '▾';
+}
+.cap-row {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  margin-top: 0.6rem;
+}
+.cap-text {
+  flex: 1;
+  min-width: 0;
+}
+.cap-text strong {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: var(--text);
+  font-size: 0.78rem;
+}
+.cap-row code {
+  display: inline-block;
+  padding: 0.25rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card-inset);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+.change-later .muted {
+  margin: 0.7rem 0 0;
+  color: var(--text-faint);
+  font-size: 0.74rem;
 }
 
 /* ── Metrics toggle bar ── */

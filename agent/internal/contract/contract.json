@@ -1,6 +1,6 @@
 {
-  "contract_version": "1.5.0",
-  "agent_version": "0.6.2",
+  "contract_version": "1.6.0",
+  "agent_version": "0.7.0",
   "collection": {
     "max_file_bytes": 524288,
     "default_preference_files": [
@@ -133,6 +133,11 @@
       "max_ports": 200,
       "timeout_seconds": 10,
       "listening_states": ["LISTEN", "UNCONN"]
+    },
+    "users": {
+      "max_users": 50,
+      "min_uid": 1000,
+      "rationale": "Only real login accounts are offered as remote-access targets. System accounts (uid below 1000), nologin/false shells and accounts without a home are excluded."
     }
   },
   "preferences_sync": {
@@ -155,7 +160,8 @@
     "timeout_seconds_default": 900,
     "output_cap_bytes": 65536,
     "docker_logs_max_tail": 2000,
-    "policy_path": "~/.config/sync-win/policy.json",
+    "policy_path": "/etc/sync-win/policy.json",
+    "legacy_policy_path": "~/.config/sync-win/policy.json",
     "policy_defaults": {
       "allow_install_app": false,
       "allow_exclude_file": false,
@@ -169,9 +175,22 @@
       "allow_docker_exec": false,
       "allow_docker_prune": false,
       "allow_docker_compose": false,
+      "allow_remote_access": false,
       "command_timeout_seconds": 900
     },
     "docker_exec_timeout_seconds": 30
+  },
+  "remote_access": {
+    "enabled_default": false,
+    "transport": "websocket_outbound",
+    "ssh_host": "127.0.0.1",
+    "ssh_port": 22,
+    "idle_timeout_seconds": 900,
+    "max_sessions": 3,
+    "helper_socket_path": "/run/sync-win/helper.sock",
+    "key_type": "ssh-ed25519",
+    "authorized_keys_options": "restrict,pty,from=\"127.0.0.1\"",
+    "rationale": "Interactive SSH is opt-in on the device (policy.json allow_remote_access) and the agent always dials loopback. The server never chooses the host or port, so a compromised server cannot pivot into the device LAN. The privileged key injection is isolated in a root helper reachable only over a root-owned Unix socket."
   },
   "security_audit": {
     "enabled": true,

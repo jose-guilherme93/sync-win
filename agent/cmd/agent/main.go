@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -204,6 +205,12 @@ func dockerRequestAllowed(policy localPolicy, reqType string) bool {
 	default:
 		return false
 	}
+}
+
+// remoteAccessAllowed reports whether the device has opted in to interactive
+// remote access. It is fail-closed: the zero value of the policy denies it.
+func remoteAccessAllowed(policy localPolicy) bool {
+	return policy.AllowRemoteAccess
 }
 
 func executeDockerRequest(req dockerRequest) dockerResult {
@@ -580,6 +587,12 @@ func cmdDaemon(args []string) {
 		saveAgentState(state)
 	}
 
+	// Interactive remote access runs on its own outbound connection so a slow
+	// or busy tunnel never delays telemetry or command polling.
+	tunnelCtx, tunnelCancel := context.WithCancel(context.Background())
+	defer tunnelCancel()
+	go runRemoteTunnel(tunnelCtx, *serverURL, *deviceID, *deviceToken)
+
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
@@ -609,11 +622,23 @@ func cmdDaemon(args []string) {
 	lastSystemInventoryAttempt := time.Time{}
 	lastSaveAttempt := time.Time{}
 	lastWorkspaceAttempt := time.Time{}
+	lastRemoteSignature := ""
 
 	for {
 		now := time.Now()
 		log.Printf("cycle started device=%s failures=%d", *deviceID, consecutiveFailures)
 		hadError := false
+
+		// Remote access is opt-in on the device, and `set ssh on` rewrites the
+		// policy from a separate process. Without this, the dashboard would wait
+		// up to five minutes for the next system inventory before it saw the
+		// change and would keep claiming the device needs local authorization.
+		// Re-report as soon as the policy signature changes.
+		remotePolicy := loadLocalPolicy()
+		if signature := fmt.Sprintf("%t|%s", remoteAccessAllowed(remotePolicy), remotePolicy.SSHUser); signature != lastRemoteSignature {
+			lastRemoteSignature = signature
+			lastSystemInventoryAttempt = time.Time{}
+		}
 
 		if lastPreferenceAttempt.IsZero() || now.Sub(lastPreferenceAttempt) >= *preferenceInterval {
 			lastPreferenceAttempt = now
@@ -867,6 +892,14 @@ func main() {
 		cmdDaemon(os.Args[2:])
 	case "update":
 		if err := cmdUpdate(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+	case "set":
+		if err := cmdSet(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+	case "helper":
+		if err := cmdHelper(os.Args[2:]); err != nil {
 			log.Fatal(err)
 		}
 	case "--version", "version":
@@ -1882,19 +1915,21 @@ func readAgentMemory() uint64 {
 
 // localPolicy controls which command types the agent is allowed to execute.
 type localPolicy struct {
-	AllowInstallApp       bool `json:"allow_install_app"`
-	AllowExcludeFile      bool `json:"allow_exclude_file"`
-	AllowRestoreSaves     bool `json:"allow_restore_saves"`
-	AllowLynisAudit       bool `json:"allow_lynis_audit"`
-	AllowRestartAgent     bool `json:"allow_restart_agent"`
-	AllowPackageUpdates   bool `json:"allow_package_updates"`
-	AllowRebootDevice     bool `json:"allow_reboot_device"`
-	AllowDockerRead       bool `json:"allow_docker_read"`
-	AllowDockerLifecycle  bool `json:"allow_docker_lifecycle"`
-	AllowDockerExec       bool `json:"allow_docker_exec"`
-	AllowDockerPrune      bool `json:"allow_docker_prune"`
-	AllowDockerCompose    bool `json:"allow_docker_compose"`
-	CommandTimeoutSeconds int  `json:"command_timeout_seconds"`
+	AllowInstallApp       bool   `json:"allow_install_app"`
+	AllowExcludeFile      bool   `json:"allow_exclude_file"`
+	AllowRestoreSaves     bool   `json:"allow_restore_saves"`
+	AllowLynisAudit       bool   `json:"allow_lynis_audit"`
+	AllowRestartAgent     bool   `json:"allow_restart_agent"`
+	AllowPackageUpdates   bool   `json:"allow_package_updates"`
+	AllowRebootDevice     bool   `json:"allow_reboot_device"`
+	AllowDockerRead       bool   `json:"allow_docker_read"`
+	AllowDockerLifecycle  bool   `json:"allow_docker_lifecycle"`
+	AllowDockerExec       bool   `json:"allow_docker_exec"`
+	AllowDockerPrune      bool   `json:"allow_docker_prune"`
+	AllowDockerCompose    bool   `json:"allow_docker_compose"`
+	AllowRemoteAccess     bool   `json:"allow_remote_access"`
+	SSHUser               string `json:"ssh_user,omitempty"`
+	CommandTimeoutSeconds int    `json:"command_timeout_seconds"`
 }
 
 // loadLocalPolicy reads the local policy file, falling back to safe defaults.
@@ -1913,12 +1948,13 @@ func loadLocalPolicy() localPolicy {
 		AllowDockerExec:       defaults.AllowDockerExec,
 		AllowDockerPrune:      defaults.AllowDockerPrune,
 		AllowDockerCompose:    defaults.AllowDockerCompose,
+		AllowRemoteAccess:     defaults.AllowRemoteAccess,
 		CommandTimeoutSeconds: defaults.CommandTimeoutSeconds,
 	}
 	if policy.CommandTimeoutSeconds <= 0 {
 		policy.CommandTimeoutSeconds = syncwinContract.Commands.TimeoutSecondsDefault
 	}
-	path := contract.ExpandPath(syncwinContract.Commands.PolicyPath)
+	path := resolvePolicyPath()
 	info, err := os.Stat(path)
 	if err != nil || info.Mode().Perm()&0o077 != 0 {
 		return policy
@@ -1935,6 +1971,199 @@ func loadLocalPolicy() localPolicy {
 		filePolicy.CommandTimeoutSeconds = policy.CommandTimeoutSeconds
 	}
 	return filePolicy
+}
+
+// policyFilePath returns the configured policy location. SYNCWIN_POLICY_PATH
+// overrides it for tests and non-standard deployments.
+func policyFilePath() string {
+	if p := strings.TrimSpace(os.Getenv("SYNCWIN_POLICY_PATH")); p != "" {
+		return p
+	}
+	return syncwinContract.Commands.PolicyPath
+}
+
+// resolvePolicyPath returns the file the agent should read: the canonical path
+// when present, otherwise the legacy ~/.config location for devices that were
+// configured before the policy moved under /etc.
+func resolvePolicyPath() string {
+	canonical := policyFilePath()
+	if _, err := os.Stat(canonical); err == nil {
+		return canonical
+	}
+	if legacy := strings.TrimSpace(syncwinContract.Commands.LegacyPolicyPath); legacy != "" {
+		if expanded := contract.ExpandPath(legacy); expanded != "" {
+			if _, err := os.Stat(expanded); err == nil {
+				return expanded
+			}
+		}
+	}
+	return canonical
+}
+
+// chownPolicyFile hands the policy to the agent's service user when running as
+// root. loadLocalPolicy requires mode 0600 and the service must be able to read
+// the file, so a root-owned policy would be silently ignored.
+func chownPolicyFile(path string) error {
+	if os.Geteuid() != 0 {
+		return nil
+	}
+	u, err := user.Lookup("sync-win")
+	if err != nil {
+		return nil // service user absent (e.g. tests); leave ownership as-is
+	}
+	uid, uidErr := strconv.Atoi(u.Uid)
+	gid, gidErr := strconv.Atoi(u.Gid)
+	if uidErr != nil || gidErr != nil {
+		return nil
+	}
+	return os.Chown(path, uid, gid)
+}
+
+// policyDefaultsMap returns the full fail-closed policy as a raw map. A `set`
+// starts from these so that writing a capability never silently zeroes the
+// others: loadLocalPolicy treats a present file as authoritative, so a partial
+// file would otherwise disable Docker read and Lynis audit.
+func policyDefaultsMap() map[string]any {
+	d := syncwinContract.Commands.PolicyDefaults
+	return map[string]any{
+		"allow_install_app":       d.AllowInstallApp,
+		"allow_exclude_file":      d.AllowExcludeFile,
+		"allow_restore_saves":     d.AllowRestoreSaves,
+		"allow_lynis_audit":       d.AllowLynisAudit,
+		"allow_restart_agent":     d.AllowRestartAgent,
+		"allow_package_updates":   d.AllowPackageUpdates,
+		"allow_reboot_device":     d.AllowRebootDevice,
+		"allow_docker_read":       d.AllowDockerRead,
+		"allow_docker_lifecycle":  d.AllowDockerLifecycle,
+		"allow_docker_exec":       d.AllowDockerExec,
+		"allow_docker_prune":      d.AllowDockerPrune,
+		"allow_docker_compose":    d.AllowDockerCompose,
+		"allow_remote_access":     d.AllowRemoteAccess,
+		"command_timeout_seconds": d.CommandTimeoutSeconds,
+	}
+}
+
+// cmdSet turns a locally-gated capability on or off, Tailscale-`set` style.
+//
+// Nothing here is driven by the server: the device owner runs this on the
+// machine, and the server only reflects the resulting state. Remote access is
+// the motivating capability and is off until this runs. `ssh-user` records the
+// Linux account the ephemeral key will target.
+func cmdSet(args []string) error {
+	if len(args) != 2 {
+		return fmt.Errorf("usage: sync-win-agent set <ssh|ssh-user> <on|off|username>")
+	}
+	key := strings.TrimSpace(args[0])
+	value := strings.TrimSpace(args[1])
+
+	path := policyFilePath()
+	policy := readPolicyMap(path)
+
+	switch key {
+	case "ssh":
+		enabled, err := parseOnOff(value)
+		if err != nil {
+			return err
+		}
+		policy["allow_remote_access"] = enabled
+	case "ssh-user":
+		if !validSSHUser(value) {
+			return fmt.Errorf("invalid user name: %q", value)
+		}
+		policy["ssh_user"] = value
+	default:
+		return fmt.Errorf("unknown setting %q (supported: ssh, ssh-user)", key)
+	}
+
+	if err := writePolicyMap(path, policy); err != nil {
+		return err
+	}
+	if err := chownPolicyFile(path); err != nil {
+		return fmt.Errorf("set ownership on %s: %w", path, err)
+	}
+	fmt.Printf("ok: %s = %s (%s)\n", key, value, path)
+	return nil
+}
+
+func parseOnOff(v string) (bool, error) {
+	switch strings.ToLower(v) {
+	case "on", "true", "yes", "1", "enable", "enabled":
+		return true, nil
+	case "off", "false", "no", "0", "disable", "disabled":
+		return false, nil
+	default:
+		return false, fmt.Errorf("expected on or off, got %q", v)
+	}
+}
+
+// readPolicyMap reads the existing policy over the fail-closed defaults so
+// unknown fields survive and a missing file does not shrink the policy.
+func readPolicyMap(path string) map[string]any {
+	policy := policyDefaultsMap()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return policy
+	}
+	var filePolicy map[string]any
+	if err := json.Unmarshal(data, &filePolicy); err != nil {
+		return policy
+	}
+	for k, v := range filePolicy {
+		policy[k] = v
+	}
+	return policy
+}
+
+// writePolicyMap writes the policy atomically with 0600. loadLocalPolicy
+// refuses a file that is group- or world-readable, so the mode is load-bearing.
+func writePolicyMap(path string, policy map[string]any) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(policy, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	tmp, err := os.CreateTemp(dir, ".policy-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
+func validSSHUser(name string) bool {
+	if name == "" || len(name) > 32 {
+		return false
+	}
+	for i, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9', r == '_', r == '-':
+			if i == 0 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // installApp installs one explicitly named package using a fixed command per source.
@@ -2422,6 +2651,15 @@ type systemInventoryRequest struct {
 	DeviceToken string                   `json:"device_token,omitempty"`
 	Services    []collectors.ServiceUnit `json:"services,omitempty"`
 	Ports       []collectors.OpenPort    `json:"ports,omitempty"`
+	Users       *loginUsersSection       `json:"users,omitempty"`
+}
+
+// loginUsersSection is the remote-access view: the accounts a session may target
+// plus whether access is enabled locally and which account is the default.
+type loginUsersSection struct {
+	Enabled     bool     `json:"enabled"`
+	DefaultUser string   `json:"default_user,omitempty"`
+	Logins      []string `json:"logins"`
 }
 
 // syncSystemInventory collects and uploads the systemd unit list and the
@@ -2456,7 +2694,21 @@ func syncSystemInventory(serverURL, deviceID, deviceToken string, st *agentState
 		req.Ports = ports
 	}
 
-	if req.Services == nil && req.Ports == nil {
+	// The target-account list is reported even when access is disabled, so the
+	// dashboard can show who could be chosen before the operator enables it.
+	policy := loadLocalPolicy()
+	logins := collectors.CollectLoginUsers(inventory.Users.MinUID, syncwinContract.MaxLoginUsers())
+	names := make([]string, 0, len(logins))
+	for _, u := range logins {
+		names = append(names, u.Name)
+	}
+	req.Users = &loginUsersSection{
+		Enabled:     remoteAccessAllowed(policy),
+		DefaultUser: strings.TrimSpace(policy.SSHUser),
+		Logins:      names,
+	}
+
+	if req.Services == nil && req.Ports == nil && req.Users == nil {
 		return fmt.Errorf("no system inventory section could be collected")
 	}
 	if err := postJSON(serverURL+"/api/devices/"+deviceID+"/system-inventory", deviceToken, req); err != nil {
@@ -2464,7 +2716,7 @@ func syncSystemInventory(serverURL, deviceID, deviceToken string, st *agentState
 	}
 	st.LastSystemInventorySync = time.Now().UTC()
 	st.save()
-	log.Printf("system inventory sync completed services=%d ports=%d", len(req.Services), len(req.Ports))
+	log.Printf("system inventory sync completed services=%d ports=%d users=%d", len(req.Services), len(req.Ports), len(names))
 	return nil
 }
 
