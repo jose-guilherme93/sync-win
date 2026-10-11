@@ -742,11 +742,14 @@
       if (!response.ok) return
       const payload = await response.json()
       if (!payload || typeof payload !== 'object' || Array.isArray(payload) || !payload.id) return
-      // Attach posture in the same assignment: writing deviceDetails twice raced,
-      // and the detail write would wipe a posture the other path had stored.
+      // Preserve any posture already stored. The poll calls this without
+      // includePosture, and replacing the entry wholesale wiped the posture the
+      // Security section had just fetched, so the screen lost its listeners and
+      // failed units within one poll.
+      const existing = deviceDetails[deviceId] as any
       const entry = includePosture
         ? { ...payload, securityPosture: await fetchPosture(deviceId) }
-        : payload
+        : { ...payload, securityPosture: existing?.securityPosture }
       deviceDetails = { ...deviceDetails, [deviceId]: entry as Device }
     } catch {
       // Keep the last known detail; the list summary still renders.

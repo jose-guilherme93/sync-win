@@ -238,9 +238,13 @@
   // Recommended actions, highest-signal first. Each is a real next step in the
   // product (jump to the terminal, the logs, the packages) rather than a
   // fabricated shell command we cannot verify for this host.
+  //
+  // Built as an inline IIFE rather than a called helper: Svelte's reactive
+  // analysis only sees identifiers written in the statement itself, so
+  // `$: actions = buildActions()` never re-ran when the posture arrived and the
+  // card stayed empty on screen.
   type Action = { tone: 'crit' | 'warn' | 'info'; title: string; detail: string; label: string; section?: Section; href?: string }
-  $: actions = buildActions()
-  function buildActions(): Action[] {
+  $: actions = (() => {
     const out: Action[] = []
     if (failedUnitCount > 0) {
       out.push({ tone: 'crit', title: `${failedUnitCount} failed systemd unit${failedUnitCount === 1 ? '' : 's'}`, detail: failedServices.slice(0, 3).join(', '), label: 'View logs', section: 'logs' })
@@ -251,12 +255,11 @@
     if (posture.pendingStatus === 'ready' && posture.pendingUpdates > 0) {
       out.push({ tone: 'warn', title: `${posture.pendingUpdates} pending package update${posture.pendingUpdates === 1 ? '' : 's'}`, detail: 'Unpatched packages are the most common finding.', label: 'View packages', section: 'packages' })
     }
-    const topWarnings = (report?.warnings ?? []).slice(0, 3)
-    for (const w of topWarnings) {
+    for (const w of (report?.warnings ?? []).slice(0, 3)) {
       out.push({ tone: 'info', title: w.description || w.id, detail: `${w.id}${w.category ? ` · ${w.category}` : ''}`, label: 'Lynis docs', href: docsUrl(w.id) })
     }
     return out
-  }
+  })()
 
   function docsUrl(id: string): string {
     return `https://cisofy.com/lynis/controls/${encodeURIComponent(id)}/`
@@ -365,7 +368,10 @@
     <div class="banner crit">{posture.error}</div>
   {/if}
 
-  <!-- Exposure detail: the counts above, spelled out with the ports and units. -->
+  <!-- Exposure detail: the counts above, spelled out with the ports and units.
+       Wrapped in a keyed block on the same counts as the chips: in this Svelte
+       version the derived counts only propagate into a re-created block, so a
+       plain {#if} here stayed false while the chips already showed the values. -->
   {#key publicPortCount + '|' + failedUnitCount}
     {#if publicPortCount > 0 || failedUnitCount > 0}
       <div class="exposure">
@@ -389,6 +395,7 @@
     {/if}
   {/key}
 
+  {#key actions.length}
   {#if actions.length > 0}
     <article class="card actions">
       <header class="card-head"><h3>Recommended actions</h3><span class="count">{actions.length}</span></header>
@@ -409,6 +416,7 @@
       </ul>
     </article>
   {/if}
+  {/key}
 
   {#if loading}
     <p class="loading">Loading audits…</p>

@@ -28,28 +28,10 @@
   $: disks = (hw?.disk_partitions ?? []).filter((p) => p.total_bytes > 0).sort((a, b) => b.used_percent - a.used_percent)
   $: ifaces = (hw?.network_ifaces ?? []).filter((i) => i.name !== 'lo')
 
-  $: readings = buildReadings()
-  $: alerts = readings.filter((r) => r.severity !== 'ok')
-
-  $: if (hw?.collected_at && hw.collected_at !== lastStamp) {
-    lastStamp = hw.collected_at
-    tempSeries = push(tempSeries, hw.cpu_temperature || 0)
-  }
-
-  function push(series: number[], value: number): number[] {
-    const out = [...series, value]
-    return out.length > MAX_SAMPLES ? out.slice(out.length - MAX_SAMPLES) : out
-  }
-
-  function batterySeverity(): Severity {
-    if (!batteryPresent || battery == null) return 'ok'
-    if (charging) return 'ok'
-    if (battery <= 10) return 'crit'
-    if (battery <= 20) return 'warn'
-    return 'ok'
-  }
-
-  function buildReadings(): Reading[] {
+  // Built inline rather than via a helper: Svelte's reactive analysis only sees
+  // identifiers written in the statement, so `$: readings = buildReadings()`
+  // never re-ran when the hardware payload changed.
+  $: readings = (() => {
     const out: Reading[] = []
     if (cpuTemp > 0) out.push({ group: 'Thermal', name: 'CPU temperature', detail: 'max thermal zone', value: `${cpuTemp.toFixed(0)}°C`, severity: tempSeverity(cpuTemp) })
     if (gpuTemp > 0) out.push({ group: 'Thermal', name: 'GPU temperature', detail: 'drm/hwmon', value: `${gpuTemp.toFixed(0)}°C`, severity: tempSeverity(gpuTemp) })
@@ -74,6 +56,25 @@
       })
     }
     return out
+  })()
+  $: alerts = readings.filter((r) => r.severity !== 'ok')
+
+  $: if (hw?.collected_at && hw.collected_at !== lastStamp) {
+    lastStamp = hw.collected_at
+    tempSeries = push(tempSeries, hw.cpu_temperature || 0)
+  }
+
+  function push(series: number[], value: number): number[] {
+    const out = [...series, value]
+    return out.length > MAX_SAMPLES ? out.slice(out.length - MAX_SAMPLES) : out
+  }
+
+  function batterySeverity(): Severity {
+    if (!batteryPresent || battery == null) return 'ok'
+    if (charging) return 'ok'
+    if (battery <= 10) return 'crit'
+    if (battery <= 20) return 'warn'
+    return 'ok'
   }
 
   function sevLabel(sev: string): 'info' | 'warn' | 'crit' {
