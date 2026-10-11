@@ -2,11 +2,13 @@
   import { onMount, onDestroy } from 'svelte'
   import { apiFetch, apiURL } from '../../lib/api'
   import { type SecurityPosture } from '../../lib/security-posture'
-  import { formatBytes, formatDuration, formatRelative } from '../../lib/format'
+  import { formatDuration, formatRelative } from '../../lib/format'
   import type { Device } from '../../lib/types'
+  import { nav, type Section } from '../../lib/router'
   import EmptyState from '../ui/EmptyState.svelte'
+  import MiniSparkline from '../ui/MiniSparkline.svelte'
 
-  type LynisFinding = { id: string; category: string; description: string; severity?: string }
+  type LynisFinding = { id: string; category: string; description: string; detail?: string; severity?: string }
   type LynisCategory = { name: string; tests: number; passed: number; warnings: number; suggestions: number }
   type LynisReport = {
     hardening_index: number
@@ -36,6 +38,8 @@
     report_json: string
     created_at: string
   }
+  type FindingKind = 'warning' | 'suggestion'
+  type Finding = LynisFinding & { kind: FindingKind }
 
   export let device: Device
   export let authHeaders: Record<string, string> = {}
@@ -56,8 +60,10 @@
   // `posture.publicPorts.length` did not repaint on prop change in this Svelte
   // version, while a reactive statement over the same prop did; the template
   // tracks the locals correctly.
+  $: publicPorts = posture.publicPorts
   $: publicPortCount = posture.publicPorts.length
   $: pendingUpdateLabel = posture.pendingStatus === 'ready' ? String(posture.pendingUpdates) : '—'
+  $: failedServices = posture.failedServices
   $: failedUnitCount = posture.failedServices.length
 
   let audits: SecurityAudit[] = []
@@ -69,6 +75,12 @@
   let runMessage = ''
   let installCopied = false
   let destroyed = false
+
+  // Finding filters. A 40-finding report is unusable as one flat list, so the
+  // reader can narrow by kind, by category and by free text.
+  let kindFilter: 'all' | FindingKind = 'all'
+  let categoryFilter = ''
+  let query = ''
 
   onMount(() => {
     void loadAudits()
@@ -113,6 +125,9 @@
 
   function selectAudit(audit: SecurityAudit) {
     selected = audit
+    kindFilter = 'all'
+    categoryFilter = ''
+    query = ''
     try {
       report = JSON.parse(audit.report_json)
     } catch {
@@ -195,6 +210,67 @@
     return 'Poorly hardened'
   }
 
+  // The findings, flattened and tagged so one list can be filtered three ways.
+  $: findings = [
+    ...(report?.warnings ?? []).map((f) => ({ ...f, kind: 'warning' as FindingKind })),
+    ...(report?.suggestions ?? []).map((f) => ({ ...f, kind: 'suggestion' as FindingKind }))
+  ] as Finding[]
+
+  $: categories = Array.from(new Set(findings.map((f) => f.category).filter(Boolean))).sort()
+
+  $: visibleFindings = findings.filter((f) => {
+    if (kindFilter !== 'all' && f.kind !== kindFilter) return false
+    if (categoryFilter && f.category !== categoryFilter) return false
+    if (query) {
+      const hay = `${f.id} ${f.category} ${f.description}`.toLowerCase()
+      if (!hay.includes(query.toLowerCase())) return false
+    }
+    return true
+  })
+
+  // Hardening index across audits, oldest first, for the trend sparkline. A
+  // falling line is the thing a DevOps reader is looking for.
+  $: trend = [...audits].reverse().map((a) => a.hardening_index)
+  $: trendDelta = trend.length >= 2 ? trend[trend.length - 1] - trend[0] : 0
+
+  $: currentTone = report ? scoreTone(report.hardening_index) : 'ok'
+
+  // Recommended actions, highest-signal first. Each is a real next step in the
+  // product (jump to the terminal, the logs, the packages) rather than a
+  // fabricated shell command we cannot verify for this host.
+  type Action = { tone: 'crit' | 'warn' | 'info'; title: string; detail: string; label: string; section?: Section; href?: string }
+  $: actions = buildActions()
+  function buildActions(): Action[] {
+    const out: Action[] = []
+    if (failedUnitCount > 0) {
+      out.push({ tone: 'crit', title: `${failedUnitCount} failed systemd unit${failedUnitCount === 1 ? '' : 's'}`, detail: failedServices.slice(0, 3).join(', '), label: 'View logs', section: 'logs' })
+    }
+    if (publicPortCount > 0) {
+      out.push({ tone: 'warn', title: `${publicPortCount} service${publicPortCount === 1 ? '' : 's'} listening publicly`, detail: publicPorts.map((p) => `${p.port}/${p.protocol}`).slice(0, 6).join(' '), label: 'Open terminal', section: 'remote' })
+    }
+    if (posture.pendingStatus === 'ready' && posture.pendingUpdates > 0) {
+      out.push({ tone: 'warn', title: `${posture.pendingUpdates} pending package update${posture.pendingUpdates === 1 ? '' : 's'}`, detail: 'Unpatched packages are the most common finding.', label: 'View packages', section: 'packages' })
+    }
+    const topWarnings = (report?.warnings ?? []).slice(0, 3)
+    for (const w of topWarnings) {
+      out.push({ tone: 'info', title: w.description || w.id, detail: `${w.id}${w.category ? ` · ${w.category}` : ''}`, label: 'Lynis docs', href: docsUrl(w.id) })
+    }
+    return out
+  }
+
+  function docsUrl(id: string): string {
+    return `https://cisofy.com/lynis/controls/${encodeURIComponent(id)}/`
+  }
+
+  function goto(section: Section) {
+    nav.setSection(section)
+  }
+
+  function findingCount(kind: 'all' | FindingKind): number {
+    if (kind === 'all') return findings.length
+    return findings.filter((f) => f.kind === kind).length
+  }
+
   async function copyInstallCmd() {
     const cmd = lynisInstallCmd || 'sudo apt install lynis'
     try {
@@ -237,6 +313,39 @@
   {#if runMessage}<div class="banner info" aria-live="polite">{runMessage}</div>{/if}
   {#if error}<div class="banner crit">{error}</div>{/if}
 
+  <!-- The verdict: one line that answers "is this device secure?". -->
+  {#if report}
+    <div class="verdict {currentTone}">
+      <div class="verdict-score">
+        <span class="verdict-num">{report.hardening_index}</span><span class="verdict-den">/100</span>
+      </div>
+      <div class="verdict-text">
+        <strong>{scoreLabel(report.hardening_index)}</strong>
+        <span>
+          {report.tests_passed}/{report.total_tests} tests passed ·
+          {report.total_warnings} warning{report.total_warnings === 1 ? '' : 's'} ·
+          {report.total_suggestions} suggestion{report.total_suggestions === 1 ? '' : 's'}
+          {#if selected}· audited {formatRelative(selected.created_at)}{/if}
+        </span>
+      </div>
+      {#if trend.length >= 2}
+        <div class="verdict-trend">
+          <MiniSparkline series={trend} color={currentTone === 'crit' ? 'var(--crit)' : currentTone === 'warn' ? 'var(--warn)' : 'var(--accent)'} height={34} label="Hardening index trend" />
+          <span class="trend-label" class:up={trendDelta > 0} class:down={trendDelta < 0}>
+            {trendDelta > 0 ? '+' : ''}{trendDelta} over {trend.length} audits
+          </span>
+        </div>
+      {/if}
+    </div>
+  {:else if lynisAvailable}
+    <div class="verdict none">
+      <div class="verdict-text">
+        <strong>No audit yet</strong>
+        <span>Run an audit to get a hardening index and the findings behind it.</span>
+      </div>
+    </div>
+  {/if}
+
   <div class="posture">
     <article class="chip"><span class="label">OS</span><span class="chip-val">{device.hardware?.operating_system || '—'}</span></article>
     <article class="chip"><span class="label">Kernel</span><span class="chip-val mono">{device.hardware?.kernel_version || '—'}</span></article>
@@ -254,6 +363,51 @@
 
   {#if posture.error}
     <div class="banner crit">{posture.error}</div>
+  {/if}
+
+  <!-- Exposure detail: the counts above, spelled out with the ports and units. -->
+  {#key publicPortCount + '|' + failedUnitCount}
+    {#if publicPortCount > 0 || failedUnitCount > 0}
+      <div class="exposure">
+        {#if publicPortCount > 0}
+          <span class="exposure-title">Public listeners</span>
+          <div class="exposure-list">
+            {#each publicPorts as p (`${p.port}/${p.protocol}`)}
+              <span class="tag mono">{p.port}/{p.protocol}</span>
+            {/each}
+          </div>
+        {/if}
+        {#if failedUnitCount > 0}
+          <span class="exposure-title crit">Failed units</span>
+          <div class="exposure-list">
+            {#each failedServices as unit (unit)}
+              <span class="tag mono">{unit}</span>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {/if}
+  {/key}
+
+  {#if actions.length > 0}
+    <article class="card actions">
+      <header class="card-head"><h3>Recommended actions</h3><span class="count">{actions.length}</span></header>
+      <ul class="action-list">
+        {#each actions as action, i (i)}
+          <li class="action {action.tone}">
+            <div class="action-body">
+              <span class="action-title">{action.title}</span>
+              {#if action.detail}<span class="action-detail">{action.detail}</span>{/if}
+            </div>
+            {#if action.section}
+              <button class="action-btn" on:click={() => goto(action.section!)}>{action.label}</button>
+            {:else if action.href}
+              <a class="action-btn" href={action.href} target="_blank" rel="noopener noreferrer">{action.label}</a>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    </article>
   {/if}
 
   {#if loading}
@@ -293,31 +447,13 @@
               <strong class="tone-{scoreTone(report.hardening_index)}">{scoreLabel(report.hardening_index)}</strong>
               <span>{report.tests_passed}/{report.total_tests} tests passed</span>
               {#if report.lynis_version}<span class="dim">Lynis {report.lynis_version} · {report.os}</span>{/if}
-              {#if selected}<span class="dim">audited {formatRelative(selected.created_at)}</span>{/if}
+              {#if report.kernel}<span class="dim mono">{report.kernel}</span>{/if}
             </div>
             <div class="report-counts">
               <span class="warn">{report.total_warnings} warnings</span>
               <span class="info">{report.total_suggestions} suggestions</span>
             </div>
           </header>
-
-          {#if report.warnings?.length}
-            <section class="findings">
-              <h4 class="find-head warn">Warnings</h4>
-              {#each report.warnings as w}
-                <div class="finding"><span class="fid mono">{w.id}</span><span class="fcat">[{w.category}]</span><span class="fdesc">{w.description}</span></div>
-              {/each}
-            </section>
-          {/if}
-
-          {#if report.suggestions?.length}
-            <section class="findings">
-              <h4 class="find-head info">Suggestions</h4>
-              {#each report.suggestions as s}
-                <div class="finding"><span class="fid info mono">{s.id}</span><span class="fcat">[{s.category}]</span><span class="fdesc">{s.description}</span></div>
-              {/each}
-            </section>
-          {/if}
 
           {#if report.categories?.length}
             <section class="findings">
@@ -331,6 +467,44 @@
                   </div>
                 {/each}
               </div>
+            </section>
+          {/if}
+
+          {#if findings.length > 0}
+            <section class="findings">
+              <h4 class="find-head">Findings</h4>
+              <div class="filters">
+                <div class="kinds" role="group" aria-label="Finding type">
+                  <button class:active={kindFilter === 'all'} on:click={() => (kindFilter = 'all')}>All {findingCount('all')}</button>
+                  <button class:active={kindFilter === 'warning'} on:click={() => (kindFilter = 'warning')}>Warnings {findingCount('warning')}</button>
+                  <button class:active={kindFilter === 'suggestion'} on:click={() => (kindFilter = 'suggestion')}>Suggestions {findingCount('suggestion')}</button>
+                </div>
+                {#if categories.length > 1}
+                  <select bind:value={categoryFilter} aria-label="Filter by category">
+                    <option value="">All categories</option>
+                    {#each categories as cat (cat)}<option value={cat}>{cat}</option>{/each}
+                  </select>
+                {/if}
+                <input class="search" type="search" bind:value={query} placeholder="Filter findings…" aria-label="Filter findings" />
+              </div>
+
+              {#if visibleFindings.length === 0}
+                <p class="none-match">No findings match the current filter.</p>
+              {:else}
+                <div class="finding-list">
+                  {#each visibleFindings as f (`${f.kind}-${f.id}`)}
+                    <div class="finding {f.kind}">
+                      <span class="fid {f.kind} mono">{f.id}</span>
+                      <span class="fcat">{f.category}</span>
+                      <span class="fdesc">
+                        {f.description}
+                        {#if f.detail}<span class="fdetail">{f.detail}</span>{/if}
+                      </span>
+                      <a class="fdocs" href={docsUrl(f.id)} target="_blank" rel="noopener noreferrer" title={`Lynis control ${f.id}`}>docs ↗</a>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
             </section>
           {/if}
         {:else if audits.length > 0}
@@ -361,23 +535,56 @@
   .banner.info { background: rgba(96, 165, 250, 0.12); border: 1px solid rgba(96, 165, 250, 0.35); color: var(--series-1); }
   .banner.crit { background: var(--crit-dim); border: 1px solid rgba(248, 113, 113, 0.35); color: var(--crit); }
 
+  .verdict { display: flex; align-items: center; gap: 1rem; padding: 0.9rem 1rem; border: 1px solid var(--border); border-left-width: 3px; border-radius: var(--radius); background: var(--card); flex-wrap: wrap; }
+  .verdict.ok { border-left-color: var(--accent); }
+  .verdict.warn { border-left-color: var(--warn); }
+  .verdict.crit { border-left-color: var(--crit); }
+  .verdict.none { border-left-color: var(--border-strong); }
+  .verdict-score { display: flex; align-items: baseline; gap: 0.1rem; }
+  .verdict-num { font-size: 2rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .verdict.ok .verdict-num { color: var(--accent); }
+  .verdict.warn .verdict-num { color: var(--warn); }
+  .verdict.crit .verdict-num { color: var(--crit); }
+  .verdict-den { color: var(--text-faint); font-size: 0.8rem; }
+  .verdict-text { display: grid; gap: 0.15rem; }
+  .verdict-text strong { font-size: 1rem; color: var(--text-bright); }
+  .verdict-text span { color: var(--text-muted); font-size: 0.76rem; }
+  .verdict-trend { margin-left: auto; display: grid; gap: 0.15rem; min-width: 140px; }
+  .trend-label { font-size: 0.68rem; color: var(--text-faint); text-align: right; }
+  .trend-label.up { color: var(--accent); }
+  .trend-label.down { color: var(--crit); }
+
   .posture { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.5rem; }
   .chip { display: grid; gap: 0.15rem; padding: 0.6rem 0.7rem; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+  .chip .label { color: var(--text-faint); font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.04em; }
   .chip-val { color: var(--text-bright); font-size: 0.92rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .chip-val.warn { color: var(--warn); }
   .chip-val.crit { color: var(--crit); }
 
   .exposure { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; padding: 0.55rem 0.75rem; background: var(--warn-dim); border: 1px solid rgba(251, 191, 36, 0.3); border-radius: var(--radius-sm); }
   .exposure-title { color: var(--warn); font-size: 0.72rem; font-weight: 600; }
+  .exposure-title.crit { color: var(--crit); }
   .exposure-list { display: flex; flex-wrap: wrap; gap: 0.3rem; }
   .tag { padding: 0.1rem 0.4rem; background: var(--card-inset); border: 1px solid var(--border); border-radius: var(--radius-pill); color: var(--text); font-size: 0.68rem; }
-
-  .audits { display: grid; grid-template-columns: minmax(240px, 320px) 1fr; gap: 0.85rem; align-items: start; }
 
   .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
   .card-head { display: flex; align-items: center; justify-content: space-between; padding: 0.65rem 0.8rem; border-bottom: 1px solid var(--border); }
   .card-head h3 { margin: 0; font-size: 0.78rem; font-weight: 600; color: var(--text); }
   .count { color: var(--text-faint); font-size: 0.7rem; }
+
+  .action-list { list-style: none; margin: 0; padding: 0; }
+  .action { display: flex; align-items: center; gap: 0.6rem; padding: 0.55rem 0.8rem; border-bottom: 1px solid var(--border); border-left: 3px solid var(--border); }
+  .action:last-child { border-bottom: 0; }
+  .action.crit { border-left-color: var(--crit); }
+  .action.warn { border-left-color: var(--warn); }
+  .action.info { border-left-color: var(--series-1); }
+  .action-body { display: grid; gap: 0.1rem; min-width: 0; flex: 1; }
+  .action-title { color: var(--text); font-size: 0.78rem; }
+  .action-detail { color: var(--text-faint); font-size: 0.7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .action-btn { flex-shrink: 0; padding: 0.3rem 0.6rem; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--card-inset); color: var(--text); font-size: 0.72rem; text-decoration: none; cursor: pointer; }
+  .action-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  .audits { display: grid; grid-template-columns: minmax(240px, 320px) 1fr; gap: 0.85rem; align-items: start; }
 
   .audit-list { list-style: none; margin: 0; padding: 0; max-height: 64vh; overflow-y: auto; }
   .audit-item { display: flex; align-items: center; border-bottom: 1px solid var(--border); }
@@ -414,15 +621,29 @@
   .dim { color: var(--text-faint); }
 
   .findings { padding: 0.8rem 1rem; border-bottom: 1px solid var(--border); }
+  .findings:last-child { border-bottom: 0; }
   .find-head { margin: 0 0 0.5rem; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); }
-  .find-head.warn { color: var(--warn); }
-  .find-head.info { color: var(--series-1); }
-  .finding { display: flex; gap: 0.5rem; align-items: baseline; padding: 0.28rem 0; font-size: 0.76rem; border-bottom: 1px solid var(--border); }
+
+  .filters { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.6rem; align-items: center; }
+  .kinds { display: flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+  .kinds button { padding: 0.28rem 0.55rem; border: 0; background: transparent; color: var(--text-faint); font-size: 0.7rem; font-weight: 600; cursor: pointer; }
+  .kinds button:hover { background: var(--card-hover); color: var(--text); }
+  .kinds button.active { background: var(--accent-dim); color: var(--accent); }
+  .filters select, .filters .search { padding: 0.28rem 0.5rem; background: var(--card-inset); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.72rem; }
+  .filters .search { flex: 1; min-width: 140px; }
+
+  .finding-list { display: grid; }
+  .finding { display: flex; gap: 0.5rem; align-items: baseline; padding: 0.32rem 0; font-size: 0.76rem; border-bottom: 1px solid var(--border); }
   .finding:last-child { border-bottom: 0; }
-  .fid { color: var(--warn); font-weight: 600; white-space: nowrap; }
-  .fid.info { color: var(--series-1); }
+  .fid { font-weight: 600; white-space: nowrap; }
+  .fid.warning { color: var(--warn); }
+  .fid.suggestion { color: var(--series-1); }
   .fcat { color: var(--text-faint); font-size: 0.68rem; white-space: nowrap; }
-  .fdesc { color: var(--text); }
+  .fdesc { color: var(--text); flex: 1; }
+  .fdetail { display: block; color: var(--text-faint); font-size: 0.7rem; margin-top: 0.1rem; }
+  .fdocs { color: var(--text-faint); font-size: 0.68rem; text-decoration: none; white-space: nowrap; }
+  .fdocs:hover { color: var(--accent); }
+  .none-match { margin: 0; color: var(--text-faint); font-size: 0.76rem; padding: 0.3rem 0; }
 
   .cats { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.5rem; }
   .cat { display: grid; gap: 0.2rem; }
