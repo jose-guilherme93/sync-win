@@ -17,6 +17,9 @@
   import Network from './components/screens/Network.svelte'
   import Security from './components/screens/Security.svelte'
   import Docker from './components/screens/Docker.svelte'
+  import CpuThermal from './components/screens/CpuThermal.svelte'
+  import Memory from './components/screens/Memory.svelte'
+  import Sensors from './components/screens/Sensors.svelte'
   import Processes from './components/screens/Processes.svelte'
   import Packages from './components/screens/Packages.svelte'
   import Services from './components/screens/Services.svelte'
@@ -166,10 +169,9 @@
 
   $: isDeviceSection = Boolean(navState.deviceId) && navState.section !== 'home' && navState.section !== 'devices' && navState.section !== 'alerts' && navState.section !== 'findings' && navState.section !== 'reports'
 
-  // Hardware sections render the redesigned overview cards. The remaining
-  // device sections each have their own dedicated screen now; only the sections
-  // that still share the telemetry cards fall through to the overview.
-  const HARDWARE_SECTIONS = new Set(['overview', 'cpu', 'memory', 'sensors'])
+  // Only the overview still uses the shared telemetry cards. Every other
+  // device section now has a dedicated screen, so nothing else falls through.
+  const HARDWARE_SECTIONS = new Set(['overview'])
   $: isHardwareSection = HARDWARE_SECTIONS.has(navState.section)
   // The modal prefers the full detail payload (logs, processes, Docker state)
   // and falls back to the lightweight list entry while it loads.
@@ -1717,6 +1719,12 @@
               <RemoteAccess device={modalDevice} authHeaders={ownerHeaders} />
             {:else if navState.section === 'settings'}
               <DeviceSettings device={modalDevice} authHeaders={ownerHeaders} onRemove={removeDeviceConfirmed} on:saved={refreshDeviceSettings} />
+            {:else if navState.section === 'cpu'}
+              <CpuThermal device={modalDevice} />
+            {:else if navState.section === 'memory'}
+              <Memory device={modalDevice} />
+            {:else if navState.section === 'sensors'}
+              <Sensors device={modalDevice} />
             {:else if isHardwareSection}
               <DeviceOverview device={modalDevice} authHeaders={ownerHeaders} />
             {:else}
