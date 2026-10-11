@@ -137,4 +137,3 @@ func readSysInt(name, file string) int {
 	}
 	return value
 }
-
