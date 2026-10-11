@@ -3,14 +3,15 @@
   import StatusDot from '../ui/StatusDot.svelte'
   import { computedStatus, deviceLabel, type Device } from '../../lib/types'
   import { formatRelative } from '../../lib/format'
+  import { RANGES, DEFAULT_RANGE, type RangeId } from '../../lib/timerange'
 
   // The topbar answers "which device am I looking at, is it alive, and how
-  // fresh is this data" without the user having to scroll. The refresh selector
-  // controls the shared poll interval owned by App.svelte.
+  // fresh is this data" without the user having to scroll. The range selector
+  // owns the chart window and, with it, the shared poll interval.
   export let device: Device | null = null
   export let sectionTitle = ''
-  export let refreshMs = 10000
-  export let onRefreshChange: (ms: number) => void
+  export let rangeId: RangeId = DEFAULT_RANGE
+  export let onRangeChange: (id: RangeId) => void
   export let onManualRefresh: () => void
   export let onOpenSearch: () => void
   export let onOpenNotifications: () => void
@@ -18,12 +19,6 @@
   export let accountInitial = '?'
   export let unreadCount = 0
   export let onOpenMobileNav: (() => void) | null = null
-
-  const REFRESH_OPTIONS = [1000, 5000, 10000, 30000, 60000]
-
-  function refreshLabel(ms: number) {
-    return ms >= 60000 ? `${ms / 60000}m` : `${ms / 1000}s`
-  }
 </script>
 
 <header class="topbar">
@@ -59,14 +54,14 @@
       <kbd>Ctrl K</kbd>
     </button>
 
-    <div class="refresh" role="group" aria-label="Refresh interval">
-      {#each REFRESH_OPTIONS as ms (ms)}
+    <div class="refresh" role="group" aria-label="Time range">
+      {#each RANGES as range (range.id)}
         <button
-          class:active={refreshMs === ms}
-          on:click={() => onRefreshChange(ms)}
-          title={`Refresh every ${refreshLabel(ms)}`}
+          class:active={rangeId === range.id}
+          on:click={() => onRangeChange(range.id)}
+          title={`${range.label} window · refreshes every ${Math.round(range.refreshMs / 1000)}s`}
         >
-          {refreshLabel(ms)}
+          {range.label}
         </button>
       {/each}
     </div>

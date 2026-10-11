@@ -53,6 +53,7 @@ SYNCWIN_HELPER_SERVICE_TEMPLATE=""
 # screen may preset them through the install command.
 SYNCWIN_AUTO_UPDATE="${SYNCWIN_AUTO_UPDATE:-}"
 SYNCWIN_SSH_ON_INSTALL="${SYNCWIN_SSH_ON_INSTALL:-}"
+SYNCWIN_INSTALL_LYNIS="${SYNCWIN_INSTALL_LYNIS:-}"
 SYNCWIN_YES="${SYNCWIN_YES:-0}"
 
 # Temp directory for downloads (cleaned up on exit)
@@ -194,6 +195,41 @@ auto_install_dep() {
     esac
 }
 
+# install_lynis installs the Lynis security scanner when the operator opted in.
+# It is deliberately non-fatal: an unavailable scanner degrades the Security
+# screen, whereas aborting the install would leave the device with no agent at
+# all. A failure here is reported and skipped, never escalated.
+install_lynis() {
+    if check_command lynis; then
+        success "Lynis is installed (security audits available)"
+        return 0
+    fi
+    if [ "${SYNCWIN_INSTALL_LYNIS:-1}" != "1" ]; then
+        info "Lynis skipped (security audits unavailable)"
+        return 0
+    fi
+    info "Installing Lynis for security audits..."
+    case "${SYNCWIN_DISTRO_ID:-}" in
+        arch|manjaro|endeavouros) pacman -S --noconfirm lynis ;;
+        ubuntu|debian|linuxmint|pop) apt-get update -qq && apt-get install -y -qq lynis ;;
+        fedora) dnf install -y -q lynis ;;
+        rhel|rocky|almalinux|centos) yum install -y -q lynis ;;
+        opensuse*|sles) zypper install -y lynis ;;
+        *)
+            warn "Cannot auto-install Lynis on this distribution."
+            suggest_install lynis
+            return 0
+            ;;
+    esac
+    if check_command lynis; then
+        success "Lynis installed (security audits available)"
+    else
+        warn "Lynis could not be installed; the Security screen will stay unavailable."
+        suggest_install lynis
+    fi
+    return 0
+}
+
 # =============================================================================
 # Step functions
 # =============================================================================
@@ -259,17 +295,10 @@ check_dependencies() {
     fi
     success "All dependencies satisfied"
 
-    # Check for Lynis (optional, for security audits)
-    if check_command lynis; then
-        success "Lynis is installed (security audits available)"
-    else
-        warn "Lynis is NOT installed (security audits unavailable)"
-        if [ "${SYNCWIN_DISTRO_ID:-}" = "arch" ] || [ "${SYNCWIN_DISTRO_ID:-}" = "manjaro" ] || [ "${SYNCWIN_DISTRO_ID:-}" = "endeavouros" ]; then
-            printf "    Install with: ${BOLD}sudo pacman -S lynis${NC}\n"
-        else
-            printf "    Install with: ${BOLD}sudo apt install lynis${NC}\n"
-        fi
-    fi
+    # Lynis is optional, so this never aborts the install. It is what makes the
+    # Security screen's audits available, so when the operator opted in we try to
+    # install it here rather than only printing a hint.
+    install_lynis
 }
 
 validate_environment() {
@@ -705,6 +734,16 @@ prompt_capabilities() {
             case "${answer}" in [Yy]*) SYNCWIN_SSH_ON_INSTALL=1 ;; esac
         fi
     fi
+    # Lynis defaults to yes: without it the Security screen has no audit data.
+    # It is a read-only scanner, so the operator can still decline it.
+    if [ -z "${SYNCWIN_INSTALL_LYNIS}" ]; then
+        SYNCWIN_INSTALL_LYNIS=1
+        if [ "${SYNCWIN_YES}" != "1" ] && [ -t 0 ]; then
+            local answer
+            read -r -p "Install Lynis for security audits? [Y/n] " answer || true
+            case "${answer}" in [Nn]*) SYNCWIN_INSTALL_LYNIS=0 ;; esac
+        fi
+    fi
     if [ "${SYNCWIN_AUTO_UPDATE}" = "1" ]; then
         info "Automatic updates: enabled"
     else
@@ -714,6 +753,11 @@ prompt_capabilities() {
         info "Remote access (SSH): enabled"
     else
         info "Remote access (SSH): disabled (enable later with: sudo sync-win-agent set ssh on)"
+    fi
+    if [ "${SYNCWIN_INSTALL_LYNIS}" = "1" ]; then
+        info "Lynis security audits: install on request"
+    else
+        info "Lynis security audits: skipped"
     fi
 }
 

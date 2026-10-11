@@ -63,6 +63,11 @@ export type DiskPartition = {
 
 export type NetworkIface = {
   name: string
+  mac?: string
+  mtu?: number
+  oper_state?: string
+  speed_mbps?: number
+  addresses?: string[]
   rx_bytes: number
   tx_bytes: number
   rx_rate?: number
@@ -71,6 +76,8 @@ export type NetworkIface = {
   tx_packets: number
   rx_errors: number
   tx_errors: number
+  rx_dropped?: number
+  tx_dropped?: number
 }
 
 export type ProcessInfo = {

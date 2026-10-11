@@ -19,6 +19,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -458,15 +459,22 @@ func toDeviceLogs(logs []collectors.DeviceLog) []deviceLog {
 }
 
 type networkIface struct {
-	Name      string  `json:"name"`
-	RXBytes   uint64  `json:"rx_bytes"`
-	TXBytes   uint64  `json:"tx_bytes"`
-	RXRate    float64 `json:"rx_rate"`
-	TXRate    float64 `json:"tx_rate"`
-	RXPackets uint64  `json:"rx_packets"`
-	TXPackets uint64  `json:"tx_packets"`
-	RXErrors  uint64  `json:"rx_errors"`
-	TXErrors  uint64  `json:"tx_errors"`
+	Name      string   `json:"name"`
+	MAC       string   `json:"mac,omitempty"`
+	MTU       int      `json:"mtu,omitempty"`
+	OperState string   `json:"oper_state,omitempty"`
+	SpeedMbps int      `json:"speed_mbps,omitempty"`
+	Addresses []string `json:"addresses,omitempty"`
+	RXBytes   uint64   `json:"rx_bytes"`
+	TXBytes   uint64   `json:"tx_bytes"`
+	RXRate    float64  `json:"rx_rate"`
+	TXRate    float64  `json:"tx_rate"`
+	RXPackets uint64   `json:"rx_packets"`
+	TXPackets uint64   `json:"tx_packets"`
+	RXErrors  uint64   `json:"rx_errors"`
+	TXErrors  uint64   `json:"tx_errors"`
+	RXDropped uint64   `json:"rx_dropped"`
+	TXDropped uint64   `json:"tx_dropped"`
 }
 
 type dockerContainer struct {
@@ -1049,6 +1057,7 @@ type lynisFinding struct {
 	ID          string `json:"id"`
 	Category    string `json:"category"`
 	Description string `json:"description"`
+	Detail      string `json:"detail,omitempty"`
 	Severity    string `json:"severity,omitempty"`
 }
 
@@ -1152,129 +1161,188 @@ func isArchLinux() bool {
 	return false
 }
 
-// parseLynisReport parses the key=value format of lynis-report.dat.
+// parseLynisReport parses the key=value report Lynis writes with --report-file.
+//
+// Findings are not `suggestion[ID][]=text`. Lynis emits `suggestion[]=ID|text|detail|`
+// with the control ID as the first pipe-separated field, and the tests are one
+// pipe-separated list under `tests_executed`/`tests_skipped`. The previous
+// parser looked for bracket-embedded IDs and `tests_total[]` lines the report
+// never contains, so every finding lost its ID and category and every count
+// came out zero — a screen that looked complete over data that was gutted.
 func parseLynisReport(raw string) lynisReport {
 	report := lynisReport{}
 	warnings := map[string]*lynisFinding{}
 	suggestions := map[string]*lynisFinding{}
-	categories := map[string]*lynisCategory{}
+	executed := map[string]bool{}
+	skipped := 0
 
 	for _, line := range strings.Split(raw, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
+		key, val, ok := strings.Cut(line, "=")
+		if !ok {
 			continue
 		}
-		key := parts[0]
-		val := parts[1]
+		key = strings.TrimSpace(key)
 
-		switch {
-		case key == "hardening_index":
+		switch key {
+		case "hardening_index":
 			report.HardeningIndex, _ = strconv.Atoi(val)
 
-		case strings.HasPrefix(key, "warning["):
-			// Format: warning[ID][]=description
-			idEnd := strings.Index(key, "]")
-			idStart := strings.Index(key, "[")
-			if idStart >= 0 && idEnd > idStart {
-				id := key[idStart+1 : idEnd]
-				cat := ""
-				if bracketEnd := strings.Index(key[idEnd+1:], "["); bracketEnd >= 0 {
-					catStart := idEnd + 1 + bracketEnd + 1
-					catEnd := strings.Index(key[catStart:], "]")
-					if catEnd >= 0 {
-						cat = key[catStart : catStart+catEnd]
-					}
-				}
-				if _, exists := warnings[id]; !exists {
-					warnings[id] = &lynisFinding{ID: id, Category: cat, Description: val, Severity: "warning"}
+		case "suggestion[]":
+			if f := parseLynisFinding(val, "suggestion"); f != nil {
+				if _, exists := suggestions[f.ID]; !exists {
+					suggestions[f.ID] = f
 				}
 			}
 
-		case strings.HasPrefix(key, "suggestion["):
-			// Format: suggestion[ID][]=description
-			idEnd := strings.Index(key, "]")
-			idStart := strings.Index(key, "[")
-			if idStart >= 0 && idEnd > idStart {
-				id := key[idStart+1 : idEnd]
-				cat := ""
-				if bracketEnd := strings.Index(key[idEnd+1:], "["); bracketEnd >= 0 {
-					catStart := idEnd + 1 + bracketEnd + 1
-					catEnd := strings.Index(key[catStart:], "]")
-					if catEnd >= 0 {
-						cat = key[catStart : catStart+catEnd]
-					}
-				}
-				if _, exists := suggestions[id]; !exists {
-					suggestions[id] = &lynisFinding{ID: id, Category: cat, Description: val}
+		case "warning[]":
+			if f := parseLynisFinding(val, "warning"); f != nil {
+				if _, exists := warnings[f.ID]; !exists {
+					warnings[f.ID] = f
 				}
 			}
 
-		case strings.HasPrefix(key, "tests_group[]"):
-			// Format: tests_group[]=category_name
-			if _, exists := categories[val]; !exists {
-				categories[val] = &lynisCategory{Name: val}
+		case "tests_executed":
+			for _, id := range splitLynisList(val) {
+				executed[id] = true
 			}
 
-		case strings.HasPrefix(key, "tests_warnings[]"):
-			// Format: tests_warnings[]=category_name
-			if cat, ok := categories[val]; ok {
-				cat.Warnings++
-			} else {
-				categories[val] = &lynisCategory{Name: val, Warnings: 1}
-			}
-
-		case strings.HasPrefix(key, "tests_suggestions[]"):
-			// Format: tests_suggestions[]=category_name
-			if cat, ok := categories[val]; ok {
-				cat.Suggestions++
-			} else {
-				categories[val] = &lynisCategory{Name: val, Suggestions: 1}
-			}
-
-		case strings.HasPrefix(key, "tests_passed[]"):
-			// Format: tests_passed[]=category_name
-			if cat, ok := categories[val]; ok {
-				cat.Passed++
-			} else {
-				categories[val] = &lynisCategory{Name: val, Passed: 1}
-			}
-
-		case strings.HasPrefix(key, "tests_total[]"):
-			// Format: tests_total[]=category_name
-			if cat, ok := categories[val]; ok {
-				cat.Tests++
-			} else {
-				categories[val] = &lynisCategory{Name: val, Tests: 1}
-			}
+		case "tests_skipped":
+			skipped = len(splitLynisList(val))
 		}
 	}
 
-	// Convert maps to slices
 	for _, w := range warnings {
 		report.Warnings = append(report.Warnings, *w)
 	}
 	for _, s := range suggestions {
 		report.Suggestions = append(report.Suggestions, *s)
 	}
-	for _, c := range categories {
-		report.Categories = append(report.Categories, *c)
-	}
+	sortLynisFindings(report.Warnings)
+	sortLynisFindings(report.Suggestions)
 
 	report.TotalWarnings = len(report.Warnings)
 	report.TotalSuggestions = len(report.Suggestions)
+	report.TotalTests = len(executed) + skipped
 
-	// Count totals from categories
-	for _, c := range report.Categories {
-		report.TotalTests += c.Tests
-		report.TestsPassed += c.Passed
+	// A control that raised a warning or a suggestion did not pass. Counting the
+	// distinct executed controls that appear in either list is honest where
+	// "executed minus findings" would double count a control that raised both.
+	failed := map[string]bool{}
+	for id := range warnings {
+		if executed[id] {
+			failed[id] = true
+		}
+	}
+	for id := range suggestions {
+		if executed[id] {
+			failed[id] = true
+		}
+	}
+	report.TestsPassed = len(executed) - len(failed)
+	if report.TestsPassed < 0 {
+		report.TestsPassed = 0
 	}
 
+	report.Categories = buildLynisCategories(executed, warnings, suggestions)
 	return report
+}
+
+// parseLynisFinding splits one `suggestion[]=ID|text|detail|` value. The ID's
+// prefix is the test group (BOOT, SSH, …); the report carries no separate
+// category, so it is derived from the ID, which is how Lynis names its controls.
+func parseLynisFinding(val, severity string) *lynisFinding {
+	parts := strings.Split(val, "|")
+	if len(parts) == 0 {
+		return nil
+	}
+	id := strings.TrimSpace(parts[0])
+	if id == "" {
+		return nil
+	}
+	f := &lynisFinding{ID: id, Category: testGroup(id), Severity: severity}
+	if len(parts) > 1 {
+		f.Description = strings.TrimSpace(parts[1])
+	}
+	var detail []string
+	for _, p := range parts[2:] {
+		if p = strings.TrimSpace(p); p != "" && p != "-" {
+			detail = append(detail, p)
+		}
+	}
+	f.Detail = strings.Join(detail, " · ")
+	return f
+}
+
+// splitLynisList splits a pipe-separated list, dropping the empty fields the
+// report's trailing separator produces.
+func splitLynisList(val string) []string {
+	var out []string
+	for _, id := range strings.Split(val, "|") {
+		if id = strings.TrimSpace(id); id != "" {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// testGroup returns the prefix of a Lynis control ID: "BOOT-5264" -> "BOOT".
+func testGroup(id string) string {
+	if i := strings.Index(id, "-"); i > 0 {
+		return id[:i]
+	}
+	return id
+}
+
+func sortLynisFindings(f []lynisFinding) {
+	sort.Slice(f, func(i, j int) bool { return f[i].ID < f[j].ID })
+}
+
+// buildLynisCategories groups the executed controls by their ID prefix and
+// attributes each finding to its group. Passed is the remainder, clamped at
+// zero because a group can raise more findings than it has controls when one
+// control raises both a warning and a suggestion.
+func buildLynisCategories(executed map[string]bool, warnings, suggestions map[string]*lynisFinding) []lynisCategory {
+	cats := map[string]*lynisCategory{}
+	get := func(name string) *lynisCategory {
+		if name == "" {
+			return nil
+		}
+		c, ok := cats[name]
+		if !ok {
+			c = &lynisCategory{Name: name}
+			cats[name] = c
+		}
+		return c
+	}
+	for id := range executed {
+		if c := get(testGroup(id)); c != nil {
+			c.Tests++
+		}
+	}
+	for id := range warnings {
+		if c := get(testGroup(id)); c != nil {
+			c.Warnings++
+		}
+	}
+	for id := range suggestions {
+		if c := get(testGroup(id)); c != nil {
+			c.Suggestions++
+		}
+	}
+	out := make([]lynisCategory, 0, len(cats))
+	for _, c := range cats {
+		c.Passed = c.Tests - c.Warnings - c.Suggestions
+		if c.Passed < 0 {
+			c.Passed = 0
+		}
+		out = append(out, *c)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // hardwareSample is the counter snapshot carried from one telemetry cycle to the
@@ -1628,6 +1696,11 @@ func collectHardwareStats(prev *hardwareSample, now time.Time) (telemetryStats, 
 		stats.NetTxRate += txRate
 		netIfaces = append(netIfaces, networkIface{
 			Name:      iface.Name,
+			MAC:       iface.MAC,
+			MTU:       iface.MTU,
+			OperState: iface.OperState,
+			SpeedMbps: iface.SpeedMbps,
+			Addresses: iface.Addresses,
 			RXBytes:   iface.RXBytes,
 			TXBytes:   iface.TXBytes,
 			RXRate:    rxRate,
@@ -1636,6 +1709,8 @@ func collectHardwareStats(prev *hardwareSample, now time.Time) (telemetryStats, 
 			TXPackets: iface.TXPackets,
 			RXErrors:  iface.RXErrors,
 			TXErrors:  iface.TXErrors,
+			RXDropped: iface.RXDropped,
+			TXDropped: iface.TXDropped,
 		})
 	}
 	stats.NetworkIFaces = netIfaces

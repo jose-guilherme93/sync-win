@@ -4,6 +4,7 @@
   import { apiFetch, apiURL } from '../../lib/api'
   import { memoryPercent, swapPercent, type Device } from '../../lib/types'
   import { formatBytes, formatDuration, formatRate, severityFor } from '../../lib/format'
+  import { selectedRange, rangeById, DEFAULT_RANGE, type RangeId } from '../../lib/timerange'
   import GaugeCard from '../ui/GaugeCard.svelte'
   import StatCard from '../ui/StatCard.svelte'
   import EmptyState from '../ui/EmptyState.svelte'
@@ -40,14 +41,11 @@
       .join(' ')
   }
 
-  const PERIODS = [
-    { id: '5m', label: '5 min', ms: 5 * 60_000, live: true },
-    { id: '1h', label: '1 hour', ms: 60 * 60_000, live: false },
-    { id: '6h', label: '6 hours', ms: 6 * 60 * 60_000, live: false },
-    { id: '24h', label: '24 hours', ms: 24 * 60 * 60_000, live: false },
-    { id: 'day', label: 'Day', ms: 24 * 60 * 60_000, live: false }
-  ]
-  let period = '1h'
+  // The window is owned by the topbar selector and shared across every screen,
+  // so there is exactly one place that decides what "the last hour" means.
+  let range: RangeId = DEFAULT_RANGE
+  const unsubRange = selectedRange.subscribe((value) => (range = value))
+  onDestroy(unsubRange)
   let historyRequest = 0
 
   // history-v2 returns either downsampled aggregates (cpu_avg, mem_avg, …) or
@@ -82,12 +80,11 @@
   }
 
   async function loadHistory() {
-    const option = PERIODS.find((p) => p.id === period)
-    if (!option) return
+    const option = rangeById(range)
 
     // The live window needs no request: it is already in memory and updates on
     // every poll.
-    if (option.live) {
+    if (option.id === 'live') {
       serverHistory = []
       return
     }
@@ -98,7 +95,6 @@
     try {
       const to = new Date()
       const from = new Date(to.getTime() - option.ms)
-      if (period === 'day') from.setHours(0, 0, 0, 0)
       const query = new URLSearchParams({
         from: from.toISOString(),
         to: to.toISOString(),
@@ -125,11 +121,12 @@
     }
   }
 
-  // Refetch whenever the device or the selected range changes. The 5-minute
-  // option leaves this as a no-op.
-  $: if (device.id && period) void loadHistory()
+  // Refetch whenever the device or the shared range changes. The live window
+  // leaves this as a no-op.
+  $: if (device.id && range) void loadHistory()
 
-  $: windowed = PERIODS.find((p) => p.id === period)?.live ? liveHistory : serverHistory
+  $: isLive = rangeById(range).id === 'live'
+  $: windowed = isLive ? liveHistory : serverHistory
 
   // windowed must be passed in explicitly: Svelte's reactive analysis does not
   // see a dependency that is only read inside a called function, so
@@ -356,13 +353,9 @@
       <header class="card-head">
         <h2>History</h2>
         <div class="head-right">
+          <span class="hint">{rangeById(range).label} window</span>
           {#if loadingHistory}<span class="hint" role="status">loading…</span>{/if}
           {#if historyError}<span class="hint error" role="alert">{historyError}</span>{/if}
-          <div class="periods" role="group" aria-label="History range">
-            {#each PERIODS as option (option.id)}
-              <button class:active={period === option.id} on:click={() => (period = option.id)}>{option.label}</button>
-            {/each}
-          </div>
         </div>
       </header>
 
@@ -373,8 +366,8 @@
           icon="📈"
           title={historyError ? 'History unavailable' : 'Collecting data…'}
           message={historyError
-            ? 'The server did not return history for this range. The live 5-minute view may still have data.'
-            : PERIODS.find((p) => p.id === period)?.live
+            ? 'The server did not return history for this range. The live window may still have data.'
+            : isLive
               ? 'The history chart appears once at least two live samples have been collected.'
               : 'No server-side samples exist for this range yet. Telemetry is downsampled in the background, so longer ranges fill in over time.'}
         />
@@ -547,22 +540,6 @@
   .iface-rates { display: flex; gap: 0.6rem; font-size: 0.76rem; font-variant-numeric: tabular-nums; }
   .iface-rates .down { color: var(--accent); }
   .iface-rates .up { color: var(--series-5); }
-
-  .periods { display: flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
-
-  .periods button {
-    padding: 0.28rem 0.5rem;
-    border: 0;
-    background: transparent;
-    color: var(--text-faint);
-    font-size: 0.68rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background var(--t-fast), color var(--t-fast);
-  }
-
-  .periods button:hover { background: var(--card-hover); color: var(--text); }
-  .periods button.active { background: var(--accent-dim); color: var(--accent); }
 
   .head-right { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; justify-content: flex-end; }
   .hint { color: var(--text-faint); font-size: 0.7rem; }

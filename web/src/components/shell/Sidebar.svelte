@@ -102,8 +102,13 @@
     transition: width var(--t);
   }
 
+  /* Collapsed: a narrow icon rail. Nothing may overflow horizontally, so the
+     labels are dropped, the icons centre themselves, and the brand collapses to
+     a single toggle. Without this the group captions kept their width and the
+     rail showed clipped text plus a stray horizontal scrollbar. */
   .sidebar.collapsed {
     width: var(--sidebar-w-collapsed);
+    gap: 0.4rem;
   }
 
   .brand {
@@ -112,6 +117,22 @@
     gap: 0.5rem;
     padding: 0 0.75rem;
     min-height: 28px;
+  }
+
+  .sidebar.collapsed .brand {
+    justify-content: center;
+    padding: 0;
+  }
+
+  /* In the rail the mark would collide with the toggle, so the toggle becomes
+     the single, centred control (the arrow now points out). */
+  .sidebar.collapsed .mark,
+  .sidebar.collapsed .word {
+    display: none;
+  }
+
+  .sidebar.collapsed .collapse {
+    margin: 0;
   }
 
   .mark {
@@ -155,9 +176,14 @@
 
   .groups {
     overflow-y: auto;
+    overflow-x: hidden;
     min-height: 0;
     padding: 0 0.5rem;
     scrollbar-width: thin;
+  }
+
+  .sidebar.collapsed .groups {
+    padding: 0 0.35rem;
   }
 
   .groups ul {
@@ -168,6 +194,17 @@
     gap: 1px;
   }
 
+  .sidebar.collapsed .groups ul {
+    margin: 0 0 0.35rem;
+  }
+
+  /* A hairline replaces the section caption when the labels are hidden, so the
+     groups stay visually distinct. */
+  .sidebar.collapsed .groups ul ~ ul {
+    border-top: 1px solid var(--border);
+    padding-top: 0.35rem;
+  }
+
   .group-label {
     margin: 0.35rem 0 0.25rem;
     padding: 0 0.5rem;
@@ -176,6 +213,10 @@
     font-weight: 700;
     letter-spacing: 0.09em;
     text-transform: uppercase;
+  }
+
+  .sidebar.collapsed .group-label {
+    display: none;
   }
 
   .group-label.disabled {
@@ -215,6 +256,13 @@
   .nav-item:disabled {
     opacity: 0.35;
     cursor: default;
+  }
+
+  /* The rail centres each icon so the hit target reads as a square button. */
+  .sidebar.collapsed .nav-item {
+    justify-content: center;
+    gap: 0;
+    padding: 0.5rem 0;
   }
 
   .devices-section {

@@ -82,7 +82,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: 'System',
     deviceScoped: true,
     items: [
-      { section: 'containers', label: 'Containers', icon: 'box', deviceScoped: true },
+      { section: 'containers', label: 'Docker', icon: 'box', deviceScoped: true },
       { section: 'processes', label: 'Processes', icon: 'list', deviceScoped: true },
       { section: 'services', label: 'Services', icon: 'cog', deviceScoped: true },
       { section: 'packages', label: 'Packages', icon: 'package', deviceScoped: true },
