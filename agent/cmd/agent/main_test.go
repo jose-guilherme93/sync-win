@@ -33,6 +33,10 @@ func TestLocalPolicyControlsCommands(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", "")
+	// Isolate the canonical policy path: a machine with the agent installed has
+	// /etc/sync-win/policy.json, which resolvePolicyPath prefers and which would
+	// otherwise shadow the file this test writes under HOME.
+	t.Setenv("SYNCWIN_POLICY_PATH", filepath.Join(home, "no-canonical-policy.json"))
 
 	policy := loadLocalPolicy()
 	if policy.AllowInstallApp || policy.AllowExcludeFile || policy.AllowDockerExec || policy.AllowDockerPrune || policy.AllowRestartAgent || policy.AllowPackageUpdates || policy.AllowRebootDevice {
@@ -297,6 +301,9 @@ func TestRemoteActionsFailClosedAndRebootUsesFixedArgs(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("INVOCATION_ID", "")
+	// Keep the canonical path out of the way so the file written under HOME is
+	// the one resolvePolicyPath picks on a machine with the agent installed.
+	t.Setenv("SYNCWIN_POLICY_PATH", filepath.Join(home, "no-canonical-policy.json"))
 	for _, action := range []string{"restart_agent", "update_packages", "reboot_device"} {
 		result := executeCommand(agentCommand{Type: action}, "", "", "")
 		if result.Status != "failed" || result.Message != "command disabled by local policy" {
@@ -341,6 +348,9 @@ func TestRestartAgentReportsBeforeExitingForSystemd(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("INVOCATION_ID", "test-invocation")
+	// Keep the canonical path out of the way so the file written under HOME is
+	// the one resolvePolicyPath picks on a machine with the agent installed.
+	t.Setenv("SYNCWIN_POLICY_PATH", filepath.Join(home, "no-canonical-policy.json"))
 	configDir := filepath.Join(home, ".config", "sync-win")
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -891,5 +901,82 @@ func TestParseDiskIODedupsPartitions(t *testing.T) {
 	}
 	if want := uint64((2000 + 8000) * 512); write != want {
 		t.Fatalf("write = %d, want %d", write, want)
+	}
+}
+
+// TestParseLynisReportRealFormat pins the parser to the report Lynis actually
+// writes. The previous parser expected `suggestion[ID][]=text` and
+// `tests_total[]=` lines; the real report is `suggestion[]=ID|text|detail|`
+// plus a single pipe-separated `tests_executed` list, so every finding lost its
+// ID and category and every count came out zero.
+func TestParseLynisReportRealFormat(t *testing.T) {
+	raw := strings.Join([]string{
+		"hardening_index=57",
+		"warning[]=PKGS-7392|Found one or more vulnerable packages.|-|-|",
+		"warning[]=LOGG-2138|klogd is not running, which could lead to missing kernel messages|-|-|",
+		"suggestion[]=LYNIS|This release is more than 4 months old.|-|-|",
+		"suggestion[]=DEB-0280|Install libpam-tmpdir to set $TMP for PAM sessions|-|-|",
+		"suggestion[]=KRNL-5788|Determine why /vmlinuz is missing.|/vmlinuz or /boot/vmlinuz|-|",
+		"tests_executed=PKGS-7392|LOGG-2138|KRNL-5788|BOOT-5180|SSH-7402|",
+		"tests_skipped=SSH-7408|SSH-7406|",
+	}, "\n")
+
+	r := parseLynisReport(raw)
+
+	if r.HardeningIndex != 57 {
+		t.Fatalf("hardening index = %d, want 57", r.HardeningIndex)
+	}
+	if r.TotalWarnings != 2 {
+		t.Fatalf("warnings = %d, want 2", r.TotalWarnings)
+	}
+	if r.TotalSuggestions != 3 {
+		t.Fatalf("suggestions = %d, want 3", r.TotalSuggestions)
+	}
+	if r.TotalTests != 7 {
+		t.Fatalf("total tests = %d, want 7 (5 executed + 2 skipped)", r.TotalTests)
+	}
+	// 5 executed, of which 3 raised a finding (PKGS-7392, LOGG-2138, KRNL-5788).
+	if r.TestsPassed != 2 {
+		t.Fatalf("tests passed = %d, want 2", r.TestsPassed)
+	}
+
+	var krnl *lynisFinding
+	for i := range r.Suggestions {
+		if r.Suggestions[i].ID == "KRNL-5788" {
+			krnl = &r.Suggestions[i]
+		}
+	}
+	if krnl == nil {
+		t.Fatal("KRNL-5788 suggestion missing: the ID must come from the value, not the key")
+	}
+	if krnl.Category != "KRNL" {
+		t.Fatalf("category = %q, want KRNL (the ID prefix)", krnl.Category)
+	}
+	if krnl.Description != "Determine why /vmlinuz is missing." {
+		t.Fatalf("description = %q", krnl.Description)
+	}
+	if krnl.Detail != "/vmlinuz or /boot/vmlinuz" {
+		t.Fatalf("detail = %q", krnl.Detail)
+	}
+
+	byName := map[string]lynisCategory{}
+	for _, c := range r.Categories {
+		byName[c.Name] = c
+	}
+	if c := byName["KRNL"]; c.Tests != 1 || c.Suggestions != 1 || c.Passed != 0 {
+		t.Fatalf("KRNL category = %+v, want 1 test / 1 suggestion / 0 passed", c)
+	}
+	if c := byName["BOOT"]; c.Tests != 1 || c.Passed != 1 {
+		t.Fatalf("BOOT category = %+v, want 1 test / 1 passed", c)
+	}
+	if c := byName["PKGS"]; c.Warnings != 1 {
+		t.Fatalf("PKGS category = %+v, want 1 warning", c)
+	}
+}
+
+func TestParseLynisReportIgnoresGarbage(t *testing.T) {
+	r := parseLynisReport("not a report\n\n=no key\nsuggestion[]=|-|\n")
+	if r.HardeningIndex != 0 || r.TotalWarnings != 0 || r.TotalSuggestions != 0 || r.TotalTests != 0 {
+		t.Fatalf("garbage produced counts: %+v", r)
 	}
 }
