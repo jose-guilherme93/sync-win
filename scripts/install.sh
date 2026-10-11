@@ -53,6 +53,7 @@ SYNCWIN_HELPER_SERVICE_TEMPLATE=""
 # screen may preset them through the install command.
 SYNCWIN_AUTO_UPDATE="${SYNCWIN_AUTO_UPDATE:-}"
 SYNCWIN_SSH_ON_INSTALL="${SYNCWIN_SSH_ON_INSTALL:-}"
+SYNCWIN_INSTALL_LYNIS="${SYNCWIN_INSTALL_LYNIS:-}"
 SYNCWIN_YES="${SYNCWIN_YES:-0}"
 
 # Temp directory for downloads (cleaned up on exit)
