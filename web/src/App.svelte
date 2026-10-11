@@ -27,6 +27,7 @@
   import RemoteAccess from './components/screens/RemoteAccess.svelte'
   import DeviceSettings from './components/screens/DeviceSettings.svelte'
   import { nav, type Section } from './lib/router'
+  import { selectedRange, rangeById, DEFAULT_RANGE, type RangeId } from './lib/timerange'
   import type { AppInfo, Device, HardwareStats } from './lib/types'
   import type { SecurityPosture } from './lib/security-posture'
   import { generateInsights } from './lib/insights'
@@ -62,7 +63,10 @@
   let enableAutoUpdate = true
   // Poll interval is user-selectable in the topbar, so it is mutable rather
   // than a constant. The backoff ceiling still applies when the server errors.
-  let POLL_MS = 10000
+  // The poll cadence follows the selected time range: a live minute refreshes
+  // every few seconds, a 30-day window every few minutes.
+  let currentRange: RangeId = DEFAULT_RANGE
+  let POLL_MS = rangeById(DEFAULT_RANGE).refreshMs
   const MAX_POLL_MS = 60000
   const PANEL_REFRESH_MS = 60000
   // The device list is polled every 10s but written to localStorage far less
@@ -468,7 +472,11 @@
     if (deviceModalOpen && selectedDeviceId) {
       void loadDeviceDetail(selectedDeviceId)
     }
-    schedulePoll(Math.min(POLL_MS * 2 ** Math.min(consecutiveFailures, 4), MAX_POLL_MS))
+    // Back off on failure, but never below the range's own cadence: a 30-day
+    // window polls every 5 minutes, so capping at the 60s ceiling would make a
+    // failing server get polled *more* often than a healthy one.
+    const backoffCap = Math.max(POLL_MS, MAX_POLL_MS)
+    schedulePoll(Math.min(POLL_MS * 2 ** Math.min(consecutiveFailures, 4), backoffCap))
   }
 
   function schedulePoll(delay: number) {
@@ -797,13 +805,16 @@
     selectedDeviceId = ''
   }
 
-  // Topbar refresh selector. The poller reschedules itself each cycle, so
-  // setting the interval and kicking it once makes the change take effect
-  // immediately instead of after the current (possibly 60s) wait.
-  function setRefreshMs(ms: number) {
-    POLL_MS = ms
+  // Topbar range selector. The poller reschedules itself each cycle, so setting
+  // the cadence and kicking it once makes the change take effect immediately
+  // instead of after the current (possibly minutes-long) wait. The chosen range
+  // is also published to the shared store so the charts follow it.
+  function setRange(id: RangeId) {
+    currentRange = id
+    selectedRange.set(id)
+    POLL_MS = rangeById(id).refreshMs
     if (pollTimer) window.clearTimeout(pollTimer)
-    schedulePoll(ms)
+    schedulePoll(POLL_MS)
   }
 
   // Global search (Ctrl+K). Until a dedicated command palette exists, this
@@ -1578,8 +1589,8 @@
       <Topbar
         device={isDeviceSection ? modalDevice : null}
         sectionTitle={sectionTitleFor(navState.section)}
-        refreshMs={POLL_MS}
-        onRefreshChange={setRefreshMs}
+        rangeId={currentRange}
+        onRangeChange={setRange}
         onManualRefresh={() => loadDevices(true)}
         onOpenSearch={openGlobalSearch}
         onOpenNotifications={toggleBell}
