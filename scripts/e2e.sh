@@ -349,14 +349,19 @@ fi
 NGINX=$(eval_js "(()=>{const r=[...document.querySelectorAll('.list li')].find(x=>x.textContent.includes('nginx.service'));return r?r.textContent.replace(/\s+/g,' '):'';})()")
 check "failed unit keeps its real unit file state" "${NGINX}" "enabled-runtime"
 
-check "failed/running summary" "$(eval_js "document.querySelector('.summary')?.textContent.replace(/\s+/g,' ').trim()")" "1 failed"
+# The counts are tiles now, not a `.summary` block: the screens rework replaced
+# the summary row. Assert the Failed tile specifically, since the label and its
+# value are adjacent spans with no whitespace between them.
+check "failed/running summary" "$(eval_js "(()=>{const t=[...document.querySelectorAll('.tiles .tile')].find(x=>/Failed/i.test(x.textContent));return t?t.textContent.replace(/\s+/g,''):'MISSING';})()")" "Failed1"
 
 PORTS=$(eval_js "(()=>{const r=[...document.querySelectorAll('.ports li')].map(e=>e.textContent.replace(/\s+/g,' ').trim());return r.length+' rows';})()")
 check "four ports rendered" "${PORTS}" "4 rows"
 
 # A wildcard listener arrives with an empty local_address; showing an empty cell
-# would read as missing data rather than "bound to all interfaces".
-check "wildcard listener renders as *" "$(eval_js "(()=>{const r=[...document.querySelectorAll('.ports li')].find(x=>x.textContent.includes('5432'));return r?r.textContent.replace(/\s+/g,' '):'';})()")" "* 5432 postgres"
+# would read as missing data rather than "bound to all interfaces". The row reads
+# port, protocol, address, service, so the `*` sits between the protocol and the
+# service name.
+check "wildcard listener renders as *" "$(eval_js "(()=>{const r=[...document.querySelectorAll('.ports li')].find(x=>x.textContent.includes('5432'));return r?r.textContent.replace(/\s+/g,' '):'';})()")" "5432 tcp * postgres"
 
 # ---------------------------------------------------------------------------
 section "Filters"
@@ -389,7 +394,7 @@ sleep 2
 
 filter_box "Filter ports" "postgres" >/dev/null
 sleep 2
-check "port filter narrows the list" "$(eval_js "[...document.querySelectorAll('.ports li')].map(e=>e.textContent.replace(/\s+/g,' ').trim()).join(',')")" "tcp * 5432 postgres"
+check "port filter narrows the list" "$(eval_js "[...document.querySelectorAll('.ports li')].map(e=>e.textContent.replace(/\s+/g,' ').trim()).join(',')")" "5432 tcp * postgres"
 
 filter_box "Filter ports" "" >/dev/null
 sleep 1
@@ -400,8 +405,15 @@ section "Failure state"
 
 # A failed request must read as a failure. Rendering "no services" here would be
 # indistinguishable from a device that genuinely reports nothing.
+#
+# The screen fetches on mount and has no refresh control of its own — the one it
+# used to have went away with the screens rework — so the failure is reached by
+# re-entering the section after poisoning fetch, which remounts the screen and
+# repeats both requests.
 eval_js "(()=>{window.fetch=()=>Promise.reject(new TypeError('Failed to fetch'));return 'poisoned';})()" >/dev/null
-eval_js "(()=>{const b=[...document.querySelectorAll('button')].find(x=>/refresh/i.test(x.textContent));if(!b)return 'MISSING';b.click();return 'CLICKED';})()" >/dev/null
+click_text 'Overview' >/dev/null
+sleep 2
+click_text 'Services' >/dev/null
 sleep 3
 
 check "error banner shown" "$(eval_js "document.querySelector('[role=alert]')?.textContent || ''")" "Failed to fetch"
@@ -428,7 +440,7 @@ section "Every sidebar section renders"
 # the sidebar but throws or blanks out at runtime.
 FLEET_SECTIONS=("Home" "Devices" "Alerts" "Findings" "Reports")
 DEVICE_SECTIONS=("Overview" "CPU & Thermal" "Memory" "Storage" "Network" "All sensors" \
-                 "Containers" "Processes" "Services" "Packages" "Logs" "Security" \
+                 "Docker" "Processes" "Services" "Packages" "Logs" "Security" \
                  "Remote access" "Settings")
 
 # Re-select the device after the reload above, which drops the selection.
