@@ -198,6 +198,14 @@ jobs:
           npm i -g agent-browser
           agent-browser install --with-deps
 
+      # The dev stack signs the agent it hands out, and compose declares that key
+      # as a required secret, so `up` fails without it. `make dev-key` is the
+      # same prerequisite `make dev` carries; the key is generated per run and
+      # never committed.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
       - name: Start the dev stack
         timeout-minutes: 6
         # data-dev is gitignored, so a fresh checkout does not have it. The
@@ -206,6 +214,7 @@ jobs:
         # local workflow.
         run: |
           mkdir -p data-dev
+          make dev-key
           docker compose -f compose.dev.yaml up -d --build
 
       - name: Wait for the server and dashboard
