@@ -11,10 +11,23 @@ import { svelte } from '@sveltejs/vite-plugin-svelte'
 // host address, which is not reachable from here.
 const apiTarget = process.env.VITE_PROXY_TARGET || 'http://server:8080'
 
+// Extra hostnames the dev server may answer to, comma-separated. Vite allows
+// only localhost, *.localhost and IP addresses by default, so reaching the
+// dashboard through a MagicDNS name (over Tailscale, say) is refused with
+// "Blocked request" unless the name is listed here. An explicit list is used
+// rather than `true`: `allowedHosts: true` reopens the DNS-rebinding hole the
+// default closes (GHSA-vg6x-rcgg-rjx6), which would let any site read the
+// source served from a developer's machine.
+const allowedHosts = (process.env.VITE_ALLOWED_HOSTS || '')
+  .split(',')
+  .map((host) => host.trim())
+  .filter(Boolean)
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [svelte()],
   server: {
+    allowedHosts,
     proxy: {
       '/api': {
         target: apiTarget,

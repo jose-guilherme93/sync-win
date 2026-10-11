@@ -8,6 +8,14 @@
 # The dashboard in dev is served by Vite at http://localhost:5173 and talks to
 # the API at http://localhost:8088 (same hostname, dev port 8088 — see App.svelte).
 #
+# To reach it from another machine, set DEV_HOST to the name you will open it
+# under (e.g. a Tailscale MagicDNS name). That name is added to Vite's
+# allowedHosts — without it Vite answers 403 "Blocked request" — and to the
+# install command, so agents enrolled from that page get a reachable address
+# instead of "localhost":
+#   DEV_HOST=$(tailscale status --json | jq -r .Self.DNSName | sed 's/\.$//') make dev-d
+# Leaving DEV_HOST unset keeps the localhost-only behaviour.
+#
 # Usage: make dev
 # =============================================================================
 name: sync-win-dev
@@ -72,9 +80,12 @@ services:
       # VITE_PROXY_TARGET is where the proxy inside this container forwards to,
       # which is the compose service address, not a host port.
       VITE_PROXY_TARGET: "http://server:8080"
+      # Hostnames Vite may answer to. Empty keeps the default (localhost and IP
+      # addresses only), which is what a developer opening localhost needs.
+      VITE_ALLOWED_HOSTS: "${DEV_HOST:-}"
       # Still used by the install command shown in the dashboard, which has to
       # point the agent at an address reachable from outside the browser.
-      VITE_API_BASE: "http://localhost:${DEV_HTTP_PORT:-8088}"
+      VITE_API_BASE: "http://${DEV_HOST:-localhost}:${DEV_HTTP_PORT:-8088}"
     volumes:
       - ./web:/app
       - web_node_modules:/app/node_modules

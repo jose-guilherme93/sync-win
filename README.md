@@ -232,6 +232,25 @@ Development data lives in `./data-dev`, separate from production. Run it
 alongside a production stack by changing ports:
 `DEV_HTTP_PORT=8081 WEB_PORT=5199 make dev`.
 
+**Reaching the dashboard from another machine**
+
+The dashboard talks to the API same-origin through the Vite proxy, so no CORS
+is involved — but Vite only answers `localhost`, `*.localhost` and IP addresses
+by default. Opening it under any other name returns `403 Blocked request`
+until that name is allowed. Set `DEV_HOST` to the name you will open, and it is
+added to Vite's allowedHosts and to the agent install command, so agents
+enrolled from that page get a reachable address instead of `localhost`:
+
+```bash
+make dev-tailnet                      # this machine's Tailscale MagicDNS name
+DEV_HOST=dev.example.com make dev-d   # any other name
+```
+
+`make dev-tailnet` reads the name from `tailscale status`. A host running with
+`--accept-dns=false` cannot resolve MagicDNS names itself, so on that machine
+use `localhost` or the tailnet IP; the name works from devices that have
+MagicDNS enabled.
+
 **Without containers**
 
 ```bash

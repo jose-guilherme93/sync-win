@@ -21,6 +21,12 @@ LOCAL_FILE := compose.yaml
 DEV_HTTP_PORT ?= 8088
 export DEV_HTTP_PORT
 
+# Hostname the dev dashboard is reachable under. Empty means localhost only.
+# Set it to a MagicDNS/LAN name to open the dashboard from another machine;
+# it is added to Vite's allowedHosts and to the install command.
+DEV_HOST ?=
+export DEV_HOST
+
 DEV   := $(COMPOSE) -f $(DEV_FILE)
 PROD  := $(COMPOSE) -f $(PROD_FILE)
 LOCAL := $(COMPOSE) -f $(LOCAL_FILE)
@@ -52,6 +58,7 @@ help: ## Show this help
 	@printf "  $(G)%-16s$(N) %s\n" "down"       "Stop the dev stack (alias: dev-down)"
 	@printf "\n$(C)Containers$(N)\n"
 	@printf "  $(G)%-16s$(N) %s\n" "dev-d"      "Start dev stack detached"
+	@printf "  $(G)%-16s$(N) %s\n" "dev-tailnet" "Start dev stack reachable by this machine's Tailscale name"
 	@printf "  $(G)%-16s$(N) %s\n" "dev-down"   "Stop and remove the dev stack"
 	@printf "  $(G)%-16s$(N) %s\n" "dev-logs"   "Follow dev stack logs"
 	@printf "  $(G)%-16s$(N) %s\n" "dev-ps"     "Show dev stack status"
@@ -97,6 +104,15 @@ dev-d: ## Start the full development stack detached
 	@mkdir -p data-dev
 	$(DEV) up --build -d
 	@printf "$(G)Dev stack up:$(N) dashboard http://localhost:%s · api http://localhost:%s\n" "$${WEB_PORT:-5173}" "$${DEV_HTTP_PORT:-8088}"
+
+.PHONY: dev-tailnet
+dev-tailnet: ## Start the dev stack reachable by this machine's Tailscale name
+	@host="$$(tailscale status --json 2>/dev/null | jq -r .Self.DNSName | sed 's/\.$$//')"; \
+	if [ -z "$$host" ]; then \
+		printf "$(Y)Could not read the Tailscale name. Is tailscale up?$(N)\n"; exit 1; \
+	fi; \
+	printf "$(G)Dev stack reachable at$(N) http://%s:%s\n" "$$host" "$${WEB_PORT:-5173}"; \
+	$(MAKE) dev-d DEV_HOST="$$host"
 
 .PHONY: dev-down
 dev-down: ## Stop and remove the dev stack
