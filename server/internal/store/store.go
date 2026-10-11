@@ -2631,32 +2631,22 @@ func (s *Store) RunRetentionCleanup() (int64, error) {
 // the same index answers directly.
 func (s *Store) deleteOrphanedTelemetryLocked() (int64, error) {
 	var deleted int64
+	// No request context reaches this path: it runs from the background retention
+	// loop, so Background is the honest value rather than a cancellation that
+	// never fires.
+	ctx := context.Background()
 	for _, table := range []string{"telemetry_raw", "telemetry_downsampled"} {
-		rows, err := s.db.Query("SELECT DISTINCT device_id FROM " + table)
+		ids, err := s.telemetryDeviceIDs(ctx, table)
 		if err != nil {
 			return deleted, err
 		}
-		var ids []string
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				rows.Close()
-				return deleted, err
-			}
-			ids = append(ids, id)
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return deleted, err
-		}
-		rows.Close()
 
 		for _, id := range ids {
 			var one int
-			if err := s.db.QueryRow("SELECT 1 FROM devices WHERE id = ?", id).Scan(&one); err == nil {
+			if err := s.db.QueryRowContext(ctx, "SELECT 1 FROM devices WHERE id = ?", id).Scan(&one); err == nil {
 				continue // the device still exists
 			}
-			res, err := s.db.Exec("DELETE FROM "+table+" WHERE device_id = ?", id)
+			res, err := s.db.ExecContext(ctx, "DELETE FROM "+table+" WHERE device_id = ?", id)
 			if err != nil {
 				continue
 			}
@@ -2665,6 +2655,27 @@ func (s *Store) deleteOrphanedTelemetryLocked() (int64, error) {
 		}
 	}
 	return deleted, nil
+}
+
+// telemetryDeviceIDs lists the device ids present in one telemetry table. The
+// rows are closed on every path, so the close error is discarded explicitly
+// instead of being deferred to a point where nothing can act on it.
+func (s *Store) telemetryDeviceIDs(ctx context.Context, table string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT DISTINCT device_id FROM "+table)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 // QueueInstallApp queues an app install command.
