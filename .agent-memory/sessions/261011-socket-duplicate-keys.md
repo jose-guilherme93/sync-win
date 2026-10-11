@@ -101,4 +101,32 @@ error, and it is caused by data, not by timing.
   wildcards. They are genuinely two sockets and the counts stay consistent with
   the Services screen, but the tag cannot show which is which. Left alone
   deliberately: changing it would desync the two counts.
-- Packages and Logs still need the visual pass.
+- Logs still has its own time-range control (`lib/device-logs.ts`) separate from
+  the topbar's chart range (`lib/timerange.ts`), with a different option set. Two
+  sources of truth for one concept; reconciling them is a larger change.
+
+## Follow-on work in the same session
+
+Packages and Logs were then taken through the same visual pass.
+
+- `fix(agent)`: apt packages had **no version at all** — `apt-mark showmanual`
+  prints names only — so the dashboard's version column was empty on every
+  Debian-family device. Versions are joined from `dpkg-query`, best-effort, so a
+  machine without dpkg still reports its list. Verified with the real agent:
+  92 of 92 packages carried a version, where the previous build reported 0.
+- `fix(web)`: Packages gained the headline row the other screens open with, and
+  name/version became two real columns. An absent version renders as `—` and the
+  headline counts how many have none, because "not reported" and "the column is
+  broken" otherwise look identical.
+- `fix(web)`: Logs rows were inheriting global `.level-*` rules from `app.css`
+  (defined for the server-log view in `App.svelte`), which is why every row had a
+  coloured background — blue-tinted info rows in a single-accent design. The rows
+  use `row-*` now. The level counts also moved from the filter chips into a
+  headline row, and the footer stopped restating the total.
+
+A note on method: the `--crit-dim` row fill and the duplicated footer text were
+the two things that *looked* like the problem. The actual cause of "fora do
+design" was a class-name collision with a legacy global stylesheet, found by
+reading the computed background off a row in the browser rather than by reading
+the component's own CSS.
+
