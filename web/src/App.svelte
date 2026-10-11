@@ -1448,17 +1448,6 @@
   }
 
 
-  // Client-side status fallback: compute status from last_seen_at
-  // This ensures devices show as offline even if the server status is stale
-  function computedStatus(device: { status: string; last_seen_at: string }): string {
-    // Don't override error or duplicate states
-    if (device.status === 'error' || device.status === 'duplicate') return device.status
-    const age = (Date.now() - Date.parse(device.last_seen_at)) / 1000
-    if (age > 300) return 'offline'  // 5 minutes
-    if (age > 30) return 'stale'     // 30 seconds
-    return 'online'
-  }
-
   // Both delegate to lib/format so the Go zero time collapses to "never"
   // instead of reporting an age of ~739893 days.
   const timeAgo = formatRelative
