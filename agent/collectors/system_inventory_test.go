@@ -182,6 +182,66 @@ func socketKey(port OpenPort) string {
 	return strings.Join([]string{port.Protocol, host, strconv.Itoa(port.Port)}, "|")
 }
 
+// `ss` reports a UDP socket once per bound address, and 0.0.0.0 plus * both
+// normalise to the empty host, so the same socket arrived twice. The duplicate
+// was harmless here and fatal downstream: the dashboard renders these in a keyed
+// list, and a duplicate key blanks the whole screen (Services, Network and
+// Security all went blank on this device).
+func TestCollectOpenPortsCollapsesDuplicateSockets(t *testing.T) {
+	bin := t.TempDir()
+	fakePath(t, bin)
+	writeFakeCommand(t, bin, "ss", `#!/bin/sh
+cat <<'EOF'
+udp   UNCONN 0      0            0.0.0.0:5353        0.0.0.0:*
+udp   UNCONN 0      0                  *:5353              *:*
+udp   UNCONN 0      0                   [::]:5353          [::]:*
+udp   UNCONN 0      0                   [::]:5353          [::]:*
+tcp   LISTEN 0      4096         0.0.0.0:22        0.0.0.0:*
+EOF
+`)
+
+	ports, err := CollectOpenPorts([]string{"LISTEN", "UNCONN"}, 200, 0)
+	if err != nil {
+		t.Fatalf("CollectOpenPorts: %v", err)
+	}
+	// 0.0.0.0:5353 and *:5353 are one socket; the two identical [::] rows are
+	// one socket; sshd on 0.0.0.0:22 is a third.
+	if len(ports) != 3 {
+		t.Fatalf("got %d ports, want 3 after de-duplication: %#v", len(ports), ports)
+	}
+	seen := map[string]int{}
+	for _, port := range ports {
+		seen[socketKey(port)]++
+	}
+	if seen["udp|*|5353"] != 1 {
+		t.Fatalf("the two spellings of the IPv4 wildcard socket must collapse to one, got %d", seen["udp|*|5353"])
+	}
+	if seen["udp|::|5353"] != 1 {
+		t.Fatalf("the repeated IPv6 socket must collapse to one, got %d", seen["udp|::|5353"])
+	}
+}
+
+// A socket held by two processes is a real pair, not a duplicate, and must
+// survive the collapse.
+func TestCollectOpenPortsKeepsSameSocketFromDifferentProcesses(t *testing.T) {
+	bin := t.TempDir()
+	fakePath(t, bin)
+	writeFakeCommand(t, bin, "ss", `#!/bin/sh
+cat <<'EOF'
+udp   UNCONN 0      0            127.0.0.1:8125    0.0.0.0:*     users:(("telegraf",pid=11,fd=1))
+udp   UNCONN 0      0            127.0.0.1:8125    0.0.0.0:*     users:(("statsd",pid=22,fd=1))
+EOF
+`)
+
+	ports, err := CollectOpenPorts([]string{"UNCONN"}, 200, 0)
+	if err != nil {
+		t.Fatalf("CollectOpenPorts: %v", err)
+	}
+	if len(ports) != 2 {
+		t.Fatalf("distinct owners of one address must both be kept, got %d: %#v", len(ports), ports)
+	}
+}
+
 func TestCollectOpenPortsWithoutProcessColumn(t *testing.T) {
 	bin := t.TempDir()
 	t.Setenv("PATH", bin)
