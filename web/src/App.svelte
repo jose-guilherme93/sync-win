@@ -14,6 +14,9 @@
   import Findings from './components/screens/Findings.svelte'
   import Reports from './components/screens/Reports.svelte'
   import Storage from './components/screens/Storage.svelte'
+  import Network from './components/screens/Network.svelte'
+  import Security from './components/screens/Security.svelte'
+  import Docker from './components/screens/Docker.svelte'
   import Processes from './components/screens/Processes.svelte'
   import Packages from './components/screens/Packages.svelte'
   import Services from './components/screens/Services.svelte'
@@ -22,6 +25,7 @@
   import DeviceSettings from './components/screens/DeviceSettings.svelte'
   import { nav, type Section } from './lib/router'
   import type { AppInfo, Device, HardwareStats } from './lib/types'
+  import type { SecurityPosture } from './lib/security-posture'
   import { generateInsights } from './lib/insights'
 
 
@@ -127,6 +131,9 @@
       void loadDeviceDetail(value.deviceId)
       selectPanels(value.deviceId)
     }
+    if (value.section === 'security' && value.deviceId && !(deviceDetails[value.deviceId] as any)?.securityPosture) {
+      void loadDeviceDetail(value.deviceId, true)
+    }
   })
   onDestroy(unsubNav)
 
@@ -160,15 +167,25 @@
   $: isDeviceSection = Boolean(navState.deviceId) && navState.section !== 'home' && navState.section !== 'devices' && navState.section !== 'alerts' && navState.section !== 'findings' && navState.section !== 'reports'
 
   // Hardware sections render the redesigned overview cards. The remaining
-  // device sections still use DeviceModal's tabs as an interim measure until
-  // their dedicated screens exist.
-  const HARDWARE_SECTIONS = new Set(['overview', 'cpu', 'memory', 'storage', 'network', 'sensors'])
+  // device sections each have their own dedicated screen now; only the sections
+  // that still share the telemetry cards fall through to the overview.
+  const HARDWARE_SECTIONS = new Set(['overview', 'cpu', 'memory', 'sensors'])
   $: isHardwareSection = HARDWARE_SECTIONS.has(navState.section)
   // The modal prefers the full detail payload (logs, processes, Docker state)
   // and falls back to the lightweight list entry while it loads.
   $: modalDevice = selectedDeviceId
     ? deviceDetails[selectedDeviceId] || devices.find((d) => d.id === selectedDeviceId) || null
     : null
+  // The Security screen's posture is stored on the device-detail object so it
+  // rides the same reactive path as the rest of the detail payload.
+  $: activeSecurityPosture = ((modalDevice as any)?.securityPosture as SecurityPosture) || {
+    publicPorts: [],
+    pendingUpdates: 0,
+    pendingStatus: '',
+    failedServices: [],
+    loaded: false,
+    error: ''
+  }
 
   let toastMessage = ''
   let toastKind: 'success' | 'error' = 'success'
@@ -212,7 +229,6 @@
   let retention1hDays = 365
   let retentionSaving = false
   let retentionError = ''
-
   const authHeaders = (token: string): Record<string, string> => (token ? { Authorization: `Bearer ${token}` } : {})
   $: ownerHeaders = authHeaders(authToken)
   $: normalizedInstallServer = (() => {
@@ -709,17 +725,63 @@
     mobileNavOpen = false
   }
 
-  async function loadDeviceDetail(deviceId: string) {
+  async function loadDeviceDetail(deviceId: string, includePosture = false) {
     if (!deviceId) return
     try {
       const response = await apiFetch(apiURL(`/api/devices/${deviceId}/detail`), { headers: ownerHeaders })
       if (!response.ok) return
       const payload = await response.json()
       if (!payload || typeof payload !== 'object' || Array.isArray(payload) || !payload.id) return
-      deviceDetails = { ...deviceDetails, [deviceId]: payload }
+      // Attach posture in the same assignment: writing deviceDetails twice raced,
+      // and the detail write would wipe a posture the other path had stored.
+      const entry = includePosture
+        ? { ...payload, securityPosture: await fetchPosture(deviceId) }
+        : payload
+      deviceDetails = { ...deviceDetails, [deviceId]: entry as Device }
     } catch {
       // Keep the last known detail; the list summary still renders.
     }
+  }
+
+  // Posture for the Security screen: public listeners, pending updates and
+  // failed units. Returns the value; the caller stores it on the device detail.
+  async function fetchPosture(deviceId: string): Promise<SecurityPosture> {
+    const get = async (path: string) => {
+      const res = await apiFetch(apiURL(`/api/devices/${deviceId}${path}`), { headers: ownerHeaders })
+      if (!res.ok) throw new Error(`${path} failed (${res.status})`)
+      return res.json()
+    }
+    const [portsRes, updatesRes, servicesRes] = await Promise.allSettled([
+      get('/ports'),
+      get('/updates'),
+      get('/services')
+    ])
+    const next: SecurityPosture = {
+      publicPorts: [],
+      pendingUpdates: 0,
+      pendingStatus: '',
+      failedServices: [],
+      loaded: true,
+      error: ''
+    }
+    if (portsRes.status === 'fulfilled' && Array.isArray(portsRes.value)) {
+      next.publicPorts = portsRes.value
+        .filter((p: any) => ['', '0.0.0.0', '::', '*', '[::]'].includes(p.local_address || ''))
+        .map((p: any) => ({ port: p.port, protocol: p.protocol }))
+        .sort((a: any, b: any) => a.port - b.port)
+    }
+    if (updatesRes.status === 'fulfilled' && updatesRes.value) {
+      next.pendingStatus = updatesRes.value.status || ''
+      next.pendingUpdates = Array.isArray(updatesRes.value.updates) ? updatesRes.value.updates.length : 0
+    }
+    if (servicesRes.status === 'fulfilled' && Array.isArray(servicesRes.value)) {
+      next.failedServices = servicesRes.value.filter((s: any) => s.status === 'failed').map((s: any) => s.name)
+    }
+    const failed = [portsRes, updatesRes, servicesRes].filter((r) => r.status === 'rejected')
+    next.error = failed.length
+      ? `Some posture data could not be read (${(failed[0] as PromiseRejectedResult).reason?.message || 'request failed'})`
+      : ''
+    return next
   }
 
   async function refreshDeviceSettings() {
@@ -1631,6 +1693,18 @@
           {#if isDeviceSection && modalDevice}
             {#if navState.section === 'storage'}
               <Storage device={modalDevice} />
+            {:else if navState.section === 'network'}
+              <Network device={modalDevice} />
+            {:else if navState.section === 'containers'}
+              <Docker device={modalDevice} authHeaders={ownerHeaders} />
+            {:else if navState.section === 'security'}
+              <Security
+                device={modalDevice}
+                authHeaders={ownerHeaders}
+                posture={activeSecurityPosture}
+                lynisAvailable={modalDevice.hardware?.lynis_available ?? false}
+                lynisInstallCmd={modalDevice.hardware?.lynis_install_cmd ?? 'sudo apt install lynis'}
+              />
             {:else if navState.section === 'processes'}
               <Processes device={modalDevice} />
             {:else if navState.section === 'packages'}

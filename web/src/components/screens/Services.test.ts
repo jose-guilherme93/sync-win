@@ -100,9 +100,13 @@ describe('Services screen', () => {
     stubFetch((url) => route(url, SERVICES, PORTS))
     render(Services, { props: { deviceId: 'dev-1' } })
 
-    await vi.waitFor(() => expect(screen.getByText('1 failed')).toBeTruthy())
-    expect(screen.getByText('1 running')).toBeTruthy()
-    expect(screen.getByText('3 total')).toBeTruthy()
+    await vi.waitFor(() => expect(screen.getByText('nginx.service')).toBeTruthy())
+    const failedTile = screen.getByText('Failed').closest('.tile') as HTMLElement
+    const runningTile = screen.getByText('Running').closest('.tile') as HTMLElement
+    const stoppedTile = screen.getByText('Stopped').closest('.tile') as HTMLElement
+    expect(failedTile.textContent).toMatch(/Failed\s*1/)
+    expect(runningTile.textContent).toMatch(/Running\s*1/)
+    expect(stoppedTile.textContent).toMatch(/Stopped\s*1/)
   })
 
   it('shows a wildcard listener rather than an empty host', async () => {
@@ -119,7 +123,7 @@ describe('Services screen', () => {
     render(Services, { props: { deviceId: 'dev-1' } })
 
     await vi.waitFor(() => expect(screen.getByText('No services reported')).toBeTruthy())
-    expect(screen.getByText('No listening sockets reported')).toBeTruthy()
+    expect(screen.getByText('No listening sockets')).toBeTruthy()
   })
 
   it('surfaces a failed request instead of claiming nothing was collected', async () => {
@@ -156,7 +160,7 @@ describe('Services screen', () => {
     render(Services, { props: { deviceId: 'dev-1' } })
 
     await vi.waitFor(() => expect(screen.getByText('sshd.service')).toBeTruthy())
-    await fireEvent.click(screen.getByRole('checkbox', { name: /problems only/i }))
+    await fireEvent.click(screen.getByRole('checkbox', { name: /problems/i }))
 
     await vi.waitFor(() => expect(screen.queryByText('sshd.service')).toBeNull())
     expect(screen.getByText('nginx.service')).toBeTruthy()
