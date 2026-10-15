@@ -217,13 +217,6 @@
 
   let userMenuOpen = false
   let bellOpen = false
-  let logsOpen = false
-  let logsTab: 'all' | 'audit' | 'errors' = 'all'
-  let logsEntries: any[] = []
-  let logsLoading = false
-  let logsOffset = 0
-  let logsTotal = 0
-  let logsFilter = ''
   let addDeviceOpen = false
   let profileEmail = ''
   let profileCurrentPassword = ''
@@ -1164,19 +1157,12 @@
     }
   }
 
-  function openLogs() {
-    logsOpen = true
-    logsTab = 'all'
-    logsEntries = []
-    logsOffset = 0
-    logsTotal = 0
-    logsFilter = ''
+  // The application logs live in the fleet-wide Settings screen, which is the
+  // single viewer. The menu item deep-links there instead of opening a second,
+  // duplicate modal.
+  function openAppLogs() {
     userMenuOpen = false
-    void loadLogs(true)
-  }
-
-  function closeLogs() {
-    logsOpen = false
+    nav.setSection('configuration')
   }
 
   function openRetention() {
@@ -1227,64 +1213,6 @@
     }
   }
 
-  async function loadLogs(reset = false) {
-    if (logsLoading) return
-    if (reset) {
-      logsOffset = 0
-      logsTotal = 0
-      logsEntries = []
-    }
-    logsLoading = true
-    try {
-      const endpoint = logsTab === 'audit' ? '/api/audit' : logsTab === 'errors' ? '/api/errors' : '/api/logs'
-      const params = new URLSearchParams({ limit: '50', offset: String(logsOffset) })
-      if (logsFilter) params.set('search', logsFilter)
-      const response = await apiFetch(`${apiURL(endpoint)}?${params}`, { headers: ownerHeaders })
-      if (!response.ok) throw new Error(`request failed: ${response.status}`)
-      const payload = await response.json()
-      const entries = payload.entries || payload
-      logsEntries = reset ? entries : [...logsEntries, ...entries]
-      logsTotal = payload.total || logsEntries.length
-      logsOffset = logsEntries.length
-    } catch (err) {
-      notify(err instanceof Error ? err.message : 'Could not load logs', 'error')
-    } finally {
-      logsLoading = false
-    }
-  }
-
-  // Every keystroke used to fire a request, and each one ran an unindexed
-  // LIKE scan plus a COUNT(*) over the whole logs table on the server. Wait for
-  // a pause in typing instead.
-  const LOG_SEARCH_DEBOUNCE_MS = 350
-  let logsSearchTimer: ReturnType<typeof setTimeout> | null = null
-
-  function onLogsFilterInput() {
-    if (logsSearchTimer) clearTimeout(logsSearchTimer)
-    logsSearchTimer = setTimeout(() => {
-      logsSearchTimer = null
-      void loadLogs(true)
-    }, LOG_SEARCH_DEBOUNCE_MS)
-  }
-
-  // Metadata is serialised once per row and reused for both the visible text and
-  // the tooltip. The previous template called JSON.stringify twice per row on
-  // every render.
-  function formatLogMetadata(metadata: unknown): string {
-    if (metadata == null) return ''
-    if (typeof metadata === 'string') return metadata
-    try {
-      return JSON.stringify(metadata)
-    } catch {
-      return ''
-    }
-  }
-
-  function switchLogsTab(tab: 'all' | 'audit' | 'errors') {
-    logsTab = tab
-    void loadLogs(true)
-  }
-
   function openAddDevice() {
     addDeviceOpen = true
     if (signedIn && !enrollmentToken) {
@@ -1295,14 +1223,6 @@
 
   function closeAddDevice() {
     addDeviceOpen = false
-  }
-
-  function formatLogTime(ts: string) {
-    if (!ts) return ''
-    const d = new Date(ts)
-    const date = d.toLocaleDateString('en-CA')
-    const time = d.toLocaleTimeString('en-GB', { hour12: false })
-    return `${date} ${time}`
   }
 
   function handleClickOutside(event: MouseEvent) {
@@ -1515,7 +1435,6 @@
       window.clearTimeout(pollTimer)
       window.clearTimeout(toastTimer)
       window.clearInterval(clock)
-      if (logsSearchTimer) clearTimeout(logsSearchTimer)
       document.removeEventListener('visibilitychange', onVisibility)
       document.removeEventListener('click', handleClickOutside)
       disconnectNotifSSE()
@@ -1650,7 +1569,7 @@
             <button class="dropdown-item" on:click={openSettings}>
               <span class="dropdown-icon">⚙</span> Settings
             </button>
-            <button class="dropdown-item" on:click={openLogs}>
+            <button class="dropdown-item" on:click={openAppLogs}>
               <span class="dropdown-icon">📋</span> Logs
             </button>
             <button class="dropdown-item" on:click={openNotifications}>
@@ -1986,58 +1905,6 @@
         </div>
         <p class="muted">The agent never changes a capability on its own.</p>
       </details>
-    </div>
-  </div>
-{/if}
-
-{#if logsOpen}
-  <div class="modal-backdrop" role="presentation" on:click={closeLogs}>
-    <div class="logs-modal" role="dialog" aria-modal="true" aria-labelledby="logs-title" tabindex="-1" on:click|stopPropagation on:keydown|stopPropagation>
-      <div class="modal-header">
-        <div>
-          <p class="eyebrow">Monitoring</p>
-          <h2 id="logs-title">System Logs</h2>
-        </div>
-        <button class="secondary" on:click={closeLogs}>Close</button>
-      </div>
-      <div class="logs-tabs">
-        <button class:active={logsTab === 'all'} on:click={() => switchLogsTab('all')}>All Logs</button>
-        <button class:active={logsTab === 'audit'} on:click={() => switchLogsTab('audit')}>Audit Trail</button>
-        <button class:active={logsTab === 'errors'} on:click={() => switchLogsTab('errors')}>Errors</button>
-      </div>
-      <div class="logs-filters">
-        <input class="search-input" type="search" bind:value={logsFilter} placeholder="Search logs..." on:input={onLogsFilterInput} />
-      </div>
-      {#if logsLoading && logsEntries.length === 0}
-        <div class="logs-loading">Loading...</div>
-      {:else if logsEntries.length === 0}
-        <div class="logs-empty">No logs found</div>
-      {:else}
-        <div class="logs-list">
-          <!-- Keyed so appending a page does not re-render every existing row. -->
-          {#each logsEntries as entry (entry.id ?? `${entry.timestamp}-${entry.event}`)}
-            {@const meta = formatLogMetadata(entry.metadata)}
-            <div class="log-entry">
-              <span class="log-ts">{formatLogTime(entry.timestamp)}</span>
-              <span class="log-level level-{(entry.level || '').toLowerCase()}">{entry.level}</span>
-              <span class="log-category">{entry.category}</span>
-              <span class="log-event">{entry.event}</span>
-              {#if entry.device_id}<span class="log-device">{entry.device_id}</span>{/if}
-              {#if entry.message}<span class="log-message">{entry.message}</span>{/if}
-              {#if meta}
-                <span class="log-meta" title={meta}>{meta}</span>
-              {/if}
-            </div>
-          {/each}
-        </div>
-        {#if logsEntries.length < logsTotal}
-          <div class="logs-pagination">
-            <button class="ghost" on:click={() => void loadLogs(false)} disabled={logsLoading}>
-              {logsLoading ? 'Loading...' : `Load more (${logsEntries.length} of ${logsTotal})`}
-            </button>
-          </div>
-        {/if}
-      {/if}
     </div>
   </div>
 {/if}

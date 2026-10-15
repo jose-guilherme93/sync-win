@@ -24,6 +24,7 @@ This document describes the security model, rules, and best practices for SyncWi
 - `POST /api/auth/logout` revokes the current session; changing a password revokes every session for the account.
 - `GET /api/auth/me` validates the current session.
 - `X-SYNCWIN-Anonymous-ID`, `owner_id` query parameters, and client-supplied owner IDs are never accepted as authorization.
+- There is no role model: every authenticated account is a full operator. The product assumes a single operator (public registration is off by default). The one global, non-scoped setting and its consequence are described under *Application logging settings*.
 
 ### Device tokens
 
@@ -189,6 +190,13 @@ not need CORS.
 - All Docker commands, authentication events, and notification events are logged.
 - Logs are append-only and never modified.
 - The audit log is queryable via the API.
+
+### Application logging settings
+
+- `GET`/`PUT /api/log-settings` control the server-wide persistence level, console level, and log retention.
+- The setting is **global, not per account**. The process runs one logger against one `logs` table, so a per-owner level would appear scoped while applying to every account's entries.
+- There is no role model, so any authenticated account may change it. That is acceptable under the documented single-operator assumption (registration disabled, one bootstrapped account). If public registration is enabled and more than one account exists, treat the server as trusted-admin-only or turn registration off (`SYNCWIN_ENABLE_REGISTRATION=false`, the default).
+- Every change is audited (`log settings updated`). Invalid values are rejected with `400`; `AUDIT` and `FATAL` are not accepted as thresholds.
 
 ## Interactive remote access
 

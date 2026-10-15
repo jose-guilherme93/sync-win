@@ -2333,68 +2333,9 @@ button.secondary {
   font-size: 0.8rem;
 }
 
-/* ── Logs modal ── */
-.logs-modal {
-  background: #0f172a;
-  border: 1px solid rgba(148, 163, 184, 0.15);
-  border-radius: 16px;
-  padding: 1.5rem;
-  width: min(900px, 92vw);
-  max-height: 85vh;
-  display: flex;
-  flex-direction: column;
-}
-
-.logs-tabs {
-  display: flex;
-  gap: 0;
-  margin: 1rem 0 0;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
-}
-
-.logs-tabs button {
-  padding: 0.6rem 1rem;
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  color: #94a3b8;
-  font-size: 0.85rem;
-  cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
-}
-
-.logs-tabs button:hover {
-  color: #e2e8f0;
-}
-
-.logs-tabs button.active {
-  color: #2dd4bf;
-  border-bottom-color: #2dd4bf;
-}
-
-.logs-filters {
-  padding: 0.75rem 0;
-}
-
-.logs-filters .search-input {
-  width: 100%;
-}
-
-.logs-loading, .logs-empty {
-  padding: 2rem;
-  text-align: center;
-  color: #94a3b8;
-}
-
-.logs-list {
-  flex: 1;
-  overflow-y: auto;
-  border: 1px solid rgba(148, 163, 184, 0.1);
-  border-radius: 8px;
-  min-height: 200px;
-  max-height: 50vh;
-}
-
+/* .log-entry is shared with SystemMetrics, which relies on this rule for its
+   bottom border and line height, so it stays even though the logs modal that
+   once introduced it is gone. */
 .log-entry {
   display: flex;
   align-items: baseline;
@@ -2412,79 +2353,6 @@ button.secondary {
 
 .log-entry:hover {
   background: rgba(148, 163, 184, 0.04);
-}
-
-.log-ts {
-  color: #64748b;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.log-level {
-  font-weight: 700;
-  text-transform: uppercase;
-  font-size: 0.7rem;
-  padding: 0.1rem 0.35rem;
-  border-radius: 3px;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.level-info { background: rgba(59, 130, 246, 0.15); color: #93bbfc; }
-.level-warn, .level-warning { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
-.level-error { background: rgba(239, 68, 68, 0.15); color: #f87171; }
-.level-fatal { background: rgba(239, 68, 68, 0.3); color: #fca5a5; }
-.level-notice { background: rgba(45, 212, 191, 0.15); color: #5eead4; }
-.level-audit { background: rgba(168, 85, 247, 0.15); color: #c4b5fd; }
-.level-debug { background: rgba(148, 163, 184, 0.1); color: #94a3b8; }
-.level-trace { background: rgba(148, 163, 184, 0.06); color: #64748b; }
-
-.log-category {
-  color: #94a3b8;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.log-event {
-  color: #cbd5e1;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.log-device {
-  color: #2dd4bf;
-  font-size: 0.72rem;
-  background: rgba(45, 212, 191, 0.1);
-  padding: 0.05rem 0.3rem;
-  border-radius: 3px;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.log-message {
-  color: #94a3b8;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.log-meta {
-  color: #64748b;
-  font-size: 0.65rem;
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  cursor: help;
-  border-left: 1px solid rgba(148, 163, 184, 0.15);
-  padding-left: 0.5rem;
-  margin-left: auto;
-}
-
-.logs-pagination {
-  display: flex;
-  justify-content: center;
-  padding: 0.75rem 0 0;
 }
 
 /* ── Retention modal ── */
