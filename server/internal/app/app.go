@@ -20,6 +20,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -46,6 +47,11 @@ type Server struct {
 	tunnelHub         *tunnel.Hub
 	flags             featureFlags
 	trustProxy        bool
+	// logRetentionDays is the persisted log retention window, cached so the
+	// daily cleanup goroutine and the settings endpoint agree without a read
+	// on every tick. It is atomic because the settings handler writes it while
+	// the cleanup goroutine reads it.
+	logRetentionDays atomic.Int32
 }
 
 type registerRequest struct {
@@ -156,6 +162,32 @@ func Run() error {
 	bootstrapAdmin(dataStore, structLogger, flags.EnableRegistration)
 	server := &Server{store: dataStore, logStore: logStore, log: structLogger, aggregator: aggregator, notifier: notifier, dockerQueue: dockerQueue, dockerBroadcaster: dockerBroadcaster, streamTickets: newStreamTicketStore(), rateLimiter: newRateLimiter(), tunnelHub: tunnel.NewHub(), flags: flags, trustProxy: envBool("SYNCWIN_TRUST_PROXY", false)}
 
+	// Logging settings are persisted so an operator's choice survives a
+	// restart. Seed the row on first boot from the configured defaults, then
+	// apply whatever is stored: the stored value wins over the environment, so
+	// the settings screen and the running logger never disagree.
+	server.logRetentionDays.Store(int32(logCfg.RetentionDays))
+	if settings, found, err := logStore.GetSettings(); err != nil {
+		structLogger.Warn(logging.CatSystem, logging.EventAppError, "could not read log settings", map[string]any{"error": err.Error()})
+	} else {
+		if !found {
+			settings = logging.DefaultSettings()
+			settings.Level = logCfg.Level.String()
+			settings.ConsoleLevel = logCfg.ConsoleLevel.String()
+			settings.RetentionDays = logCfg.RetentionDays
+			if err := logStore.SaveSettings(settings); err != nil {
+				structLogger.Warn(logging.CatSystem, logging.EventAppError, "could not seed log settings", map[string]any{"error": err.Error()})
+			}
+		}
+		if lvl, ok := logging.ParseLevelStrict(settings.Level); ok {
+			structLogger.SetLevel(lvl)
+		}
+		if lvl, ok := logging.ParseLevelStrict(settings.ConsoleLevel); ok {
+			structLogger.SetConsoleLevel(lvl)
+		}
+		server.logRetentionDays.Store(int32(settings.RetentionDays))
+	}
+
 	// Log application startup
 	structLogger.Info(logging.CatSystem, logging.EventAppStarted,
 		fmt.Sprintf("SyncWin server starting version=%s", readAgentVersion()),
@@ -196,6 +228,7 @@ func Run() error {
 	mux.HandleFunc("/api/logs", server.handleLogs)
 	mux.HandleFunc("/api/logs/", server.handleLogByID)
 	mux.HandleFunc("/api/logs/stats", server.handleLogStats)
+	mux.HandleFunc("/api/log-settings", server.handleLogSettings)
 	mux.HandleFunc("/api/audit", server.handleAudit)
 	mux.HandleFunc("/api/errors", server.handleErrors)
 
@@ -283,7 +316,7 @@ func Run() error {
 		for {
 			select {
 			case <-ticker.C:
-				if _, err := logStore.Cleanup(logCfg.RetentionDays); err != nil {
+				if _, err := logStore.Cleanup(int(server.logRetentionDays.Load())); err != nil {
 					structLogger.Error(logging.CatSystem, logging.EventAppError, "retention cleanup failed", map[string]any{"error": err.Error()})
 				}
 			case <-ctx.Done():

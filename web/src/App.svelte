@@ -26,6 +26,7 @@
   import DeviceLogs from './components/screens/DeviceLogs.svelte'
   import RemoteAccess from './components/screens/RemoteAccess.svelte'
   import DeviceSettings from './components/screens/DeviceSettings.svelte'
+  import AppSettings from './components/screens/AppSettings.svelte'
   import { nav, type Section } from './lib/router'
   import { selectedRange, rangeById, DEFAULT_RANGE, type RangeId } from './lib/timerange'
   import type { AppInfo, Device, HardwareStats } from './lib/types'
@@ -172,7 +173,7 @@
     security: 'security'
   } as Record<string, string>)[navState.section] || null
 
-  $: isDeviceSection = Boolean(navState.deviceId) && navState.section !== 'home' && navState.section !== 'devices' && navState.section !== 'alerts' && navState.section !== 'findings' && navState.section !== 'reports'
+  $: isDeviceSection = Boolean(navState.deviceId) && navState.section !== 'home' && navState.section !== 'devices' && navState.section !== 'alerts' && navState.section !== 'findings' && navState.section !== 'reports' && navState.section !== 'configuration'
 
   // Only the overview still uses the shared telemetry cards. Every other
   // device section now has a dedicated screen, so nothing else falls through.
@@ -1749,6 +1750,8 @@
             <Findings {devices} onSelect={selectDevice} />
           {:else if navState.section === 'reports'}
             <Reports {devices} onSelect={selectDevice} />
+          {:else if navState.section === 'configuration'}
+            <AppSettings {devices} authHeaders={ownerHeaders} />
           {:else}
             <Home {devices} onSelect={selectDevice} onAdd={openAddDevice} />
           {/if}
