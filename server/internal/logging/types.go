@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"fmt"
 	"strings"
 	"time"
 )
@@ -63,6 +64,76 @@ func ParseLevel(s string) Level {
 	default:
 		return LevelInfo
 	}
+}
+
+// ParseLevelStrict parses s and reports whether it was a recognized, settable
+// level. Unlike ParseLevel it never falls back to INFO, so a typo in a settings
+// request is a validation error instead of a silent reset. AUDIT is excluded on
+// purpose: it is an always-persisted marker level, not a threshold, and FATAL
+// terminates the process, so neither makes sense as the persistence level.
+func ParseLevelStrict(s string) (Level, bool) {
+	switch strings.ToUpper(strings.TrimSpace(s)) {
+	case "TRACE":
+		return LevelTrace, true
+	case "DEBUG":
+		return LevelDebug, true
+	case "INFO":
+		return LevelInfo, true
+	case "NOTICE":
+		return LevelNotice, true
+	case "WARN":
+		return LevelWarn, true
+	case "ERROR":
+		return LevelError, true
+	default:
+		return LevelInfo, false
+	}
+}
+
+// SettableLevels lists the thresholds the settings screen offers, in ascending
+// order. It is the single source of truth for the frontend's level picker.
+func SettableLevels() []string {
+	return []string{"TRACE", "DEBUG", "INFO", "NOTICE", "WARN", "ERROR"}
+}
+
+// Categories lists every category the logger emits, so the settings screen can
+// offer the same filter values the backend understands.
+func Categories() []string {
+	return []string{
+		string(CatSystem), string(CatHTTP), string(CatApplication), string(CatAgent),
+		string(CatDevice), string(CatAuth), string(CatSecurity), string(CatAudit),
+		string(CatDatabase), string(CatSync), string(CatCommand), string(CatInstallation),
+		string(CatPerformance),
+	}
+}
+
+// Settings is the operator-tunable, application-wide logging configuration. It
+// is persisted so a change survives a restart.
+type Settings struct {
+	Level         string `json:"level"`
+	ConsoleLevel  string `json:"console_level"`
+	RetentionDays int    `json:"retention_days"`
+}
+
+// DefaultSettings matches DefaultConfig and is written on first boot so the
+// operator always sees the values actually in effect rather than an empty form.
+func DefaultSettings() Settings {
+	return Settings{Level: "INFO", ConsoleLevel: "WARN", RetentionDays: 14}
+}
+
+// Validate rejects a level that is not settable and a retention window outside
+// the range the UI advertises.
+func (s Settings) Validate() error {
+	if _, ok := ParseLevelStrict(s.Level); !ok {
+		return fmt.Errorf("invalid level %q", s.Level)
+	}
+	if _, ok := ParseLevelStrict(s.ConsoleLevel); !ok {
+		return fmt.Errorf("invalid console level %q", s.ConsoleLevel)
+	}
+	if s.RetentionDays < 1 || s.RetentionDays > 3650 {
+		return fmt.Errorf("retention_days must be between 1 and 3650")
+	}
+	return nil
 }
 
 // Category classifies the source of a log event.

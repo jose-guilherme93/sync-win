@@ -1,8 +1,10 @@
 package logging
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -450,4 +452,36 @@ func marshalMetadata(m map[string]any) string {
 		return "{}"
 	}
 	return string(b)
+}
+
+// GetSettings returns the persisted logging settings. found is false when the
+// row has never been written, which lets the caller tell "unset" apart from a
+// deliberate value and seed a default instead of silently reporting zeros.
+func (s *Store) GetSettings() (Settings, bool, error) {
+	var st Settings
+	err := s.db.QueryRowContext(context.Background(), `SELECT level, console_level, retention_days FROM log_settings WHERE id = 1`).
+		Scan(&st.Level, &st.ConsoleLevel, &st.RetentionDays)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Settings{}, false, nil
+		}
+		return Settings{}, false, fmt.Errorf("read log settings: %w", err)
+	}
+	return st, true, nil
+}
+
+// SaveSettings upserts the single settings row.
+func (s *Store) SaveSettings(st Settings) error {
+	_, err := s.db.ExecContext(context.Background(), `INSERT INTO log_settings (id, level, console_level, retention_days, updated_at)
+		VALUES (1, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			level = excluded.level,
+			console_level = excluded.console_level,
+			retention_days = excluded.retention_days,
+			updated_at = excluded.updated_at`,
+		st.Level, st.ConsoleLevel, st.RetentionDays, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return fmt.Errorf("save log settings: %w", err)
+	}
+	return nil
 }
