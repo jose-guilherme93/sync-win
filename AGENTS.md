@@ -42,6 +42,7 @@ The project is built around three main components:
    - Docker container management (list, start/stop/restart/kill/remove, exec, compose, prune)
    - Remote access screen: SSH terminal (xterm.js) plus device actions and a recent-session audit list
    - Lynis security audit: run audit, read the stored report (hardening index, warnings/suggestions/categories) and history; host posture (public listeners, pending updates, failed units)
+   - fleet-wide Administration → Settings screen: the application log viewer (filter by level, category, device, time window; live tail; metadata detail) plus the log level and retention controls
    - notification settings and inbox with real-time SSE push
    - device notes and attachments
 
@@ -83,7 +84,7 @@ sync-win/
 │   │   ├── components/
 │   │   │   ├── shell/              # Sidebar, Topbar, DeviceList (app chrome)
 │   │   │   ├── ui/                 # Icon, StatusDot, GaugeCard, StatCard, Skeleton, ConfirmDialog…
-│   │   │   ├── screens/            # Home, DeviceOverview, CpuThermal, Memory, Sensors, Alerts, Reports, Storage, Network, Services, Security, Docker, Processes, Packages, RemoteAccess, DeviceSettings, DeviceLogs
+│   │   │   ├── screens/            # Home, DeviceOverview, CpuThermal, Memory, Sensors, Alerts, Reports, Storage, Network, Services, Security, Docker, Processes, Packages, RemoteAccess, DeviceSettings, DeviceLogs, AppSettings
 │   │   │   ├── DeviceModal.svelte  # Device detail tabs; variant="page" renders inline
 │   │   │   ├── DockerTab.svelte    # Docker container management
 │   │   │   ├── SystemMetrics.svelte    # Detailed hardware telemetry

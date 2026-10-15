@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -34,13 +35,20 @@ func DefaultConfig() Config {
 }
 
 // Logger is the core logging engine.
+//
+// The persistence threshold and the console threshold are held in atomics
+// rather than read straight from config because they are now mutable at runtime
+// (the application settings screen changes them). Reading config directly would
+// race with that write and could not take effect without a restart.
 type Logger struct {
-	config Config
-	store  *Store
-	dedup  *deduplicator
-	queue  chan *LogEntry
-	wg     sync.WaitGroup
-	stopCh chan struct{}
+	config       Config
+	store        *Store
+	dedup        *deduplicator
+	queue        chan *LogEntry
+	wg           sync.WaitGroup
+	stopCh       chan struct{}
+	level        atomic.Int32
+	consoleLevel atomic.Int32
 }
 
 // New creates a new Logger. Call Stop() to flush and close.
@@ -51,6 +59,8 @@ func New(config Config, store *Store) *Logger {
 		queue:  make(chan *LogEntry, config.QueueSize),
 		stopCh: make(chan struct{}),
 	}
+	l.level.Store(int32(config.Level))
+	l.consoleLevel.Store(int32(config.ConsoleLevel))
 
 	l.dedup = newDeduplicator(config.DedupWindow, 1000, func(entry *dedupEntry) {
 		// Flush aggregated dedup entry as a single log
@@ -93,7 +103,7 @@ func (l *Logger) Log(level Level, category Category, event Event, msg string, me
 // per-request fields would race and attribute request ids to the wrong
 // entries (and to unrelated background logs).
 func (l *Logger) log(level Level, category Category, event Event, msg string, metadata map[string]any, requestID, correlationID string) {
-	if level < l.config.Level && level != LevelAudit {
+	if level < l.Level() && level != LevelAudit {
 		return
 	}
 
@@ -116,7 +126,7 @@ func (l *Logger) log(level Level, category Category, event Event, msg string, me
 	}
 
 	// Console output for important events
-	if level >= l.config.ConsoleLevel || level == LevelFatal {
+	if level >= l.ConsoleLevel() || level == LevelFatal {
 		l.writeConsole(entry)
 	}
 
@@ -131,7 +141,7 @@ func (l *Logger) log(level Level, category Category, event Event, msg string, me
 	}
 
 	// Queue for persistence
-	if level >= l.config.Level || level == LevelAudit {
+	if level >= l.Level() || level == LevelAudit {
 		select {
 		case l.queue <- entry:
 		default:
@@ -196,6 +206,19 @@ func optMeta(meta []map[string]any) map[string]any {
 	}
 	return nil
 }
+
+// Level returns the current persistence threshold.
+func (l *Logger) Level() Level { return Level(l.level.Load()) }
+
+// SetLevel changes the persistence threshold at runtime. It is safe to call
+// while the logger is serving requests.
+func (l *Logger) SetLevel(v Level) { l.level.Store(int32(v)) }
+
+// ConsoleLevel returns the current console threshold.
+func (l *Logger) ConsoleLevel() Level { return Level(l.consoleLevel.Load()) }
+
+// SetConsoleLevel changes the console threshold at runtime.
+func (l *Logger) SetConsoleLevel(v Level) { l.consoleLevel.Store(int32(v)) }
 
 // batchWriter runs in a goroutine and flushes the queue periodically.
 func (l *Logger) batchWriter() {

@@ -81,3 +81,9 @@ entries:
   - id: sessions/261011-socket-duplicate-keys
     path: sessions/261011-socket-duplicate-keys.md
     type: session
+  - id: sessions/261011-merge-and-release
+    path: sessions/261011-merge-and-release.md
+    type: session
+  - id: sessions/261015-app-logs
+    path: sessions/261015-app-logs.md
+    type: session

@@ -31,6 +31,8 @@ export type Section =
   // Device-scoped — customize
   | 'remote'
   | 'settings'
+  // Fleet-wide administration
+  | 'configuration'
 
 export type NavState = {
   section: Section
@@ -97,6 +99,13 @@ export const NAV_GROUPS: NavGroup[] = [
       { section: 'security', label: 'Security', icon: 'lock', deviceScoped: true },
       { section: 'remote', label: 'Remote access', icon: 'terminal', deviceScoped: true },
       { section: 'settings', label: 'Settings', icon: 'settings', deviceScoped: true }
+    ]
+  },
+  {
+    id: 'admin',
+    label: 'Administration',
+    items: [
+      { section: 'configuration', label: 'Settings', icon: 'settings' }
     ]
   }
 ]

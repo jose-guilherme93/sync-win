@@ -805,6 +805,16 @@ func (s *Store) initSchema() error {
 		resolution_1h_days INTEGER NOT NULL DEFAULT 365,
 		updated_at TEXT NOT NULL
 	);
+	-- Application-wide logging settings. A single row (id = 1): there is one
+	-- logger and one logs table, so a per-owner level would silently apply to
+	-- every account's entries.
+	CREATE TABLE IF NOT EXISTS log_settings (
+		id             INTEGER PRIMARY KEY CHECK (id = 1),
+		level          TEXT NOT NULL DEFAULT 'INFO',
+		console_level  TEXT NOT NULL DEFAULT 'WARN',
+		retention_days INTEGER NOT NULL DEFAULT 14,
+		updated_at     TEXT NOT NULL
+	);
 	CREATE TABLE IF NOT EXISTS device_notes (
 		id TEXT PRIMARY KEY,
 		device_id TEXT NOT NULL,
