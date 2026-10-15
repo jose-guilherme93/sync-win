@@ -93,5 +93,34 @@ table, so a per-owner level would apply to every account while appearing scoped.
   shared state is `atomic.Int32`, so it is race-free by construction.
 - Log streaming is polling, not SSE; the notification SSE plumbing exists but a
   logs stream was left out to keep the change reviewable.
-- The older "System Logs" and "Data Retention" modals in the user menu were left
-  in place rather than redirected to the new screen.
+- The "Data Retention" modal (telemetry retention) still lives in the user menu;
+  it is a separate concern from application logs and was not moved into Settings.
+
+## Follow-up pass (same day)
+
+Reviewed the feature and closed the gaps found:
+
+- **Test coverage for the query API** (`logs_test.go`): owner scoping, the
+  level/category/search filters, pagination, the oversized-limit clamp to 100,
+  the session requirement, method rejection, and the audit/errors views. The
+  query endpoints were previously only exercised indirectly through an owner
+  isolation test.
+- **Trace a single request**: the viewer now filters by `request_id` and shows
+  both `request_id` and `correlation_id` in the detail row. The backend already
+  supported them; the UI exposed neither.
+- **Removed the duplicate viewer**: the "System Logs" modal is gone from the
+  shell, and the user-menu "Logs" item deep-links to Administration → Settings.
+  This also deleted the modal's debounced search timer — the onMount cleanup
+  referenced it, so it was the only reason that line existed. Modal-only CSS
+  (`.logs-*`, `.log-ts`/`-level`/`-category`/`-event`/`-device`/`-message`/
+  `-meta`, `.level-*`) was dropped from `app.css`. `.log-entry` was **kept**:
+  `SystemMetrics` relies on it for its bottom border and line height.
+- **Authorization documented, not changed**: the operator confirmed the
+  deployment is single-user, so no role model was added. `SECURITY.md` now states
+  that there are no roles, every authenticated account is an operator, and the
+  log settings are the one global setting — with the consequence spelled out if
+  public registration is ever enabled.
+
+Verification of the follow-up: server tests green (including the new
+`TestLogs*`); web 19 files / **145 tests**, `svelte-check` 0 errors, `vite build`
+clean.
