@@ -103,6 +103,21 @@ describe('Application settings screen', () => {
     expect(asked.some((c) => c.url.includes('level=WARN'))).toBe(true)
   })
 
+  it('sends a request id to trace one request through the log', async () => {
+    const { calls } = stubFetch((url) => route(url))
+    render(AppSettings)
+    await screen.findByText('http_error')
+
+    const request = await screen.findByLabelText('Request ID')
+    await fireEvent.input(request, { target: { value: 'req_abc123' } })
+
+    // The field is debounced, so wait for the follow-up query.
+    await vi.waitFor(() => {
+      const asked = calls.filter((c) => c.url.includes('/api/logs?'))
+      expect(asked.some((c) => c.url.includes('request_id=req_abc123'))).toBe(true)
+    })
+  })
+
   it('renders the persisted settings values', async () => {
     stubFetch((url) => route(url))
     render(AppSettings)

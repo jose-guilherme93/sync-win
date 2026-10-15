@@ -16,6 +16,7 @@
     message?: string
     device_id?: string
     request_id?: string
+    correlation_id?: string
     duration_ms?: number
     status?: number
     metadata?: Record<string, unknown>
@@ -56,6 +57,7 @@
   let category = ''
   let deviceId = ''
   let search = ''
+  let requestId = ''
   let range = 'all'
 
   let entries: LogEntry[] = []
@@ -91,6 +93,7 @@
     if (category) params.set('category', category)
     if (deviceId) params.set('device_id', deviceId)
     if (search.trim()) params.set('search', search.trim())
+    if (requestId.trim()) params.set('request_id', requestId.trim())
     const from = fromFor(range)
     if (from) params.set('from', from)
     return params.toString()
@@ -180,7 +183,7 @@
     }
   }
 
-  function onSearchInput() {
+  function onFilterInput() {
     if (searchTimer) clearTimeout(searchTimer)
     searchTimer = setTimeout(() => {
       searchTimer = null
@@ -293,7 +296,11 @@
     </label>
     <label class="grow">
       <span class="k">Search</span>
-      <input type="search" bind:value={search} on:input={onSearchInput} placeholder="message or event…" />
+      <input type="search" bind:value={search} on:input={onFilterInput} placeholder="message or event…" />
+    </label>
+    <label>
+      <span class="k">Request ID</span>
+      <input type="search" bind:value={requestId} on:input={onFilterInput} placeholder="req_…" />
     </label>
   </div>
 
@@ -326,6 +333,7 @@
               <dl>
                 <div><dt>Timestamp</dt><dd>{entry.timestamp}</dd></div>
                 {#if entry.request_id}<div><dt>Request</dt><dd>{entry.request_id}</dd></div>{/if}
+                {#if entry.correlation_id}<div><dt>Correlation</dt><dd>{entry.correlation_id}</dd></div>{/if}
                 {#if entry.duration_ms}<div><dt>Duration</dt><dd>{entry.duration_ms} ms</dd></div>{/if}
                 {#if entry.status}<div><dt>Status</dt><dd>{entry.status}</dd></div>{/if}
                 {#if entry.device_id}<div><dt>Device</dt><dd>{entry.device_id}</dd></div>{/if}
