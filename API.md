@@ -1032,9 +1032,45 @@ Get error log entries. Requires session token.
 
 ### `DELETE /api/logs/delete`
 
-Delete logs older than retention period. Requires session token.
+Delete logs older than retention period. Requires session token. Accepts an
+optional `?days=N` (default 5).
 
 **Response:** `200 OK`
+
+### `GET /api/log-settings`
+
+Read the application-wide logging settings. Requires session token.
+
+**Response:** `200 OK`
+```json
+{
+  "level": "INFO",
+  "console_level": "WARN",
+  "retention_days": 14,
+  "levels": ["TRACE", "DEBUG", "INFO", "NOTICE", "WARN", "ERROR"],
+  "categories": ["system", "http", "application", "agent", "device", "auth", "security", "audit", "database", "sync", "command", "installation", "performance"]
+}
+```
+
+### `PUT /api/log-settings`
+
+Update the logging settings. The level applies to the running logger immediately
+and is persisted, so it survives a restart; the retention window takes effect at
+the next daily cleanup. Requires session token.
+
+**Request:**
+```json
+{ "level": "DEBUG", "console_level": "WARN", "retention_days": 30 }
+```
+
+`level` and `console_level` accept `TRACE`, `DEBUG`, `INFO`, `NOTICE`, `WARN` or
+`ERROR` — `AUDIT` and `FATAL` are markers, not thresholds. `retention_days` must
+be between 1 and 3650. An invalid value returns `400`.
+
+**Response:** `200 OK` (the stored settings)
+
+> These settings are global, not per account: the server runs a single logger
+> against a single `logs` table.
 
 ### `GET /api/retention`
 
