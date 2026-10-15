@@ -154,7 +154,7 @@ func TestLogsPaginationAndLimitCap(t *testing.T) {
 		t.Fatalf("second page entries = %d, want 1", len(second.Entries))
 	}
 
-	// An oversized limit is clamped, not honoured: the handler must not let a
+	// An oversized limit is clamped, not honored: the handler must not let a
 	// caller pull the whole table in one request.
 	_, capped := getLogs(t, s, token, "?limit=100000")
 	if capped.Limit != 100 {
