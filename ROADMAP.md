@@ -320,17 +320,18 @@ via sshd, mediado pela política local do device e pela flag do servidor.
 
 ## Pendências de backend conhecidas
 
-Fases ainda não implementadas, levantadas na auditoria do dashboard. Nenhuma
-existe no código; o dashboard mostra estado honesto "não coletado ainda" para cada
-uma e nomeia o endpoint que falta.
+Itens ainda não implementados, levantados na auditoria do dashboard. O dashboard
+mostra estado honesto "não coletado ainda" para cada um e nomeia o endpoint que
+falta.
 
 - [ ] `GET /api/devices/{id}/smart` — saúde dos discos (SMART)
-- [ ] `GET /api/devices/{id}/updates` — pacotes com atualização pendente
 - [ ] `GET /api/alerts` + ack — alertas derivados do inventário
-- [ ] `PATCH /api/devices/{id}` — renomear e etiquetar device
-- [ ] `POST /api/devices/{id}/actions` — reboot, update-packages, restart-agent
 - [ ] campos de agente: clock da CPU (MHz) e tensão de core (V)
 - [ ] `agent/collectors/gpu_nvidia.go` — nvidia-smi: carga, potência, hotspot, memória, fan, clock, VRAM
+
+Os itens `GET /api/devices/{id}/updates`, `PATCH /api/devices/{id}` (renomear e
+etiquetar) e `POST /api/devices/{id}/actions` (reboot, update-packages,
+restart-agent) foram implementados e não são mais pendências.
 
 ## Regras do produto
 
