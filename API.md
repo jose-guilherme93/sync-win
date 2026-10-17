@@ -1102,6 +1102,55 @@ Update telemetry retention settings. Requires session token.
 
 **Response:** `200 OK`
 
+### `GET /api/alerts`
+
+List the alert acknowledgements stored for the authenticated owner. Alerts
+themselves are derived in the dashboard from the current telemetry
+(`web/src/lib/insights.ts`); the server persists only which findings the
+operator dismissed, so they survive a reload and follow the account to another
+browser. Requires session token.
+
+**Response:** `200 OK`
+```json
+{
+  "acks": [
+    { "id": "device-id:cpu", "acked_at": "2026-10-17T12:00:00Z" }
+  ]
+}
+```
+
+The id is the alert's stable identity (`<device_id>:<rule key>`), not the
+rendered text: a CPU alert stays acknowledged when the reading moves from 92% to
+95%.
+
+### `POST /api/alerts`
+
+Acknowledge a finding. Requires session token.
+
+**Request:**
+```json
+{ "id": "device-id:cpu" }
+```
+
+Acking the same id twice is idempotent and keeps the original timestamp.
+
+**Response:** `200 OK` (the stored acknowledgement)
+
+### `DELETE /api/alerts?id=<id>`
+
+Remove one acknowledgement. Removing an absent one is not an error.
+
+**Response:** `204 No Content`
+
+### `DELETE /api/alerts`
+
+Restore every acknowledgement for the owner.
+
+**Response:** `200 OK`
+```json
+{ "cleared": 2 }
+```
+
 ---
 
 ## Notifications

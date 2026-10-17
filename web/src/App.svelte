@@ -1664,7 +1664,7 @@
               />
             {/if}
           {:else if navState.section === 'alerts'}
-            <Alerts {devices} onSelect={selectDevice} />
+            <Alerts {devices} authHeaders={ownerHeaders} onSelect={selectDevice} />
           {:else if navState.section === 'findings'}
             <Findings {devices} onSelect={selectDevice} />
           {:else if navState.section === 'reports'}

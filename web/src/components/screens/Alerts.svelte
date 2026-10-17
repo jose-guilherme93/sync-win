@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
   import { computedStatus, deviceLabel, type Device } from '../../lib/types'
+  import { apiFetch, apiURL } from '../../lib/api'
   import { formatRelative } from '../../lib/format'
   import { generateInsights, THRESHOLDS, type Insight } from '../../lib/insights'
   import SeverityBadge from '../ui/SeverityBadge.svelte'
@@ -7,25 +9,33 @@
   import StatusDot from '../ui/StatusDot.svelte'
 
   export let devices: Device[] = []
+  export let authHeaders: Record<string, string> = {}
   export let onSelect: (id: string) => void
 
   type Alert = { id: string; device: Device; insight: Insight; status: string }
+  type AlertAck = { id: string; acked_at: string }
 
-  // Alerts are derived from current telemetry, so there is nothing to persist
-  // server-side yet. Acknowledgement is therefore session-local: it hides an
-  // alert for this browser without pretending the underlying condition is
-  // resolved. Once /api/alerts exists this becomes the server flag.
-  let acknowledged: Record<string, boolean> = {}
+  // The findings are derived from current telemetry, so only the
+  // acknowledgement is persisted. The server stores it per owner, which is what
+  // makes it survive a reload and follow the account to another browser, while
+  // the rules stay in lib/insights.ts so alerts and meters cannot disagree.
+  let acknowledged: Record<string, string> = {}
+  let ackError = ''
+  // True once the operator has changed something here. The initial GET must
+  // never overwrite an ack that was clicked while it was still in flight.
+  let acksDirty = false
   let filter: 'all' | 'crit' | 'warn' = 'all'
 
-  function alertId(deviceId: string, text: string) {
-    return `${deviceId}:${text}`
+  // The id is the rule, not the reading: "CPU 92%" must stay acknowledged when
+  // the next sample reads 95%. insight.key is stable per rule and subject.
+  function alertId(deviceId: string, key: string) {
+    return `${deviceId}:${key}`
   }
 
   $: all = devices
     .flatMap((device): Alert[] =>
       generateInsights(device.hardware).map((insight) => ({
-        id: alertId(device.id, insight.text),
+        id: alertId(device.id, insight.key),
         device,
         insight,
         status: computedStatus(device)
@@ -45,15 +55,68 @@
   $: counts = {
     crit: all.filter((a) => a.insight.type === 'crit').length,
     warn: all.filter((a) => a.insight.type === 'warn').length,
-    acked: Object.values(acknowledged).filter(Boolean).length
+    // Every stored ack counts, including one whose condition has already
+    // cleared: the operator needs a way to restore those too.
+    acked: Object.keys(acknowledged).length
   }
 
-  function acknowledge(id: string) {
-    acknowledged = { ...acknowledged, [id]: true }
+  onMount(loadAcks)
+
+  function describe(e: unknown): string {
+    return e instanceof Error ? e.message : 'request failed'
   }
 
-  function restoreAll() {
+  async function loadAcks() {
+    ackError = ''
+    try {
+      const res = await apiFetch(apiURL('/api/alerts'), { headers: authHeaders })
+      if (!res.ok) throw new Error(`request failed (${res.status})`)
+      const data: { acks?: AlertAck[] } = await res.json()
+      if (acksDirty) return
+      const next: Record<string, string> = {}
+      for (const ack of data.acks ?? []) next[ack.id] = ack.acked_at
+      acknowledged = next
+    } catch (e) {
+      ackError = `Could not load acknowledgements: ${describe(e)}`
+    }
+  }
+
+  async function acknowledge(id: string) {
+    if (acknowledged[id]) return
+    acksDirty = true
+    const previous = acknowledged
+    // Optimistic: the row disappears on click, and comes back if the save
+    // fails. A persisted ack is the point of this screen, so a silent failure
+    // would leave the operator believing it was stored.
+    acknowledged = { ...acknowledged, [id]: new Date().toISOString() }
+    ackError = ''
+    try {
+      const res = await apiFetch(apiURL('/api/alerts'), {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id })
+      })
+      if (!res.ok) throw new Error(`request failed (${res.status})`)
+      const ack: AlertAck = await res.json()
+      acknowledged = { ...acknowledged, [ack.id]: ack.acked_at }
+    } catch (e) {
+      acknowledged = previous
+      ackError = `Could not save the acknowledgement: ${describe(e)}`
+    }
+  }
+
+  async function restoreAll() {
+    acksDirty = true
+    const previous = acknowledged
     acknowledged = {}
+    ackError = ''
+    try {
+      const res = await apiFetch(apiURL('/api/alerts'), { method: 'DELETE', headers: authHeaders })
+      if (!res.ok) throw new Error(`request failed (${res.status})`)
+    } catch (e) {
+      acknowledged = previous
+      ackError = `Could not restore the acknowledgements: ${describe(e)}`
+    }
   }
 </script>
 
@@ -90,6 +153,10 @@
       </div>
     </header>
 
+    {#if ackError}
+      <p class="ack-error" role="alert">{ackError}</p>
+    {/if}
+
     {#if visible.length === 0}
       <EmptyState
         icon="✓"
@@ -122,8 +189,8 @@
     <header class="card-head"><h2>Rules</h2></header>
     <p class="rules-note">
       Thresholds are read from <code>lib/insights.ts</code>. Editing them there changes both the
-      alerts and the meter colours, so the two can never disagree. Server-side rule
-      configuration is not implemented yet.
+      alerts and the meter colours, so the two can never disagree. Acknowledgements are stored
+      on the server per account, so they survive a reload and follow you to another browser.
     </p>
     <ul class="rules">
       <li><span>CPU</span><b>warn &gt; {THRESHOLDS.cpuWarn}%</b><b class="crit">crit &gt; {THRESHOLDS.cpuCrit}%</b></li>
@@ -197,6 +264,14 @@
   }
   .filters button:hover { background: var(--card-hover); color: var(--text); }
   .filters button.active { background: var(--accent-dim); color: var(--accent); }
+
+  .ack-error {
+    margin: 0;
+    padding: 0.55rem 0.9rem;
+    border-bottom: 1px solid var(--border);
+    color: var(--crit);
+    font-size: 0.75rem;
+  }
 
   .list { list-style: none; margin: 0; padding: 0; }
   .list li { border-bottom: 1px solid var(--border); }

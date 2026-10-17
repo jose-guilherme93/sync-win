@@ -236,6 +236,9 @@ func Run() error {
 	mux.HandleFunc("/api/retention", server.handleRetention)
 	mux.HandleFunc("/api/logs/delete", server.handleDeleteLogs)
 
+	// Alert acknowledgement state (the alerts themselves are derived by the UI)
+	mux.HandleFunc("/api/alerts", server.handleAlerts)
+
 	// Notification providers and inbox
 	mux.HandleFunc("/api/notifications/config", server.handleNotificationConfig)
 	mux.HandleFunc("/api/notifications/providers", server.handleNotificationProviders)

@@ -815,6 +815,15 @@ func (s *Store) initSchema() error {
 		retention_days INTEGER NOT NULL DEFAULT 14,
 		updated_at     TEXT NOT NULL
 	);
+	-- Alert acknowledgements. Alerts themselves are derived in the dashboard
+	-- from lib/insights.ts, which is the single source of thresholds; the
+	-- server only persists which findings the operator has dismissed.
+	CREATE TABLE IF NOT EXISTS alert_acks (
+		owner_id  TEXT NOT NULL,
+		alert_id  TEXT NOT NULL,
+		acked_at  TEXT NOT NULL,
+		PRIMARY KEY (owner_id, alert_id)
+	);
 	CREATE TABLE IF NOT EXISTS device_notes (
 		id TEXT PRIMARY KEY,
 		device_id TEXT NOT NULL,

@@ -137,6 +137,7 @@ A funcionalidade P1 está concluída. A próxima etapa é uma nova priorização
 - [x] retry states
 - [x] stale devices
 - [x] alert visibility in UI
+- [x] acknowledge persistente por owner (`GET`/`POST`/`DELETE /api/alerts`); as regras continuam em `web/src/lib/insights.ts` e o servidor guarda apenas o ack
 
 ## FASE 10 — Observability
 - [x] structured logs
@@ -325,7 +326,6 @@ mostra estado honesto "não coletado ainda" para cada um e nomeia o endpoint que
 falta.
 
 - [ ] `GET /api/devices/{id}/smart` — saúde dos discos (SMART)
-- [ ] `GET /api/alerts` + ack — alertas derivados do inventário
 - [ ] campos de agente: clock da CPU (MHz) e tensão de core (V)
 - [ ] `agent/collectors/gpu_nvidia.go` — nvidia-smi: carga, potência, hotspot, memória, fan, clock, VRAM
 
