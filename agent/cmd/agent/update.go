@@ -51,6 +51,11 @@ func cmdUpdate(args []string) error {
 	}
 	server := strings.TrimRight(*serverURL, "/")
 
+	// Remove anything older installs left behind before doing any work. The
+	// update service runs as root every 15 minutes, so this is the place that
+	// can clean system paths on devices that are never reinstalled.
+	cleanupLegacyArtifacts(executableOf())
+
 	// Prefer explicit credentials. This runs as root from the update service,
 	// where the agent's state file resolves under a different HOME, so reading
 	// state quietly yields nothing there. The flags come from the unit, which
