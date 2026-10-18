@@ -1,11 +1,12 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import { formatRelative } from '../lib/format'
   import {
     containerCounts,
     filterContainers,
     portsSummary,
     stateTone,
+    type DockerAction,
     type DockerContainer,
     type DockerInfo,
     type DockerState,
@@ -13,9 +14,9 @@
   } from '../lib/docker'
   import { fetchContainerList, fetchDockerState, openDockerStream, runDockerCommand } from '../lib/docker-client'
   import type { HardwareStats } from '../lib/types'
-  import ContainerDrawer from './docker/ContainerDrawer.svelte'
-  import ComposeCard from './docker/ComposeCard.svelte'
   import CleanupCard from './docker/CleanupCard.svelte'
+  import ComposeCard from './docker/ComposeCard.svelte'
+  import ContainerPanel from './docker/ContainerPanel.svelte'
   import ConfirmDialog from './ui/ConfirmDialog.svelte'
   import EmptyState from './ui/EmptyState.svelte'
   import Icon from './ui/Icon.svelte'
@@ -29,7 +30,9 @@
   // paint instead of after the Docker state request returns.
   export let hardware: HardwareStats | undefined = undefined
 
-  type ActionName = 'start' | 'stop' | 'restart' | 'kill' | 'remove'
+  type View = 'containers' | 'compose' | 'cleanup'
+  // stop/restart/kill/remove interrupt work; start and pause do not.
+  const NEEDS_CONFIRM = new Set<DockerAction>(['stop', 'restart', 'kill', 'remove'])
 
   let containers: DockerContainer[] = []
   let info: DockerInfo | null = null
@@ -42,12 +45,15 @@
   let now = Date.now()
   let streamLive = false
 
+  let view: View = 'containers'
   let query = ''
   let statusFilter: DockerStatusFilter = 'all'
-  let selectedId = ''
+  // One expanded container at a time: the panel streams stats, and expanding
+  // several would multiply the command traffic for no extra information.
+  let expandedId = ''
 
   let actionBusyId = ''
-  let pendingAction: { action: ActionName; container: DockerContainer } | null = null
+  let pendingAction: { action: DockerAction; container: DockerContainer } | null = null
   let notice = ''
   let noticeTimer: ReturnType<typeof setTimeout> | null = null
   let confirmDialog = { title: '', message: '', label: '', destructive: false }
@@ -60,7 +66,6 @@
   $: engine = info || hardware?.docker_info || null
   $: engineAvailable = loaded ? available : hardware?.docker_available !== false
   $: filtered = filterContainers(containers, query, statusFilter)
-  $: selectedContainer = containers.find((container) => container.id === selectedId) || null
   $: syncedLabel = updatedAt ? formatRelative(updatedAt, now) : ''
 
   // Tiles show the live list once it exists and fall back to the engine summary
@@ -68,6 +73,10 @@
   $: runningCount = loaded ? counts.running : (engine?.running ?? 0)
   $: stoppedCount = loaded ? counts.stopped : (engine?.stopped ?? 0)
   $: pausedCount = loaded ? counts.paused : (engine?.paused ?? 0)
+
+  // Compose and cleanup need a reachable Docker engine. If it disappears while
+  // one of those tabs is open, go back to the container list.
+  $: if (loaded && !available && view !== 'containers') view = 'containers'
 
   $: if (currentDevice && deviceId !== currentDevice) {
     currentDevice = deviceId
@@ -95,7 +104,8 @@
     loaded = false
     loading = true
     error = ''
-    selectedId = ''
+    expandedId = ''
+    view = 'containers'
     updatedAt = 0
     streamLive = false
 
@@ -113,7 +123,7 @@
     available = state.available
     loaded = true
     updatedAt = Date.now()
-    if (selectedId && !containers.some((container) => container.id === selectedId)) selectedId = ''
+    if (expandedId && !containers.some((container) => container.id === expandedId)) expandedId = ''
   }
 
   async function loadCached() {
@@ -142,7 +152,7 @@
       available = true
       loaded = true
       updatedAt = Date.now()
-      if (selectedId && !list.some((container) => container.id === selectedId)) selectedId = ''
+      if (expandedId && !list.some((container) => container.id === expandedId)) expandedId = ''
     } catch (e: any) {
       error = e?.message || 'The device did not return its container list'
     } finally {
@@ -150,15 +160,15 @@
     }
   }
 
-  function quickAction(action: ActionName, container: DockerContainer) {
-    if (action === 'stop' || action === 'restart' || action === 'remove') {
+  function quickAction(action: DockerAction, container: DockerContainer) {
+    if (NEEDS_CONFIRM.has(action)) {
       pendingAction = { action, container }
       return
     }
     void performAction(action, container)
   }
 
-  async function performAction(action: ActionName, container: DockerContainer) {
+  async function performAction(action: DockerAction, container: DockerContainer) {
     actionBusyId = container.id
     error = ''
     try {
@@ -166,7 +176,7 @@
         headers: authHeaders,
         timeoutMs: 60_000
       })
-      if (action === 'remove') selectedId = ''
+      if (action === 'remove') expandedId = ''
       flash(actionNotice(action, container.name))
       // A mutation is followed by a real list command: waiting for the agent's
       // minute sample would leave the row showing the state it just left.
@@ -179,7 +189,7 @@
     }
   }
 
-  function actionNotice(action: ActionName, name: string): string {
+  function actionNotice(action: DockerAction, name: string): string {
     switch (action) {
       case 'start':
         return `Started ${name}`
@@ -189,6 +199,10 @@
         return `Restarted ${name}`
       case 'kill':
         return `Killed ${name}`
+      case 'pause':
+        return `Paused ${name}`
+      case 'unpause':
+        return `Resumed ${name}`
       case 'remove':
         return `Removed ${name}`
       default:
@@ -206,15 +220,17 @@
     return state.replace(/_/g, ' ')
   }
 
-  function openDetails(container: DockerContainer) {
-    selectedId = container.id
+  async function toggleDetails(container: DockerContainer) {
+    const opening = expandedId !== container.id
+    expandedId = opening ? container.id : ''
+    if (!opening) return
+    // Put the row at the top of the scroll container so the metrics and the
+    // tabs are visible instead of opening below the fold.
+    await tick()
+    document.getElementById(`docker-row-${container.id}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
   }
 
-  function closeDetails() {
-    selectedId = ''
-  }
-
-  function confirmCopy(action: { action: ActionName; container: DockerContainer } | null): { title: string; message: string; label: string; destructive: boolean } {
+  function confirmCopy(action: { action: DockerAction; container: DockerContainer } | null): { title: string; message: string; label: string; destructive: boolean } {
     if (!action) return { title: '', message: '', label: '', destructive: false }
     const name = action.container.name
     if (action.action === 'remove') {
@@ -222,6 +238,14 @@
         title: 'Remove container?',
         message: `This deletes ${name} and its writable layer. Named volumes and the image are kept.`,
         label: 'Remove',
+        destructive: true
+      }
+    }
+    if (action.action === 'kill') {
+      return {
+        title: 'Kill container?',
+        message: `This sends SIGKILL to ${name}. Its processes stop immediately without a graceful shutdown.`,
+        label: 'Kill',
         destructive: true
       }
     }
@@ -259,142 +283,157 @@
     <div class="notice" role="status">{notice}</div>
   {/if}
 
-  <div class="tiles">
-    <article class="tile">
-      <span class="label">Running</span>
-      <span class="value" class:text-ok={runningCount > 0}>{runningCount}</span>
-      <span class="sub">{refreshing ? 'syncing with device…' : loaded ? 'from this device' : 'last engine sample'}</span>
-    </article>
-    <article class="tile">
-      <span class="label">Stopped</span>
-      <span class="value">{stoppedCount}</span>
-      <span class="sub">containers on disk</span>
-    </article>
-    <article class="tile">
-      <span class="label">Paused</span>
-      <span class="value" class:text-warn={pausedCount > 0}>{pausedCount}</span>
-      <span class="sub">{pausedCount > 0 ? 'needs attention' : 'none paused'}</span>
-    </article>
-    <article class="tile">
-      <span class="label">Images</span>
-      <span class="value">{engine?.images ?? 0}</span>
-      <span class="sub">{engine?.version ? `engine ${engine.version}` : 'engine not reported'}</span>
-    </article>
-  </div>
-
-  <article class="containers-card">
-    <header class="card-head">
-      <div class="head-left">
-        <h2>Containers</h2>
-        <span class="engine-line">
-          {#if engine?.driver}{engine.driver} driver{/if}
-          {#if engine?.ncpu}· {engine.ncpu} CPUs{/if}
-          {#if syncedLabel}· synced {syncedLabel}{/if}
-        </span>
-      </div>
-      <div class="head-right">
-        <span class="live" class:on={streamLive} title={streamLive ? 'Updates arrive over the live stream' : 'The live stream is reconnecting'}>
-          <i></i>{streamLive ? 'Live' : 'Reconnecting'}
-        </span>
-        <button class="btn-ghost" on:click={() => void refreshList()} disabled={refreshing}>
-          <Icon name="refresh" size={13} /> {refreshing ? 'Asking device…' : 'Refresh'}
-        </button>
-      </div>
-    </header>
-
-    <div class="list-toolbar">
-      <div class="search">
-        <Icon name="search" size={14} />
-        <input type="search" bind:value={query} placeholder="Search name, image, id or port" aria-label="Filter containers" />
-        {#if query}
-          <button class="clear" on:click={() => (query = '')} aria-label="Clear filter"><Icon name="x" size={12} /></button>
-        {/if}
-      </div>
-      <div class="segmented" role="group" aria-label="Filter by container state">
-        <button class:active={statusFilter === 'all'} aria-pressed={statusFilter === 'all'} on:click={() => (statusFilter = 'all')}>
-          All <b>{counts.total}</b>
-        </button>
-        <button class:active={statusFilter === 'running'} aria-pressed={statusFilter === 'running'} on:click={() => (statusFilter = 'running')}>
-          Running <b>{counts.running}</b>
-        </button>
-        <button class:active={statusFilter === 'stopped'} aria-pressed={statusFilter === 'stopped'} on:click={() => (statusFilter = 'stopped')}>
-          Stopped <b>{counts.stopped}</b>
-        </button>
-        <button class:active={statusFilter === 'paused'} aria-pressed={statusFilter === 'paused'} on:click={() => (statusFilter = 'paused')}>
-          Paused <b>{counts.paused}</b>
-        </button>
-      </div>
-    </div>
-
-    {#if !engineAvailable}
-      <EmptyState
-        icon="🐳"
-        title="Docker not detected"
-        message="The agent could not reach /var/run/docker.sock on this device. Install Docker, or add the agent's user to the docker group, then scan again."
-        actionLabel="Scan again"
-        onAction={() => void loadCached()}
-      />
-    {:else if loading && !loaded}
-      <div class="pad"><Skeleton variant="list" rows={5} /></div>
-    {:else if loaded && containers.length === 0}
-      <EmptyState
-        icon="📦"
-        title="No containers"
-        message="Docker is running on this device, but there are no containers — running or stopped."
-      />
-    {:else if filtered.length === 0}
-      <EmptyState icon="🔍" title="No match" message="Adjust the search or the state filter." />
-    {:else}
-      <ul class="rows">
-        {#each filtered as container (container.id)}
-          <li class="row" class:sel={selectedId === container.id}>
-            <button class="row-main" on:click={() => openDetails(container)} aria-label={`Open details for ${container.name}`}>
-              <StatusPill label={stateLabel(container.state)} tone={stateTone(container.state)} />
-              <span class="ident">
-                <span class="name mono">{container.name}</span>
-                <span class="image">{container.image}</span>
-              </span>
-              <span class="ports" class:no-ports={container.ports.length === 0}>
-                {portsSummary(container) || 'no ports'}
-              </span>
-              <span class="state-text" title={container.status}>{container.status || '—'}</span>
-              <span class="chev"><Icon name="chevron" size={15} /></span>
-            </button>
-            <div class="row-actions">
-              {#if container.state === 'running'}
-                <button class="btn-ghost" disabled={actionBusyId === container.id} on:click={() => quickAction('stop', container)}>
-                  {actionBusyId === container.id ? 'Working…' : 'Stop'}
-                </button>
-              {:else if container.state === 'exited' || container.state === 'created' || container.state === 'dead'}
-                <button class="btn-ghost accent" disabled={actionBusyId === container.id} on:click={() => quickAction('start', container)}>
-                  {actionBusyId === container.id ? 'Working…' : 'Start'}
-                </button>
-              {/if}
-            </div>
-          </li>
-        {/each}
-      </ul>
+  <nav class="views" aria-label="Docker sections">
+    <button class:active={view === 'containers'} on:click={() => (view = 'containers')}>
+      Containers <b>{loaded ? counts.total : (engine?.total ?? 0)}</b>
+    </button>
+    {#if engineAvailable}
+      <button class:active={view === 'compose'} on:click={() => (view = 'compose')}>Compose</button>
+      <button class:active={view === 'cleanup'} on:click={() => (view = 'cleanup')}>Cleanup</button>
     {/if}
-  </article>
+  </nav>
 
-  {#if engineAvailable}
-    <div class="bottom">
-      <ComposeCard {deviceId} {authHeaders} onChanged={() => void refreshList()} />
-      <CleanupCard {deviceId} {authHeaders} onChanged={() => void refreshList()} />
+  {#if view === 'containers'}
+    <div class="tiles">
+      <article class="tile">
+        <span class="label">Running</span>
+        <span class="value" class:text-ok={runningCount > 0}>{runningCount}</span>
+        <span class="sub">{refreshing ? 'syncing with device…' : loaded ? 'from this device' : 'last engine sample'}</span>
+      </article>
+      <article class="tile">
+        <span class="label">Stopped</span>
+        <span class="value">{stoppedCount}</span>
+        <span class="sub">containers on disk</span>
+      </article>
+      <article class="tile">
+        <span class="label">Paused</span>
+        <span class="value" class:text-warn={pausedCount > 0}>{pausedCount}</span>
+        <span class="sub">{pausedCount > 0 ? 'needs attention' : 'none paused'}</span>
+      </article>
+      <article class="tile">
+        <span class="label">Images</span>
+        <span class="value">{engine?.images ?? 0}</span>
+        <span class="sub">{engine?.version ? `engine ${engine.version}` : 'engine not reported'}</span>
+      </article>
     </div>
+
+    <article class="containers-card">
+      <header class="card-head">
+        <div class="head-left">
+          <h2>Containers</h2>
+          <span class="engine-line">
+            {#if engine?.driver}{engine.driver} driver{/if}
+            {#if engine?.ncpu}· {engine.ncpu} CPUs{/if}
+            {#if syncedLabel}· synced {syncedLabel}{/if}
+          </span>
+        </div>
+        <div class="head-right">
+          <span class="live" class:on={streamLive} title={streamLive ? 'Updates arrive over the live stream' : 'The live stream is reconnecting'}>
+            <i></i>{streamLive ? 'Live' : 'Reconnecting'}
+          </span>
+          <button class="btn-ghost" on:click={() => void refreshList()} disabled={refreshing}>
+            <Icon name="refresh" size={13} /> {refreshing ? 'Asking device…' : 'Refresh'}
+          </button>
+        </div>
+      </header>
+
+      <div class="list-toolbar">
+        <div class="search">
+          <Icon name="search" size={14} />
+          <input type="search" bind:value={query} placeholder="Search name, image, id or port" aria-label="Filter containers" />
+          {#if query}
+            <button class="clear" on:click={() => (query = '')} aria-label="Clear filter"><Icon name="x" size={12} /></button>
+          {/if}
+        </div>
+        <div class="segmented" role="group" aria-label="Filter by container state">
+          <button class:active={statusFilter === 'all'} aria-pressed={statusFilter === 'all'} on:click={() => (statusFilter = 'all')}>
+            All <b>{counts.total}</b>
+          </button>
+          <button class:active={statusFilter === 'running'} aria-pressed={statusFilter === 'running'} on:click={() => (statusFilter = 'running')}>
+            Running <b>{counts.running}</b>
+          </button>
+          <button class:active={statusFilter === 'stopped'} aria-pressed={statusFilter === 'stopped'} on:click={() => (statusFilter = 'stopped')}>
+            Stopped <b>{counts.stopped}</b>
+          </button>
+          <button class:active={statusFilter === 'paused'} aria-pressed={statusFilter === 'paused'} on:click={() => (statusFilter = 'paused')}>
+            Paused <b>{counts.paused}</b>
+          </button>
+        </div>
+      </div>
+
+      {#if !engineAvailable}
+        <EmptyState
+          icon="🐳"
+          title="Docker not detected"
+          message="The agent could not reach /var/run/docker.sock on this device. Install Docker, or add the agent's user to the docker group, then scan again."
+          actionLabel="Scan again"
+          onAction={() => void loadCached()}
+        />
+      {:else if loading && !loaded}
+        <div class="pad"><Skeleton variant="list" rows={5} /></div>
+      {:else if loaded && containers.length === 0}
+        <EmptyState
+          icon="📦"
+          title="No containers"
+          message="Docker is running on this device, but there are no containers — running or stopped."
+        />
+      {:else if filtered.length === 0}
+        <EmptyState icon="🔍" title="No match" message="Adjust the search or the state filter." />
+      {:else}
+        <ul class="rows">
+          {#each filtered as container (container.id)}
+            <li class="row" class:sel={expandedId === container.id} id={`docker-row-${container.id}`}>
+              <button
+                class="row-main"
+                on:click={() => toggleDetails(container)}
+                aria-expanded={expandedId === container.id}
+                aria-label={`${expandedId === container.id ? 'Collapse' : 'Expand'} ${container.name}`}
+              >
+                <StatusPill label={stateLabel(container.state)} tone={stateTone(container.state)} />
+                <span class="ident">
+                  <span class="name mono">{container.name}</span>
+                  <span class="image">{container.image}</span>
+                </span>
+                <span class="ports" class:no-ports={container.ports.length === 0}>
+                  {portsSummary(container) || 'no ports'}
+                </span>
+                <span class="state-text" title={container.status}>{container.status || '—'}</span>
+                <span class="chev" class:open={expandedId === container.id}><Icon name="chevron" size={15} /></span>
+              </button>
+              <div class="row-actions">
+                {#if container.state === 'running'}
+                  <button class="btn-ghost" disabled={actionBusyId === container.id} on:click={() => quickAction('stop', container)}>
+                    {actionBusyId === container.id ? 'Working…' : 'Stop'}
+                  </button>
+                {:else if container.state === 'exited' || container.state === 'created' || container.state === 'dead'}
+                  <button class="btn-ghost accent" disabled={actionBusyId === container.id} on:click={() => quickAction('start', container)}>
+                    {actionBusyId === container.id ? 'Working…' : 'Start'}
+                  </button>
+                {/if}
+              </div>
+            </li>
+            {#if expandedId === container.id}
+              <li class="expansion">
+                <ContainerPanel
+                  {container}
+                  {deviceId}
+                  {authHeaders}
+                  busy={actionBusyId === container.id}
+                  onClose={() => (expandedId = '')}
+                  onAction={(action, target) => quickAction(action, target)}
+                />
+              </li>
+            {/if}
+          {/each}
+        </ul>
+      {/if}
+    </article>
+  {:else if view === 'compose'}
+    <ComposeCard {deviceId} {authHeaders} onChanged={() => void refreshList()} />
+  {:else}
+    <CleanupCard {deviceId} {authHeaders} onChanged={() => void refreshList()} />
   {/if}
 </section>
-
-{#if selectedContainer}
-  <ContainerDrawer
-    container={selectedContainer}
-    {deviceId}
-    {authHeaders}
-    busy={actionBusyId === selectedContainer.id}
-    onClose={closeDetails}
-    onAction={(action, container) => quickAction(action, container)}
-  />
-{/if}
 
 <ConfirmDialog
   open={pendingAction != null}
@@ -441,6 +480,34 @@
     color: var(--accent);
     font-size: 0.76rem;
   }
+
+  .views { display: flex; gap: 0.2rem; border-bottom: 1px solid var(--border); overflow-x: auto; }
+  .views button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.5rem 0.7rem;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .views button:hover { color: var(--text); }
+  .views button.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .views b {
+    padding: 0 0.35rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-pill);
+    color: var(--text-faint);
+    font-size: 0.64rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .views button.active b { border-color: var(--accent-border); color: var(--accent); }
 
   .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.6rem; }
   .tile {
@@ -532,7 +599,7 @@
 
   .pad { padding: 0.85rem 0.9rem; }
 
-  .rows { list-style: none; margin: 0; padding: 0; max-height: 58vh; overflow-y: auto; }
+  .rows { list-style: none; margin: 0; padding: 0; }
   .row {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -567,9 +634,11 @@
   .ports { color: var(--text-muted); font-size: 0.72rem; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ports.no-ports { color: var(--text-faint); }
   .state-text { color: var(--text-muted); font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .chev { color: var(--text-faint); display: inline-flex; }
+  .chev { color: var(--text-faint); display: inline-flex; transition: transform var(--t-fast); }
+  .chev.open { transform: rotate(90deg); color: var(--accent); }
 
   .row-actions { display: flex; gap: 0.35rem; padding-right: 0.8rem; }
+  .expansion { display: block; }
 
   .btn-ghost {
     display: inline-flex;
@@ -589,10 +658,7 @@
   .btn-ghost.accent { color: var(--accent); border-color: var(--accent-border); }
   .btn-ghost:disabled { opacity: 0.5; cursor: default; }
 
-  .bottom { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr); gap: 0.85rem; align-items: start; }
-
   @media (max-width: 980px) {
-    .bottom { grid-template-columns: 1fr; }
     .row-main { grid-template-columns: auto minmax(0, 1.6fr) auto; }
     .ports, .state-text { display: none; }
     .row-actions { padding-right: 0.6rem; }

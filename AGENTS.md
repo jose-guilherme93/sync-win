@@ -87,7 +87,7 @@ sync-win/
 │   │   │   ├── screens/            # Home, DeviceOverview, CpuThermal, Memory, Sensors, Alerts, Reports, Storage, Network, Services, Security, Docker, Processes, Packages, RemoteAccess, DeviceSettings, DeviceLogs, AppSettings
 │   │   │   ├── DeviceModal.svelte  # Device detail tabs; variant="page" renders inline
 │   │   │   ├── DockerTab.svelte    # Docker container list, actions, live state
-│   │   │   ├── docker/             # Container drawer, compose editor, cleanup cards
+│   │   │   ├── docker/             # Inline container panel, compose editor, cleanup cards
 │   │   │   ├── SystemMetrics.svelte    # Detailed hardware telemetry
 │   │   │   ├── NotificationsModal.svelte  # Notification settings and inbox
 │   │   │   └── NotificationToast.svelte   # Toast notifications

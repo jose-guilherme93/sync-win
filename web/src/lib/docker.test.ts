@@ -1,18 +1,23 @@
 import { describe, expect, it } from 'vitest'
 import {
   containerCounts,
+  deriveRates,
   filterContainers,
+  filterLogLines,
   friendlyDockerError,
+  normalizeLogText,
   normalizeContainer,
   normalizeContainers,
   normalizeDockerState,
   parseComposeFiles,
+  parseContainerInspect,
   parseContainerList,
   portLabel,
   portsSummary,
   shortId,
   stateTone,
   statsFromMessage,
+  stripLogTimestamps,
   type DockerContainer
 } from './docker'
 
@@ -250,5 +255,131 @@ describe('statsFromMessage', () => {
     expect(() => statsFromMessage('')).toThrow(/no container statistics/)
     expect(() => statsFromMessage('nope')).toThrow(/unreadable/)
     expect(() => statsFromMessage('[]')).toThrow(/unexpected/)
+  })
+})
+
+describe('parseContainerInspect', () => {
+  it('normalises the filtered inspect payload', () => {
+    const detail = parseContainerInspect(
+      JSON.stringify({
+        id: 'abc',
+        name: '/web',
+        image: 'sha256:1',
+        platform: 'linux',
+        created: '2026-10-18T10:00:00Z',
+        restart_policy: 'unless-stopped',
+        readonly_rootfs: true,
+        memory_limit_bytes: 268435456,
+        nano_cpus: 500000000,
+        command: ['server', '--token=***'],
+        entrypoint: ['/entrypoint.sh'],
+        working_dir: '/app',
+        user: '1000:1000',
+        state: { status: 'running', running: true, pid: 42, exit_code: 0 },
+        health: { status: 'healthy', failing_streak: 0 },
+        networks: [
+          { name: 'alpha', ip_address: '10.0.0.2', gateway: '10.0.0.1', aliases: ['web'] },
+          { name: '' }
+        ],
+        mounts: [{ type: 'bind', source: '/srv', destination: '/app', rw: true }],
+        labels: { 'com.example.app': 'web', 'com.example.skip': 42 }
+      })
+    )
+    expect(detail).toMatchObject({
+      id: 'abc',
+      name: 'web',
+      restart_policy: 'unless-stopped',
+      readonly_rootfs: true,
+      memory_limit_bytes: 268435456,
+      nano_cpus: 500000000,
+      working_dir: '/app',
+      user: '1000:1000'
+    })
+    expect(detail.state).toMatchObject({ running: true, pid: 42, status: 'running' })
+    expect(detail.networks).toHaveLength(1)
+    expect(detail.mounts).toHaveLength(1)
+    expect(detail.labels).toEqual({ 'com.example.app': 'web' })
+    expect(detail.health?.status).toBe('healthy')
+  })
+
+  it('defaults a missing restart policy and health', () => {
+    const detail = parseContainerInspect(JSON.stringify({ id: 'abc' }))
+    expect(detail.restart_policy).toBe('no')
+    expect(detail.health).toBeNull()
+    expect(detail.networks).toEqual([])
+  })
+
+  it('reports missing or malformed detail instead of rendering empty facts', () => {
+    expect(() => parseContainerInspect('')).toThrow(/no container detail/)
+    expect(() => parseContainerInspect('nope')).toThrow(/unreadable/)
+    expect(() => parseContainerInspect('[]')).toThrow(/unexpected/)
+  })
+})
+
+describe('deriveRates', () => {
+  const base = {
+    cpu_usage_percent: 1,
+    memory_usage_bytes: 10,
+    memory_limit_bytes: 100,
+    memory_percent: 10,
+    network_rx_bytes: 1000,
+    network_tx_bytes: 2000,
+    block_read_bytes: 3000,
+    block_write_bytes: 4000,
+    pids: 1
+  }
+
+  it('returns zero for the first sample', () => {
+    expect(deriveRates(null, base, 2000)).toEqual({ rx_rate: 0, tx_rate: 0, read_rate: 0, write_rate: 0 })
+  })
+
+  it('converts counter deltas into per-second rates', () => {
+    const next = {
+      ...base,
+      network_rx_bytes: 3000,
+      network_tx_bytes: 3000,
+      block_read_bytes: 5000,
+      block_write_bytes: 5000
+    }
+    expect(deriveRates(base, next, 2000)).toEqual({
+      rx_rate: 1000,
+      tx_rate: 500,
+      read_rate: 1000,
+      write_rate: 500
+    })
+  })
+
+  it('treats a counter reset as zero rather than a negative spike', () => {
+    const restarted = { ...base, network_rx_bytes: 10, network_tx_bytes: 10, block_read_bytes: 10, block_write_bytes: 10 }
+    expect(deriveRates(base, restarted, 2000)).toEqual({ rx_rate: 0, tx_rate: 0, read_rate: 0, write_rate: 0 })
+  })
+
+  it('does not divide by a non-positive interval', () => {
+    expect(deriveRates(base, base, 0).rx_rate).toBe(0)
+  })
+})
+
+describe('log helpers', () => {
+  const lines = [
+    '2026-10-18T12:00:00.123456789Z server listening on :8080',
+    '2026-10-18T12:00:01.000000000Z GET /health 200',
+    'no timestamp here'
+  ].join('\n')
+
+  it('strips the per-line timestamp without touching the message', () => {
+    expect(stripLogTimestamps(lines)).toBe(
+      ['server listening on :8080', 'GET /health 200', 'no timestamp here'].join('\n')
+    )
+  })
+
+  it('splits a record that arrived without a trailing newline', () => {
+    expect(normalizeLogText('first line2026-10-18T12:00:02Z second')).toBe(
+      'first line\n2026-10-18T12:00:02Z second'
+    )
+  })
+
+  it('filters lines case-insensitively', () => {
+    expect(filterLogLines(lines, 'GET')).toBe('2026-10-18T12:00:01.000000000Z GET /health 200')
+    expect(filterLogLines(lines, '')).toBe(lines)
   })
 })

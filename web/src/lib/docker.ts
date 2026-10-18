@@ -67,6 +67,67 @@ export type DockerComposeFile = {
   size_bytes: number
 }
 
+export type DockerDetailState = {
+  status: string
+  running: boolean
+  paused: boolean
+  restarting: boolean
+  oom_killed: boolean
+  dead: boolean
+  pid: number
+  exit_code: number
+  error?: string
+  started_at?: string
+  finished_at?: string
+}
+
+export type DockerNetwork = {
+  name: string
+  ip_address?: string
+  gateway?: string
+  mac_address?: string
+  aliases?: string[]
+}
+
+export type DockerHealth = {
+  status: string
+  failing_streak: number
+}
+
+// Operational detail from the agent's filtered inspect. Env is intentionally
+// absent; the agent never sends it.
+export type DockerContainerDetail = {
+  id: string
+  name: string
+  image: string
+  platform: string
+  created: string
+  state: DockerDetailState
+  restart_policy: string
+  auto_remove: boolean
+  privileged: boolean
+  readonly_rootfs: boolean
+  memory_limit_bytes: number
+  nano_cpus: number
+  command: string[]
+  entrypoint: string[]
+  working_dir: string
+  user: string
+  mounts: DockerMount[]
+  networks: DockerNetwork[]
+  health: DockerHealth | null
+  labels: Record<string, string>
+}
+
+export type DockerAction = 'start' | 'stop' | 'restart' | 'kill' | 'remove' | 'pause' | 'unpause'
+
+export type DockerRates = {
+  rx_rate: number
+  tx_rate: number
+  read_rate: number
+  write_rate: number
+}
+
 export type DockerCommandResult = {
   id?: string
   request_id?: string
@@ -312,12 +373,36 @@ export function parseComposeFiles(message: string | undefined): DockerComposeFil
 // The agent answers a request with a status and, on failure, its reason. Two
 // reasons are common enough to deserve a sentence instead of the terse wire
 // string; anything else travels through unchanged.
+const ACTION_LABELS: Record<string, string> = {
+  list: 'list containers',
+  inspect: 'read container details',
+  stats: 'read container stats',
+  logs: 'read container logs',
+  start: 'start',
+  stop: 'stop',
+  restart: 'restart',
+  kill: 'kill',
+  remove: 'remove',
+  pause: 'pause',
+  unpause: 'resume',
+  exec: 'run the command',
+  compose_read: 'read compose files',
+  compose_write: 'save the compose file',
+  compose_up: 'deploy the compose file',
+  compose_down: 'stop the compose project',
+  prune_system: 'prune Docker',
+  prune_image: 'prune images',
+  prune_container: 'prune containers',
+  prune_network: 'prune networks'
+}
+
 export function friendlyDockerError(message: string | undefined, action = ''): string {
   const raw = (message || '').trim()
-  const doing = action ? `Could not ${action}: ` : ''
+  const label = ACTION_LABELS[action] || action
+  const doing = label ? `Could not ${label}: ` : ''
   if (!raw) return `${doing}the device returned no reason`
   if (raw.includes('command disabled by local policy')) {
-    return `${doing}Docker ${action || 'command'} is disabled by this device's local policy.`
+    return `${doing}the device's local policy blocks this Docker action.`
   }
   if (raw.includes('docker not available')) {
     return 'Docker is not available on this device. The agent may need access to the Docker socket.'
@@ -347,4 +432,130 @@ export function statsFromMessage(message: string | undefined): DockerStats {
     block_write_bytes: asNumber(parsed.block_write_bytes),
     pids: asNumber(parsed.pids)
   }
+}
+
+// Parses the agent's filtered inspect result. A missing or malformed body is an
+// error so the panel can say why it has no detail instead of rendering empty
+// facts.
+export function parseContainerInspect(message: string | undefined): DockerContainerDetail {
+  if (!message || !message.trim()) throw new Error('The device returned no container detail')
+  let parsed: any
+  try {
+    parsed = JSON.parse(message)
+  } catch {
+    throw new Error('The device returned unreadable container detail')
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('The device returned unexpected container detail')
+  }
+
+  const state = parsed.state && typeof parsed.state === 'object' ? parsed.state : {}
+  const health = parsed.health && typeof parsed.health === 'object' ? parsed.health : null
+  const networks: DockerNetwork[] = []
+  for (const raw of Array.isArray(parsed.networks) ? parsed.networks : []) {
+    if (!raw || typeof raw !== 'object') continue
+    const name = asString(raw.name)
+    if (!name) continue
+    networks.push({
+      name,
+      ip_address: asString(raw.ip_address) || undefined,
+      gateway: asString(raw.gateway) || undefined,
+      mac_address: asString(raw.mac_address) || undefined,
+      aliases: Array.isArray(raw.aliases) ? raw.aliases.filter((a: unknown) => typeof a === 'string') : undefined
+    })
+  }
+
+  const mounts: DockerMount[] = []
+  for (const raw of Array.isArray(parsed.mounts) ? parsed.mounts : []) {
+    const mount = normalizeMount(raw)
+    if (mount) mounts.push(mount)
+  }
+
+  const labels: Record<string, string> = {}
+  if (parsed.labels && typeof parsed.labels === 'object' && !Array.isArray(parsed.labels)) {
+    for (const [key, value] of Object.entries(parsed.labels)) {
+      if (typeof value === 'string') labels[key] = value
+    }
+  }
+
+  return {
+    id: asString(parsed.id),
+    name: asString(parsed.name).replace(/^\//, ''),
+    image: asString(parsed.image),
+    platform: asString(parsed.platform),
+    created: asString(parsed.created),
+    state: {
+      status: asString(state.status),
+      running: state.running === true,
+      paused: state.paused === true,
+      restarting: state.restarting === true,
+      oom_killed: state.oom_killed === true,
+      dead: state.dead === true,
+      pid: asNumber(state.pid),
+      exit_code: asNumber(state.exit_code),
+      error: asString(state.error) || undefined,
+      started_at: asString(state.started_at) || undefined,
+      finished_at: asString(state.finished_at) || undefined
+    },
+    restart_policy: asString(parsed.restart_policy) || 'no',
+    auto_remove: parsed.auto_remove === true,
+    privileged: parsed.privileged === true,
+    readonly_rootfs: parsed.readonly_rootfs === true,
+    memory_limit_bytes: asNumber(parsed.memory_limit_bytes),
+    nano_cpus: asNumber(parsed.nano_cpus),
+    command: Array.isArray(parsed.command) ? parsed.command.filter((a: unknown) => typeof a === 'string') : [],
+    entrypoint: Array.isArray(parsed.entrypoint) ? parsed.entrypoint.filter((a: unknown) => typeof a === 'string') : [],
+    working_dir: asString(parsed.working_dir),
+    user: asString(parsed.user),
+    mounts,
+    networks,
+    health: health
+      ? { status: asString(health.status), failing_streak: asNumber(health.failing_streak) }
+      : null,
+    labels
+  }
+}
+
+// Docker stats counters are cumulative. Rates are the difference over time;
+// a counter that went backwards means the container restarted, so the sample
+// contributes zero instead of a huge negative spike.
+export function deriveRates(previous: DockerStats | null, next: DockerStats, elapsedMs: number): DockerRates {
+  const zero: DockerRates = { rx_rate: 0, tx_rate: 0, read_rate: 0, write_rate: 0 }
+  if (!previous || !Number.isFinite(elapsedMs) || elapsedMs <= 0) return zero
+  const seconds = elapsedMs / 1000
+  const delta = (before: number, after: number): number => (after >= before ? (after - before) / seconds : 0)
+  return {
+    rx_rate: delta(previous.network_rx_bytes, next.network_rx_bytes),
+    tx_rate: delta(previous.network_tx_bytes, next.network_tx_bytes),
+    read_rate: delta(previous.block_read_bytes, next.block_read_bytes),
+    write_rate: delta(previous.block_write_bytes, next.block_write_bytes)
+  }
+}
+
+// docker logs prepends RFC3339Nano timestamps when asked for them. The panel
+// toggles them off by default so the message starts at the left edge.
+const LOG_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\S+\s/
+
+// Docker occasionally frames a record without a trailing newline, which makes
+// two timestamps land on one visual line. Split before any RFC3339 timestamp
+// that follows non-newline content.
+export function normalizeLogText(text: string): string {
+  if (!text) return ''
+  return text.replace(/([^\n])(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})/g, '$1\n$2')
+}
+
+export function stripLogTimestamps(text: string): string {
+  return text
+    .split('\n')
+    .map((line) => line.replace(LOG_TIMESTAMP, ''))
+    .join('\n')
+}
+
+export function filterLogLines(text: string, query: string): string {
+  const needle = query.trim().toLowerCase()
+  if (!needle) return text
+  return text
+    .split('\n')
+    .filter((line) => line.toLowerCase().includes(needle))
+    .join('\n')
 }

@@ -243,9 +243,9 @@ func runDockerRequestPoller(ctx context.Context, serverURL, deviceID, deviceToke
 
 func dockerRequestAllowed(policy localPolicy, reqType string) bool {
 	switch reqType {
-	case "list", "stats", "logs":
+	case "list", "inspect", "stats", "logs":
 		return policy.AllowDockerRead
-	case "start", "stop", "restart", "kill", "remove":
+	case "start", "stop", "restart", "kill", "remove", "pause", "unpause":
 		return policy.AllowDockerLifecycle
 	case "exec":
 		return policy.AllowDockerExec
@@ -285,6 +285,17 @@ func executeDockerRequest(req dockerRequest) dockerResult {
 		}
 		return dockerResult{"completed", string(data)}
 
+	case "inspect":
+		detail, err := collectors.DockerContainerInspect(req.Target)
+		if err != nil {
+			return dockerResult{"failed", err.Error()}
+		}
+		data, err := json.Marshal(detail)
+		if err != nil {
+			return dockerResult{"failed", err.Error()}
+		}
+		return dockerResult{"completed", string(data)}
+
 	case "stats":
 		stats, err := collectors.DockerContainerStats(req.Target)
 		if err != nil {
@@ -310,7 +321,7 @@ func executeDockerRequest(req dockerRequest) dockerResult {
 		}
 		return dockerResult{"completed", logs}
 
-	case "start", "stop", "restart", "kill":
+	case "start", "stop", "restart", "kill", "pause", "unpause":
 		err := collectors.DockerContainerAction(req.Target, req.Type)
 		if err != nil {
 			return dockerResult{"failed", err.Error()}

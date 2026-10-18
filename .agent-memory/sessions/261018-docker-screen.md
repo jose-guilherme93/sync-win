@@ -91,3 +91,37 @@ not match the rest of the dashboard.
 - Paused containers cannot be started or restarted by Docker; the UI says so
   instead of offering a button that fails. Unpause is not in the agent's request
   type list.
+
+## Follow-up: inline panel instead of a drawer
+
+The first version put details in a 470 px right-hand drawer. On review it was
+rejected: the logs were too narrow to read, and the details opened away from the
+row that was clicked. The revised screen was specified through a grilling round
+and agreed:
+
+- Clicking a container expands a full-width panel **below its row**, one at a
+  time. The row scrolls to the top so the panel is visible immediately.
+- The panel always shows CPU, memory, network (derived rates), disk I/O
+  (derived rates) and PIDs. Tabs underneath are `Info | Logs | Terminal`.
+- The screen itself has top-level tabs `Containers | Compose | Cleanup`, so the
+  maintenance cards no longer compete for vertical space with the list.
+- Stats use one self-scheduling request at a time (500 ms pause after a result),
+  and stop when the panel collapses or the tab is hidden. No per-row metrics.
+- Logs poll a tail every 3 s while the tab is open, with wrap, timestamp toggle,
+  text filter, line-count selector and copy. A record without a trailing newline
+  is split at the next RFC3339 timestamp.
+- `inspect` was added for networks, health, restart policy, entrypoint/command,
+  mounts and labels. Env is never returned; credential-looking labels and
+  command arguments are masked. `pause`/`unpause` were added, and `kill` is in
+  the panel with confirmation.
+- The Docker package has no new dependencies; sparklines stay on the existing
+  canvas primitive.
+
+Verification on the real dev stack: inspect over the new agent, pause/resume on
+a disposable container, kill/remove, exec, live metrics and full-width logs.
+`npm run test` 215 passed, `svelte-check` 0 errors, build clean, `go test ./...`
+and golangci-lint clean, e2e 68/68.
+
+The dev stack still runs with `SYNCWIN_ENABLE_DOCKER_MUTATIONS=false`, so
+mutations answer a clear 403 until that flag is enabled; reads, metrics, logs
+and inspect work regardless.

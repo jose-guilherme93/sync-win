@@ -151,12 +151,7 @@
 
   {#if loading && !scanned}
     <p class="subtle pad">Scanning the usual compose locations…</p>
-  {:else if files.length === 0}
-    <p class="subtle pad">
-      No compose project was found. The agent looks in the usual locations, such as
-      <span class="mono">/opt</span>, <span class="mono">/srv</span> and the service user's home.
-    </p>
-  {:else}
+  {:else if files.length > 0}
     <ul class="files">
       {#each files as file (file.path)}
         <li class:sel={selected?.path === file.path}>
@@ -171,6 +166,11 @@
         </li>
       {/each}
     </ul>
+  {:else if !error}
+    <p class="subtle pad">
+      No compose project was found. The agent looks in the usual locations, such as
+      <span class="mono">/opt</span>, <span class="mono">/srv</span> and the service user's home.
+    </p>
   {/if}
 
   {#if selected}

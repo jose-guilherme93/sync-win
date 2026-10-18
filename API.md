@@ -802,6 +802,14 @@ broadcasts the new state.
 
 Queue a Docker command from the dashboard. Requires session token.
 
+Allowed types: `list`, `inspect`, `stats`, `logs`, `start`, `stop`, `restart`,
+`kill`, `pause`, `unpause`, `remove`, `exec`, `compose_read`, `compose_write`,
+`compose_up`, `compose_down`, `compose_ps`, `compose_logs`, `prune_system`,
+`prune_image`, `prune_container`, `prune_network`. Read-only types (`list`,
+`inspect`, `stats`, `logs` and the compose read/ps/logs queries) are allowed
+when Docker mutations are disabled; mutations answer `403` with
+`{"error":"docker mutations are disabled on this server"}`.
+
 **Request:**
 ```json
 {
@@ -820,7 +828,11 @@ Queue a Docker command from the dashboard. Requires session token.
 
 #### `GET /api/devices/{id}/docker/result/{request_id}`
 
-Get the result of a Docker request. Requires session token.
+Get the result of a Docker request. Requires session token. `inspect` returns a
+filtered container detail (`id`, `name`, `image`, `state`, `networks`,
+`health`, `restart_policy`, entrypoint/command, mounts and labels). Environment
+variables are never returned, and credential-looking arguments and labels are
+masked by the agent.
 
 **Response:** `200 OK` (result object) or `202 Accepted` (still pending, empty body)
 

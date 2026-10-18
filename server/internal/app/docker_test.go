@@ -150,3 +150,31 @@ func postDockerResult(t *testing.T, s *Server, deviceID, token, requestID, statu
 		t.Fatalf("docker result status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 }
+
+// The dashboard and the agent must agree on the request vocabulary. A type
+// accepted here but rejected by the agent leaves the UI waiting for a result
+// that can never arrive.
+func TestDockerRequestTypeAllowlist(t *testing.T) {
+	for _, reqType := range []string{
+		"list", "inspect", "stats", "logs",
+		"start", "stop", "restart", "kill", "remove", "pause", "unpause",
+		"exec",
+		"compose_read", "compose_write", "compose_up", "compose_down", "compose_ps", "compose_logs",
+		"prune_system", "prune_image", "prune_container", "prune_network",
+	} {
+		if !validDockerRequestType(reqType) {
+			t.Errorf("%q should be accepted", reqType)
+		}
+	}
+	for _, reqType := range []string{"", "rm", "inspect_all", "PAUSE", "stats "} {
+		if validDockerRequestType(reqType) {
+			t.Errorf("%q should be rejected", reqType)
+		}
+	}
+	if !dockerRequestIsReadOnly("inspect") {
+		t.Error("inspect must be allowed when Docker mutations are disabled")
+	}
+	if dockerRequestIsReadOnly("pause") {
+		t.Error("pause is a mutation")
+	}
+}
