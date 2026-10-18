@@ -12,6 +12,8 @@
 #   - device selection from the fleet table enabling the scoped sidebar
 #   - the Services screen rendering seeded services and ports
 #   - both filters, "problems only", and the error state with retry
+#   - a device kept online on the widest chart window, with the gauge following
+#     new telemetry (the frozen-detail / range-owned-poll regression)
 #
 # What it does not cover: the nine other screens, responsive breakpoints, and
 # anything requiring a real agent on a real machine.
@@ -38,6 +40,7 @@ WORK="$(mktemp -d)"
 COOKIES="${WORK}/cookies.txt"
 FAILURES=0
 CHECKS=0
+HEARTBEAT_PID=""
 
 # agent-browser is not reliably on PATH: global npm installs land in the
 # versioned node prefix, and `npm bin -g` no longer exists on npm 9+. Derive the
@@ -67,7 +70,16 @@ if ! command -v agent-browser >/dev/null 2>&1; then
   exit 2
 fi
 
+stop_heartbeat() {
+  if [ -n "${HEARTBEAT_PID}" ]; then
+    kill "${HEARTBEAT_PID}" 2>/dev/null || true
+    wait "${HEARTBEAT_PID}" 2>/dev/null || true
+    HEARTBEAT_PID=""
+  fi
+}
+
 cleanup() {
+  stop_heartbeat
   timeout "${AB_CMD_TIMEOUT:-45}" agent-browser close --all >/dev/null 2>&1 || true
   rm -rf "${WORK}"
 }
@@ -140,6 +152,18 @@ wait_for_like() {
 # click_text <exact label> — clicks the button whose text matches exactly.
 click_text() {
   eval_js "(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.textContent.trim()===${1@Q});if(!b)return 'MISSING';if(b.disabled)return 'DISABLED';b.click();return 'CLICKED';})()"
+}
+
+# Keep the seeded device reporting for the whole run. The status section waits
+# past the 30s stale threshold, and the rest of the sweep takes minutes; a
+# single heartbeat at seed time would leave the device offline by then.
+heartbeat_loop() {
+  while true; do
+    curl -fsS -o /dev/null -X POST "${BASE}/api/devices/${DEVICE_ID}/heartbeat" \
+      -H "Authorization: Bearer ${DEVICE_TOKEN}" -H 'Content-Type: application/json' \
+      -d "{\"device_token\":\"${DEVICE_TOKEN}\"}" || true
+    sleep 5
+  done
 }
 
 # ---------------------------------------------------------------------------
@@ -278,6 +302,11 @@ HEARTBEAT=$(curl -fsS -o /dev/null -w '%{http_code}' -X POST "${BASE}/api/device
   -H "Authorization: Bearer ${DEVICE_TOKEN}" -H 'Content-Type: application/json' \
   -d "{\"device_token\":\"${DEVICE_TOKEN}\"}")
 check "heartbeat accepted" "${HEARTBEAT}" "200"
+
+# The live-status section below waits past the stale threshold after a full
+# sweep, so the seeded device has to keep reporting for the whole run.
+heartbeat_loop &
+HEARTBEAT_PID=$!
 
 # ---------------------------------------------------------------------------
 section "Sign in"
@@ -663,6 +692,61 @@ else
 fi
 
 check "KPI cards share a bottom edge" "${KPI_BOTTOMS}" "ALIGNED"
+
+# ---------------------------------------------------------------------------
+section "Live device status"
+# ---------------------------------------------------------------------------
+
+# Regression for the frozen /detail snapshot and the range-owned heartbeat poll.
+# The heartbeat loop keeps the server fresh, so a screen that reports stale here
+# is reading old data. The 7d window matters: it used to drop the device poll to
+# five minutes, which made a healthy device look stale after 30s.
+click_text 'Home' >/dev/null
+sleep 2
+ROW=$(eval_js "(()=>{const r=[...document.querySelectorAll('tr,[role=row]')].find(x=>x.textContent.includes(${HOSTNAME@Q}));if(!r)return 'MISSING';r.click();return 'CLICKED';})()")
+check "device reselected for the live check" "${ROW}" "CLICKED"
+sleep 2
+
+TOPBAR_STATUS=$(unquote "$(eval_js "document.querySelector('.topbar .status-dot .text')?.textContent.trim() || ''")")
+check "topbar reports online after selection" "${TOPBAR_STATUS}" "online"
+
+check "widest chart window selected" "$(unquote "$(click_text '7d')")" "CLICKED"
+sleep 1
+
+CPU_BEFORE=$(unquote "$(eval_js "document.querySelector('[role=img][aria-label^=\"CPU:\"]')?.getAttribute('aria-label') || ''")")
+check "CPU gauge is rendered" "${CPU_BEFORE}" "CPU:"
+
+# Push a sample far from the seeded 12.5% so the gauge has to change.
+python3 - "${WORK}/telemetry.json" "${WORK}/telemetry-live.json" <<'PY'
+import datetime, json, sys
+data = json.load(open(sys.argv[1]))
+data["cpu_usage_percent"] = 77.5
+data["collected_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+json.dump(data, open(sys.argv[2], "w"))
+PY
+LIVE_TELEMETRY=$(curl -fsS -o /dev/null -w '%{http_code}' -X POST "${BASE}/api/devices/${DEVICE_ID}/telemetry" \
+  -H "Authorization: Bearer ${DEVICE_TOKEN}" -H 'Content-Type: application/json' \
+  -d "{\"device_token\":\"${DEVICE_TOKEN}\",\"hardware\":$(cat "${WORK}/telemetry-live.json")}")
+check "live telemetry sample accepted" "${LIVE_TELEMETRY}" "2"
+
+# Past the old 30s stale threshold on the widest window.
+sleep 35
+
+TOPBAR_STATUS=$(unquote "$(eval_js "document.querySelector('.topbar .status-dot .text')?.textContent.trim() || ''")")
+check "topbar stays online after 35s on a 7d window" "${TOPBAR_STATUS}" "online"
+
+CPU_AFTER=$(unquote "$(eval_js "document.querySelector('[role=img][aria-label^=\"CPU:\"]')?.getAttribute('aria-label') || ''")")
+if [ "${CPU_AFTER}" != "${CPU_BEFORE}" ]; then
+  ok "CPU gauge follows the new telemetry (${CPU_BEFORE} -> ${CPU_AFTER})"
+else
+  fail "CPU gauge follows the new telemetry" "stayed at ${CPU_AFTER}"
+fi
+
+# The fleet view and the device view must agree: this was the reported symptom.
+click_text 'Home' >/dev/null
+sleep 2
+HOME_STATUS=$(unquote "$(eval_js "(()=>{const r=[...document.querySelectorAll('tbody tr')].find(x=>x.textContent.includes(${HOSTNAME@Q}));if(!r)return 'MISSING';const d=r.querySelector('.status-dot');return d?(d.className.includes('ok')?'ok':d.className):'NO-DOT';})()")")
+check "fleet row agrees the device is online" "${HOME_STATUS}" "ok"
 
 # ---------------------------------------------------------------------------
 printf '\n== %s\n' "Result"

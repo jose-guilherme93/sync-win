@@ -62,10 +62,13 @@ Worktree `sync-win-live-device`, branch `fix/live-device-status`.
 
 - `npm run test`: **21 files / 161 tests** (3 new), `svelte-check` 0 errors,
   `vite build` clean.
-- The merge is unit-tested. The live check (open a device for 2+ minutes and
-  confirm status/gauges do not freeze; switch Live/1h/24h; press refresh) is
-  left for the operator against the dev stack, because agent-browser is not
-  installed on this host.
+- The merge is unit-tested.
+- **End to end, against the real dev stack** (`WEB_PORT=5174 scripts/e2e.sh`):
+  the suite now starts a background heartbeat loop for the seeded device,
+  switches to the 7d window, waits past the 30s stale threshold and asserts the
+  topbar is still online, the CPU gauge moves from the seeded 12.5% to 77.5%
+  (`CPU: 13%` → `CPU: 78%`), and the fleet row's status dot agrees. All **67
+  checks passed**.
 
 ## Follow-up (same day)
 
@@ -79,8 +82,6 @@ series and sampling stamp).
 
 ## Not done
 
-- No end-to-end test for "stays online while a device keeps heartbeating"; the
-  e2e suite seeds a device without a live agent.
 - The stale/offline thresholds remain 30s/5min. With a 10s poll, a device that
   stops is detected within one threshold, not instantly.
 - `formatRelative` still re-renders every 15s from the app clock; status itself
