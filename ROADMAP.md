@@ -230,6 +230,10 @@ A funcionalidade P1 está concluída. A próxima etapa é uma nova priorização
 - [x] Notification settings UI (NotificationsModal.svelte)
 - [x] Notification inbox with mark-as-read
 - [x] Toast notifications (NotificationToast.svelte)
+- [x] central de notificações em Administration: inbox com filtros, unread, marcar lido/tudo lido e link para o device
+- [x] preferências por evento no canal in-app, com som (beep/chime/pulse/silent), volume e preview persistidos no servidor
+- [x] catálogo de eventos servido pelo backend (`GET /api/notifications/events`) usado pelos três canais
+- [x] bell como preview (5 itens, contador) e acesso ao centro; modal de configurações removido
 - [x] Telegram chat detection endpoint
 
 ## FASE 17 — Logging and Observability

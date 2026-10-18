@@ -247,6 +247,7 @@ func Run() error {
 	// Notification providers and inbox
 	mux.HandleFunc("/api/notifications/config", server.handleNotificationConfig)
 	mux.HandleFunc("/api/notifications/providers", server.handleNotificationProviders)
+	mux.HandleFunc("/api/notifications/events", server.handleNotificationEvents)
 	mux.HandleFunc("/api/notifications/test", server.handleNotificationTest)
 	mux.HandleFunc("/api/notifications/telegram/detect-chat", server.handleTelegramDetectChat)
 	mux.HandleFunc("/api/notifications/inbox", server.handleNotificationInbox)
@@ -3165,13 +3166,19 @@ func (s *Server) handleNotificationConfig(w http.ResponseWriter, r *http.Request
 				Configured: true,
 			})
 		}
-		// Ensure web_inbox is always present.
+		// Ensure web_inbox is always present. A fresh account receives every
+		// event; events_set=false tells the dashboard the list is a default, not
+		// a deliberate empty selection.
 		if !seen["web_inbox"] {
+			events := make([]string, 0, len(notify.AllEventTypes))
+			for _, e := range notify.AllEventTypes {
+				events = append(events, string(e))
+			}
 			result = append(result, notificationConfigResponse{
 				Provider:   "web_inbox",
 				Enabled:    true,
-				Events:     []string{},
-				Config:     json.RawMessage(`{"sound":"beep"}`),
+				Events:     events,
+				Config:     json.RawMessage(`{"sound":"beep","volume":0.5,"events_set":false}`),
 				Configured: false,
 			})
 		}
@@ -3359,7 +3366,13 @@ func (s *Server) handleNotificationInbox(w http.ResponseWriter, r *http.Request)
 			sinceID = n
 		}
 	}
-	events, err := s.store.ListNotificationEvents(ownerID, sinceID, 50)
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 100 {
+			limit = n
+		}
+	}
+	events, err := s.store.ListNotificationEvents(ownerID, sinceID, limit)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
@@ -3380,15 +3393,36 @@ func (s *Server) handleNotificationInboxRead(w http.ResponseWriter, r *http.Requ
 	}
 	var req struct {
 		IDs []int64 `json:"ids"`
+		All bool    `json:"all"`
 	}
 	if !s.decodeBody(w, r, &req) {
 		return
 	}
-	if err := s.store.MarkNotificationEventsRead(ownerID, req.IDs); err != nil {
+	if req.All {
+		if err := s.store.MarkAllNotificationEventsRead(ownerID); err != nil {
+			s.writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+	} else if err := s.store.MarkNotificationEventsRead(ownerID, req.IDs); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleNotificationEvents returns the catalog the notification center uses
+// for its per-event preferences. The copy lives next to the event type in the
+// notify package so a new event cannot ship without it.
+func (s *Server) handleNotificationEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if _, ok := s.requireSession(w, r); !ok {
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(notify.EventCatalog())
 }
 
 func (s *Server) handleNotificationStreamToken(w http.ResponseWriter, r *http.Request) {

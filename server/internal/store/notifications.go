@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -245,6 +246,19 @@ func (s *Store) MarkNotificationEventsRead(ownerID string, ids []int64) error {
 		}
 	}
 	return tx.Commit()
+}
+
+// MarkAllNotificationEventsRead marks every unread notification of an owner as
+// read. The bell's "mark all" and the notification center use it because the
+// client only holds a page of history.
+func (s *Store) MarkAllNotificationEventsRead(ownerID string) error {
+	if ownerID == "" {
+		return errors.New("owner_id is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.ExecContext(context.Background(), "UPDATE notification_events SET read = 1 WHERE owner_id = ? AND read = 0", ownerID)
+	return err
 }
 
 func boolInt(v bool) int {

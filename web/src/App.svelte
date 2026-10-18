@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte'
   import DeviceModal from './components/DeviceModal.svelte'
-  import NotificationsModal from './components/NotificationsModal.svelte'
   import NotificationToast from './components/NotificationToast.svelte'
   import { addTelemetryPoint, resetTelemetry } from './lib/telemetry-store'
   import { apiFetch, apiURL, serverBase } from './lib/api'
@@ -27,6 +26,7 @@
   import RemoteAccess from './components/screens/RemoteAccess.svelte'
   import DeviceSettings from './components/screens/DeviceSettings.svelte'
   import AppSettings from './components/screens/AppSettings.svelte'
+  import Notifications from './components/screens/Notifications.svelte'
   import { nav, type Section } from './lib/router'
   import { selectedRange, DEFAULT_RANGE, type RangeId } from './lib/timerange'
   import { mergeDeviceDetail } from './lib/device'
@@ -34,6 +34,8 @@
   import type { SecurityPosture } from './lib/security-posture'
   import { uniquePorts } from './lib/ports'
   import { generateInsights } from './lib/insights'
+  import { loadNotificationPrefs, notificationPrefs, resetNotificationPrefs, shouldNotify } from './lib/notification-prefs'
+  import { unlockNotificationAudio } from './lib/notification-sound'
 
 
   type PreferenceFile = {
@@ -178,7 +180,7 @@
     security: 'security'
   } as Record<string, string>)[navState.section] || null
 
-  $: isDeviceSection = Boolean(navState.deviceId) && navState.section !== 'home' && navState.section !== 'devices' && navState.section !== 'alerts' && navState.section !== 'findings' && navState.section !== 'reports' && navState.section !== 'configuration'
+  $: isDeviceSection = Boolean(navState.deviceId) && navState.section !== 'home' && navState.section !== 'devices' && navState.section !== 'alerts' && navState.section !== 'findings' && navState.section !== 'reports' && navState.section !== 'configuration' && navState.section !== 'notifications'
 
   // Only the overview still uses the shared telemetry cards. Every other
   // device section now has a dedicated screen, so nothing else falls through.
@@ -208,10 +210,10 @@
   let toastKind: 'success' | 'error' = 'success'
   let lastFocused: HTMLElement | null = null
   let settingsOpen = false
-  let notificationsOpen = false
   let notifEvents: { id: number; type: string; device_id: string; hostname: string; message: string; created_at: string }[] = []
   let lastNotifId = 0
-  let notifSound = 'beep'
+  let notifPrefsLoaded = false
+  $: toastEvents = notifEvents.filter((e) => shouldNotify($notificationPrefs, e.type))
   let extraDirs: string[] = []
   let newExtraDir = ''
   let workspaceDirs: string[] = []
@@ -661,9 +663,9 @@
   }
 
   function openNotifications() {
-    notificationsOpen = true
     userMenuOpen = false
     bellOpen = false
+    nav.setSection('notifications')
   }
 
   function toggleBell() {
@@ -671,12 +673,12 @@
     if (bellOpen) userMenuOpen = false
   }
 
-  function closeNotifications() {
-    notificationsOpen = false
-  }
-
   async function pollNotifications() {
     if (!signedIn) return
+    if (!notifPrefsLoaded) {
+      notifPrefsLoaded = true
+      void loadNotificationPrefs(ownerHeaders)
+    }
     try {
       const res = await apiFetch(apiURL(`/api/notifications/inbox?since=${lastNotifId}`), { headers: ownerHeaders })
       if (!res.ok) return
@@ -701,25 +703,37 @@
     })
   }
 
+  // The bell lists unread events; "mark all read" must cover the history the
+  // client has not loaded yet, so it uses the server-side all flag.
   function clearNotifs() {
-    const ids = notifEvents.map((e) => e.id)
     notifEvents = []
-    if (ids.length > 0) {
-      void apiFetch(apiURL(`/api/notifications/inbox/read`), {
-        method: 'POST',
-        headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids }),
-      })
+    void apiFetch(apiURL(`/api/notifications/inbox/read`), {
+      method: 'POST',
+      headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ all: true }),
+    })
+  }
+
+  function dismissToasts() {
+    const ids = notifEvents.filter((e) => shouldNotify($notificationPrefs, e.type)).map((e) => e.id)
+    if (ids.length === 0) return
+    notifEvents = notifEvents.filter((e) => !ids.includes(e.id))
+    void apiFetch(apiURL(`/api/notifications/inbox/read`), {
+      method: 'POST',
+      headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    })
+  }
+
+  // The notification centre marks events read; keep the bell in step without
+  // refetching the whole inbox.
+  function handleNotifMarkedRead(ids: number[], all: boolean) {
+    if (all) {
+      notifEvents = []
+      return
     }
-  }
-
-  function loadNotifSound() {
-    notifSound = localStorage.getItem('sync-win-notif-sound') || 'beep'
-  }
-
-  function saveNotifSound(s: string) {
-    notifSound = s
-    localStorage.setItem('sync-win-notif-sound', s)
+    const marked = new Set(ids)
+    notifEvents = notifEvents.filter((e) => !marked.has(e.id))
   }
 
   // Selecting a device navigates the shell to its overview. No popup: the same
@@ -831,7 +845,9 @@
     devices: 'Devices',
     alerts: 'Alerts',
     findings: 'Findings',
-    reports: 'Reports'
+    reports: 'Reports',
+    notifications: 'Notifications',
+    configuration: 'Settings'
   }
 
   function sectionTitleFor(section: Section): string {
@@ -1071,6 +1087,8 @@
   function resetAccountState() {
     notifEvents = []
     lastNotifId = 0
+    notifPrefsLoaded = false
+    resetNotificationPrefs()
     deviceDetails = {}
     filesByDevice = {}
     appsByDevice = {}
@@ -1373,7 +1391,15 @@
   onMount(() => {
     void loadAuthConfig()
     void restoreSession()
-    loadNotifSound()
+    // Browsers keep an AudioContext suspended until a user gesture. Unlock it
+    // on the first interaction so the first notification is not silent.
+    const unlockAudio = () => {
+      unlockNotificationAudio()
+      window.removeEventListener('pointerdown', unlockAudio)
+      window.removeEventListener('keydown', unlockAudio)
+    }
+    window.addEventListener('pointerdown', unlockAudio)
+    window.addEventListener('keydown', unlockAudio)
     schedulePoll(DEVICE_POLL_MS)
     const clock = window.setInterval(() => (now = Date.now()), 15000)
     const onVisibility = () => {
@@ -1389,6 +1415,8 @@
       window.clearTimeout(pollTimer)
       window.clearTimeout(toastTimer)
       window.clearInterval(clock)
+      window.removeEventListener('pointerdown', unlockAudio)
+      window.removeEventListener('keydown', unlockAudio)
       document.removeEventListener('visibilitychange', onVisibility)
       document.removeEventListener('click', handleClickOutside)
       disconnectNotifSSE()
@@ -1476,16 +1504,16 @@
         <div class="shell-popover bell-wrapper" role="presentation" on:click|stopPropagation on:keydown|stopPropagation>
           <div class="bell-dropdown">
             <div class="bell-header">
-              <span class="bell-title">Notifications</span>
+              <span class="bell-title">Notifications {#if notifEvents.length > 0}<span class="bell-count">{notifEvents.length}</span>{/if}</span>
               {#if notifEvents.length > 0}
-                <button class="bell-clear" on:click={clearNotifs}>Clear all</button>
+                <button class="bell-clear" on:click={clearNotifs}>Mark all read</button>
               {/if}
             </div>
             <div class="bell-list">
               {#if notifEvents.length === 0}
                 <div class="bell-empty">No new notifications</div>
               {:else}
-                {#each notifEvents as e (e.id)}
+                {#each notifEvents.slice(-5) as e (e.id)}
                   <div class="bell-item bell-{e.type}">
                     <div class="bell-item-top">
                       <span class="bell-item-icon">{e.type === 'device_offline' ? '🔴' : e.type === 'device_online' ? '🟢' : e.type === 'sync_error' ? '⚠️' : '➕'}</span>
@@ -1498,11 +1526,9 @@
                 {/each}
               {/if}
             </div>
-            {#if notifEvents.length > 0}
-              <div class="bell-footer">
-                <button class="bell-settings" on:click={openNotifications}>⚙ Notification settings</button>
-              </div>
-            {/if}
+            <div class="bell-footer">
+              <button class="bell-settings" on:click={openNotifications}>Open notification center</button>
+            </div>
           </div>
         </div>
       {/if}
@@ -1622,6 +1648,8 @@
             <Reports {devices} onSelect={selectDevice} />
           {:else if navState.section === 'configuration'}
             <AppSettings {devices} authHeaders={ownerHeaders} />
+          {:else if navState.section === 'notifications'}
+            <Notifications {devices} authHeaders={ownerHeaders} unread={notifEvents} onSelect={selectDevice} onMarkedRead={handleNotifMarkedRead} />
           {:else}
             <Home {devices} onSelect={selectDevice} onAdd={openAddDevice} />
           {/if}
@@ -1860,16 +1888,14 @@
   </div>
 {/if}
 
-<NotificationsModal open={notificationsOpen} authHeaders={ownerHeaders} on:close={closeNotifications} />
-
-{#if notifEvents.length > 0}
+{#if toastEvents.length > 0}
   <div class="notif-toast-stack">
     <div class="notif-toast-header">
       <strong>Alerts</strong>
-      <button class="inline" on:click={clearNotifs}>Clear all</button>
+      <button class="inline" on:click={dismissToasts}>Dismiss</button>
     </div>
-    {#each notifEvents.slice(-5) as evt (evt.id)}
-      <NotificationToast event={evt} sound={notifSound} on:dismiss={() => dismissNotif(evt.id)} />
+    {#each toastEvents.slice(-5) as evt (evt.id)}
+      <NotificationToast event={evt} sound={$notificationPrefs.sound} volume={$notificationPrefs.volume} on:dismiss={() => dismissNotif(evt.id)} />
     {/each}
   </div>
 {/if}

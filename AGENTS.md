@@ -314,6 +314,7 @@ Use the most direct command for the module being changed.
 - Provider credentials must be encrypted with `crypto.EncryptConfig` before storage.
 - Secrets are never returned to the frontend; `PublicFields()` declares which fields are safe to expose.
 - Keep the dispatch fan-out non-blocking: provider failures never block other providers or the inbox.
+- Event labels and descriptions live in `notify.EventCatalog` and are served by `GET /api/notifications/events`; do not keep a second list in the dashboard. In-app event selection, sound and volume are stored on the `web_inbox` config row; `events_set` distinguishes a deliberate empty selection from a legacy row.
 
 ## Security rules
 

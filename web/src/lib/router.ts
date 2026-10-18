@@ -33,6 +33,7 @@ export type Section =
   | 'settings'
   // Fleet-wide administration
   | 'configuration'
+  | 'notifications'
 
 export type NavState = {
   section: Section
@@ -105,6 +106,7 @@ export const NAV_GROUPS: NavGroup[] = [
     id: 'admin',
     label: 'Administration',
     items: [
+      { section: 'notifications', label: 'Notifications', icon: 'bell' },
       { section: 'configuration', label: 'Settings', icon: 'settings' }
     ]
   }
