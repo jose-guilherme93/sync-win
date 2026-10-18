@@ -11,6 +11,17 @@
   const MAX_SAMPLES = 60
   let memSeries: number[] = []
   let lastStamp = ''
+  let seriesDeviceId = ''
+
+  // The shell reuses this component when another device is selected. Without
+  // this reset the sparkline would mix samples from two devices.
+  function resetSeries(id: string) {
+    if (!id || id === seriesDeviceId) return
+    seriesDeviceId = id
+    memSeries = []
+    lastStamp = ''
+  }
+  $: resetSeries(device.id)
 
   $: hw = device.hardware
   $: total = hw?.memory_total_bytes ?? 0

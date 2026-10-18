@@ -16,8 +16,21 @@
   // Live points from the shared store. These are what the 5-minute view uses,
   // because the store updates every poll and is fresher than any fetch.
   let liveHistory: ChartPoint[] = []
-  const unsub = deviceHistoryStore(device.id).subscribe((value) => (liveHistory = value))
-  onDestroy(unsub)
+  let liveDeviceId = ''
+  let unsubHistory: (() => void) | null = null
+
+  // The shell reuses this component when another device is selected, so the
+  // subscription has to follow the prop. Binding it once kept the previous
+  // device's live history on screen after switching.
+  function subscribeLiveHistory(id: string) {
+    if (!id || id === liveDeviceId) return
+    liveDeviceId = id
+    unsubHistory?.()
+    liveHistory = []
+    unsubHistory = deviceHistoryStore(id).subscribe((value) => (liveHistory = value))
+  }
+  $: subscribeLiveHistory(device.id)
+  onDestroy(() => unsubHistory?.())
 
   // History pulled from the server for the longer ranges. The store only holds
   // a short live window (MAX_POINTS), which is why the period selector used to

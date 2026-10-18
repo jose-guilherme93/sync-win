@@ -11,6 +11,18 @@
   let cpuSeries: number[] = []
   let tempSeries: number[] = []
   let lastStamp = ''
+  let seriesDeviceId = ''
+
+  // The shell reuses this component when another device is selected. Without
+  // this reset the sparklines would mix samples from two devices.
+  function resetSeries(id: string) {
+    if (!id || id === seriesDeviceId) return
+    seriesDeviceId = id
+    cpuSeries = []
+    tempSeries = []
+    lastStamp = ''
+  }
+  $: resetSeries(device.id)
 
   $: hw = device.hardware
   $: cores = hw?.cpu_core_usage ?? []

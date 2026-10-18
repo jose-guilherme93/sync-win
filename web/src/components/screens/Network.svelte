@@ -36,6 +36,19 @@
   let totalRx: number[] = []
   let totalTx: number[] = []
   let lastStamp = ''
+  let seriesDeviceId = ''
+
+  // The shell reuses this component when another device is selected. Without
+  // this reset the sparklines would mix samples from two devices.
+  function resetSeries(id: string) {
+    if (!id || id === seriesDeviceId) return
+    seriesDeviceId = id
+    ifaceSeries = {}
+    totalRx = []
+    totalTx = []
+    lastStamp = ''
+  }
+  $: resetSeries(device.id)
 
   $: hw = device.hardware
   $: ifaces = (hw?.network_ifaces ?? []).slice().sort((a, b) => {

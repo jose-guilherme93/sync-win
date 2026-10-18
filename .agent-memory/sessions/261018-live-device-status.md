@@ -67,6 +67,16 @@ Worktree `sync-win-live-device`, branch `fix/live-device-status`.
   left for the operator against the dev stack, because agent-browser is not
   installed on this host.
 
+## Follow-up (same day)
+
+Switching devices while a screen was open reused the component. `DeviceOverview`
+subscribed to `deviceHistoryStore(device.id)` only at creation, so the Live chart
+kept the previous device's history, and the sparkline series in CpuThermal,
+Memory, Storage, Network and Sensors keyed samples only by `collected_at`, so
+they appended the new device's points to the old device's series. Both now reset
+on a `device.id` change (the overview re-subscribes; the screens clear their
+series and sampling stamp).
+
 ## Not done
 
 - No end-to-end test for "stays online while a device keeps heartbeating"; the
