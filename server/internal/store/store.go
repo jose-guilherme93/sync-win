@@ -219,10 +219,15 @@ type HardwareStats struct {
 	TopMemProcesses    []ProcessInfo     `json:"top_mem_processes,omitempty"`
 	DockerAvailable    bool              `json:"docker_available"`
 	DockerContainers   []DockerContainer `json:"docker_containers,omitempty"`
-	DockerInfo         *DockerInfo       `json:"docker_info,omitempty"`
-	LynisAvailable     bool              `json:"lynis_available"`
-	LynisInstallCmd    string            `json:"lynis_install_cmd,omitempty"`
-	Logs               []DeviceLog       `json:"logs,omitempty"`
+	// True only when the agent actually listed containers on this sample. The
+	// list is sampled slowly; without this flag the handler cannot distinguish
+	// "not sampled" from "Docker now has no containers" and either keeps stale
+	// rows or wipes the cache every ten seconds.
+	DockerContainersSampled bool        `json:"docker_containers_sampled,omitempty"`
+	DockerInfo              *DockerInfo `json:"docker_info,omitempty"`
+	LynisAvailable          bool        `json:"lynis_available"`
+	LynisInstallCmd         string      `json:"lynis_install_cmd,omitempty"`
+	Logs                    []DeviceLog `json:"logs,omitempty"`
 	// LogsStatus is the agent's explanation for having no logs, carried in the
 	// telemetry payload so the dashboard can distinguish an unreadable journal
 	// from a device with nothing to report.

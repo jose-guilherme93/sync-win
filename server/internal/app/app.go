@@ -1810,6 +1810,15 @@ func (s *Server) handleTelemetry(w http.ResponseWriter, r *http.Request, deviceI
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+	// The container list is sampled on a slow cadence. Keep the last one when
+	// this sample did not include it; a sample that did list containers (even an
+	// empty list) replaces it.
+	if !req.Hardware.DockerContainersSampled && len(req.Hardware.DockerContainers) == 0 {
+		if existing, derr := s.store.GetDevice(deviceID); derr == nil {
+			req.Hardware.DockerContainers = existing.Hardware.DockerContainers
+		}
+	}
+
 	updated, err := s.store.UpdateHardwareStats(deviceID, req.Hardware)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)

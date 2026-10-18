@@ -81,11 +81,26 @@ Three branches, all based on `develop`:
 - The log-noise reduction is verified by the next dev image rebuild and the
   test devices (agent 0.9.0).
 
+## Follow-up: Docker list sampling
+
+`docker_containers` was 10.4 KB on every 10-second sample. The Docker screen
+reads the cached list from `/api/devices/{id}/docker`, so the list is still
+needed — just not every ten seconds.
+
+- The agent now lists containers only on the same slow cycle as the journal
+  (~60 s) and marks that sample with `docker_containers_sampled: true`. Docker
+  availability and engine info stay on the fast cycle (small; the header uses
+  them).
+- The server keeps the previous list when a sample did not include one, and
+  replaces it when a sample really listed zero containers. The merge is tested
+  through the telemetry handler; on old agents a non-empty list is still
+  accepted, and a machine with no containers keeps the last list until its next
+  slow sample (the Docker screen can refresh through the command path).
+- Normal payload drops from ~13 KB to ~2.5 KB; the ~13 KB spike happens once a
+  minute instead of every ten seconds.
+
 ## Not done
 
-- `docker_containers` is still 10.4 KB every cycle. The Docker screen reads the
-  cached list from `/api/devices/{id}/docker`; moving it to an on-demand `list`
-  command needs UI work. Tracked in ROADMAP under FASE 21.
 - Static telemetry fields (OS, kernel, CPU model, boot time, ...) are ~150 bytes
   together; not worth a partial-payload protocol.
 - Top processes are still sampled every cycle (~1.6 KB).

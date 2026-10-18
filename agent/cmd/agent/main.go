@@ -408,10 +408,14 @@ type telemetryStats struct {
 	TopMemProcesses    []processInfo     `json:"top_mem_processes,omitempty"`
 	DockerAvailable    bool              `json:"docker_available"`
 	DockerContainers   []dockerContainer `json:"docker_containers,omitempty"`
-	DockerInfo         *dockerInfo       `json:"docker_info,omitempty"`
-	LynisAvailable     bool              `json:"lynis_available"`
-	LynisInstallCmd    string            `json:"lynis_install_cmd,omitempty"`
-	Logs               []deviceLog       `json:"logs,omitempty"`
+	// True only on the cycles that actually listed containers. Without it the
+	// server cannot tell "not sampled this time" from "Docker has no containers"
+	// and either keeps stale rows or deletes the list every cycle.
+	DockerContainersSampled bool        `json:"docker_containers_sampled,omitempty"`
+	DockerInfo              *dockerInfo `json:"docker_info,omitempty"`
+	LynisAvailable          bool        `json:"lynis_available"`
+	LynisInstallCmd         string      `json:"lynis_install_cmd,omitempty"`
+	Logs                    []deviceLog `json:"logs,omitempty"`
 	// LogsStatus explains a device with no logs. Without it an unreadable
 	// journal and a device that genuinely has nothing to report look identical
 	// on the dashboard, which is exactly the bug this field exists to prevent.
@@ -727,12 +731,15 @@ func cmdDaemon(args []string) {
 			log.Printf("command processing failed: %v", err)
 			hadError = true
 		}
-		stats, sample, err := collectHardwareStats(&previous, now)
+		logCycle++
+		sampleSlow := logCycle >= logCollectCycles
+		if sampleSlow {
+			logCycle = 0
+		}
+		stats, sample, err := collectHardwareStats(&previous, now, sampleSlow)
 		previous = sample
 		if err == nil {
-			logCycle++
-			if logCycle >= logCollectCycles {
-				logCycle = 0
+			if sampleSlow {
 				// A journal read failure is not fatal: telemetry continues with
 				// no lines. The reason travels back to the server so the Logs
 				// screen can say why it is empty instead of looking broken.
@@ -1374,7 +1381,7 @@ type hardwareSample struct {
 // collectHardwareStats collects real hardware data from /proc, /sys, and collectors.
 // Independent data sources are collected in parallel using goroutines.
 // It returns the telemetry payload and the sample to feed into the next call.
-func collectHardwareStats(prev *hardwareSample, now time.Time) (telemetryStats, hardwareSample, error) {
+func collectHardwareStats(prev *hardwareSample, now time.Time, sampleDocker bool) (telemetryStats, hardwareSample, error) {
 	var stats telemetryStats
 	next := hardwareSample{
 		At:          now,
@@ -1411,7 +1418,6 @@ func collectHardwareStats(prev *hardwareSample, now time.Time) (telemetryStats, 
 
 	// Parallel collectors for heavier I/O operations
 	var wg sync.WaitGroup
-	var mu sync.Mutex
 
 	// CPU cores + core usage
 	var newCPUCores []uint64
@@ -1555,36 +1561,44 @@ func collectHardwareStats(prev *hardwareSample, now time.Time) (telemetryStats, 
 		agentMem = readAgentMemory()
 	}()
 
-	// Docker (potentially slow socket communication)
+	// Docker (potentially slow socket communication). The container list is the
+	// single largest part of the payload and the Docker screen reads it from the
+	// server's cached state, so it is sampled on the same slow cycle as the
+	// journal rather than every ten seconds. Availability and the engine info
+	// stay on the fast cycle: they are tiny and the header uses them.
 	var dockerAvailable bool
 	var dockerContainers []dockerContainer
+	var dockerContainersSampled bool
 	var dockerInf *dockerInfo
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		dockerAvailable = collectors.DockerIsAvailable()
+		if sampleDocker {
+			dockerContainersSampled = true
+		}
 		if dockerAvailable {
-			if containers, err := collectors.DockerListContainers(false); err == nil {
-				var dc []dockerContainer
-				for _, c := range containers {
-					name := ""
-					if len(c.Names) > 0 {
-						name = strings.TrimPrefix(c.Names[0], "/")
+			if sampleDocker {
+				if containers, err := collectors.DockerListContainers(false); err == nil {
+					var dc []dockerContainer
+					for _, c := range containers {
+						name := ""
+						if len(c.Names) > 0 {
+							name = strings.TrimPrefix(c.Names[0], "/")
+						}
+						dc = append(dc, dockerContainer{
+							ID:     c.ID,
+							Names:  c.Names,
+							Name:   name,
+							Image:  c.Image,
+							State:  c.State,
+							Status: c.Status,
+							Ports:  c.Ports,
+							Mounts: c.Mounts,
+						})
 					}
-					dc = append(dc, dockerContainer{
-						ID:     c.ID,
-						Names:  c.Names,
-						Name:   name,
-						Image:  c.Image,
-						State:  c.State,
-						Status: c.Status,
-						Ports:  c.Ports,
-						Mounts: c.Mounts,
-					})
+					dockerContainers = dc
 				}
-				mu.Lock()
-				dockerContainers = dc
-				mu.Unlock()
 			}
 			if info, err := collectors.GetDockerInfo(); err == nil {
 				dockerInf = &dockerInfo{
@@ -1632,6 +1646,7 @@ func collectHardwareStats(prev *hardwareSample, now time.Time) (telemetryStats, 
 	stats.CPUCoreUsage = corePercents
 	stats.DockerAvailable = dockerAvailable
 	stats.DockerContainers = dockerContainers
+	stats.DockerContainersSampled = dockerContainersSampled
 	stats.DockerInfo = dockerInf
 	stats.HardwareFingerprint = hwID.Fingerprint
 
