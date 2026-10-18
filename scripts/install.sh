@@ -780,11 +780,12 @@ read_machine_id() {
 enroll_device() {
     info "Registering device with server..."
     local enroll_payload
-    local host_name kernel_ver agent_ver machine_id
+    local host_name kernel_ver agent_ver machine_id fingerprint
     host_name="$(hostname | tr -d '\n')"
     kernel_ver="$(uname -r | tr -d '\n')"
     agent_ver="$(get_installed_version | tr -d '\n')"
     machine_id="$(read_machine_id)"
+    fingerprint="$(get_fingerprint)"
     enroll_payload=$(cat <<EOF
 {
     "token": "${SYNCWIN_TOKEN}",
@@ -793,7 +794,8 @@ enroll_device() {
     "os": "${SYNCWIN_DISTRO_ID}",
     "kernel": "${kernel_ver}",
     "agent_version": "${agent_ver}",
-    "machine_id": "${machine_id}"
+    "machine_id": "${machine_id}",
+    "fingerprint": "${fingerprint}"
 }
 EOF
 )
@@ -855,6 +857,24 @@ get_installed_version() {
     else
         echo "none"
     fi
+}
+
+# The fingerprint is computed by the freshly installed binary so the installer
+# does not duplicate the CPU/RAM/MAC hash logic in shell. It lets the server
+# adopt a machine-less device record left by an older agent instead of creating
+# a duplicate.
+get_fingerprint() {
+    local fingerprint=""
+    if [ -x "$SYNCWIN_BINARY" ]; then
+        fingerprint="$("$SYNCWIN_BINARY" fingerprint 2>/dev/null | tr -d '[:space:]' || true)"
+    fi
+    case "$fingerprint" in
+        *[!0-9a-f]*) fingerprint="" ;;
+    esac
+    if [ "${#fingerprint}" -ne 64 ]; then
+        fingerprint=""
+    fi
+    printf '%s' "$fingerprint"
 }
 
 configure_service() {

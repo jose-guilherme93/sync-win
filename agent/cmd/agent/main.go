@@ -914,6 +914,10 @@ func main() {
 		}
 	case "--version", "version":
 		fmt.Println(agentVersion)
+	case "fingerprint":
+		// Printed for the installer and for support: the fingerprint is stable
+		// hardware metadata, never an authenticator.
+		fmt.Println(collectors.CollectHardwareID().Fingerprint)
 	default:
 		log.Fatalf("unknown command: %s", os.Args[1])
 	}

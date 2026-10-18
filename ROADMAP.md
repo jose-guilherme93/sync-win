@@ -178,6 +178,9 @@ A funcionalidade P1 está concluída. A próxima etapa é uma nova priorização
 - [x] limite de upload usa min(limite local, limite espelhado do server) — nada é enviado sabidamente rejeitável
 - [x] E2E real: agent daemon sobrevive à queda do servidor (backoff visível) e se recupera sozinho ("connection recovered") sem re-enviar arquivos inalterados
 - [x] recovery de credencial exige novo enrollment token; fingerprint reconexão foi desabilitada por não ser autenticador
+- [x] log do agente sem ruído: disponibilidade do Lynis só em transição e resumo de telemetria 1x/min, em vez de 3 linhas a cada 10s
+- [x] limpeza automática de `.bak`/`.rollback` do instalador e de resquícios LEM (units, binário, diretórios e usuário) no instalador e no updater root; policy antiga é migrada
+- [x] `sync-win-agent fingerprint` + envio no enroll; o servidor adota registro sem `machine_id` quando o fingerprint bate, em vez de criar duplicata
 
 ## FASE 12 — Save Game Sync
 - [x] Contract v1.1.0: categoria `saves` com roots, extensões, filtros e limites
@@ -284,6 +287,7 @@ A funcionalidade P1 está concluída. A próxima etapa é uma nova priorização
 - [x] Dashboard: canvas sparklines replace per-card Chart.js; store-driven updates
 - [x] Fix modal staleness, SSE owner scoping, and `kernel_version` field mismatch
 - [x] telas do device vivas: summary do poll mesclado ao detalhe (status/telemetria), detalhe pesado em cadência própria, heartbeat fixo separado do range dos gráficos
+- [ ] tirar a lista de containers Docker da telemetria de 10s (~10 KB/ciclo) e servi-la sob demanda para a tela Docker
 
 ## FASE 22 — Development and Production Environments
 - [x] `make dev` / `make prod` / `make test` / `make help` with environment separation
