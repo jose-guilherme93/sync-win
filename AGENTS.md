@@ -135,6 +135,12 @@ The `Release` workflow derives the version automatically on every push to `main`
 (`feat` = minor, `fix`/anything else = patch, `feat!`/`BREAKING CHANGE` = major).
 Never bump versions or create tags by hand — use the right commit type instead.
 
+Every release also needs a written section in `CHANGELOG.md` for the version the
+workflow will compute (last tag + the Conventional Commits bump). The Release
+workflow reads that section, uses it as the GitHub Release body and fails before
+publishing the image when it is missing or empty. Do not rely on GitHub's
+generated "Full Changelog" notes.
+
 ## Distribution
 
 The server image is published to Docker Hub (`docker.io/joseguilherme93/sync-win`)
