@@ -18,6 +18,10 @@
 # The job fails before building if either is absent, rather than after, so a
 # missing secret costs seconds instead of a full image build.
 #
+# RELEASE NOTES ARE WRITTEN: the section for the computed version is read from
+# CHANGELOG.md and used as the GitHub Release body. A missing or empty section
+# fails before the image is built, so a tag never points at an empty release.
+#
 # ORDERING IS THE POINT: the image is pushed BEFORE the Git tag is created.
 # The deployment watches the repository tag, so tagging first would advertise a
 # version whose image does not exist yet and the deploy would fail on a pull
@@ -114,6 +118,33 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
           echo "Next release: ${tag} (${bump})"
+
+      # ------------------------------------------------------------------
+      # Release notes are written, not generated. The section for the computed
+      # version must exist before anything is published, so a tag cannot point
+      # at a release with an empty "Full Changelog" body.
+      # ------------------------------------------------------------------
+      - name: Read release notes from CHANGELOG.md
+        if: steps.version.outputs.exists == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          notes="$(awk -v ver="${VERSION}" '
+            index($0, "## [" ver "]") == 1 { inside = 1; next }
+            inside && index($0, "## [") == 1 { exit }
+            inside { print }
+          ' CHANGELOG.md)"
+
+          if [ -z "$(printf '%s' "${notes}" | tr -d '[:space:]')" ]; then
+            echo "::error::CHANGELOG.md has no section for ${VERSION}."
+            echo "::error::Add '## [${VERSION}] - YYYY-MM-DD' with the user-facing changes before merging to main."
+            exit 1
+          fi
+
+          printf '%s\n' "${notes}" > release-notes.md
+          echo "Release notes for ${VERSION}:"
+          cat release-notes.md
 
       # ------------------------------------------------------------------
       # Publish the image FIRST. Nothing below may run if this fails, so the
@@ -233,7 +264,7 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: ${{ steps.version.outputs.tag }}
-          generate_release_notes: true
+          body_path: release-notes.md
 
 # -----------------------------------------------------------------------------
 # Why this builds linux/amd64 only

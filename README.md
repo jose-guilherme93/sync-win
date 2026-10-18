@@ -388,6 +388,7 @@ Issues and pull requests are welcome.
 | [COLLECTION-CONTRACT.md](COLLECTION-CONTRACT.md) | Exactly what the agent collects and sends |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Deployment platforms, tags, verification |
 | [SECURITY.md](SECURITY.md) | Threat model and hardening |
+| [CHANGELOG.md](CHANGELOG.md) | User-facing changes in each release |
 | [ROADMAP.md](ROADMAP.md) | Where this is going |
 
 ## License
