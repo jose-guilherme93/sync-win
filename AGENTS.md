@@ -104,7 +104,8 @@ sync-win/
 ├── docker/
 │   ├── Dockerfile.server           # Multi-stage: Go + Node -> Alpine
 │   ├── Dockerfile.server.dev       # Dev server with air hot-reload
-│   └── Dockerfile.web.dev          # Vite dev server (HMR)
+│   ├── Dockerfile.web.dev          # Vite dev server (HMR)
+│   └── Dockerfile.test-device      # Ubuntu + systemd test device for the dev stack
 ├── scripts/
 │   ├── install.sh                  # Agent installer (616 lines, idempotent)
 │   └── dev-test-agents.sh          # Two Alpine containers running the dev agent
@@ -169,7 +170,7 @@ needs a trigger, which is the update timer plus the path unit.
 - Keep the agent focused on explicit file collection and sync operations.
 - The contract (`COLLECTION-CONTRACT.md` + `agent/internal/contract/contract.json`) is the single source of truth for what the agent collects and sends.
 - Use the Makefile for environment work: `make dev` (containers, server hot-reload + web HMR, data in `data-dev/`), `make prod` (containers, built image, data in `data/`), `make help` for the rest.
-- `make dev-agents` starts two 64 MB Alpine containers running the real agent against the dev stack, so the dashboard has devices reporting telemetry without a VM per device. `make dev-agents-down` removes them; the device records stay.
+- `make dev-agents` starts two 64 MB Alpine containers running the real agent against the dev stack, so the dashboard has devices reporting telemetry without a VM per device. `make dev-agents-full` adds one privileged Ubuntu systemd container with journald, apt, nginx, Lynis and the host Docker socket, which is what exercises Services, Logs, Packages, Security and Docker. `make dev-agents-down` removes them; the device records stay.
 - `compose.yaml` is the stack a new user copies from the README: it pulls the published image and needs only `SYNCWIN_SECRET_KEY`. Keep it dependency-free — no checkout, no build, no other required variable.
 - `compose.prod.yaml` is for deploying from a checkout; `compose.dev.yaml` is for working on the code.
 
