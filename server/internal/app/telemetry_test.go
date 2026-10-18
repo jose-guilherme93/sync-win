@@ -43,24 +43,34 @@ func TestTelemetryKeepsDockerContainersBetweenSamples(t *testing.T) {
 	containers := []store.DockerContainer{{ID: "abc", Name: "web", Image: "nginx", State: "running"}}
 	send(store.HardwareStats{DockerContainers: containers, DockerContainersSampled: true})
 
-	// A normal telemetry cycle: the list was not sampled.
-	send(store.HardwareStats{CPUUsagePercent: 10})
-
+	// The list belongs in the dedicated column, not in the telemetry payload.
 	stored, err := s.store.GetDevice(device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stored.Hardware.DockerContainers) != 1 || stored.Hardware.DockerContainers[0].Name != "web" {
-		t.Fatalf("containers were not preserved: %+v", stored.Hardware.DockerContainers)
+	if len(stored.Hardware.DockerContainers) != 0 {
+		t.Fatalf("container list leaked into the telemetry payload: %+v", stored.Hardware.DockerContainers)
 	}
+	assertContainers := func(want int, label string) {
+		t.Helper()
+		state, err := s.store.GetDockerStateContainers(device.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(state) != want {
+			t.Fatalf("%s: cached containers = %d, want %d", label, len(state), want)
+		}
+	}
+	assertContainers(1, "after a sampled list")
+	if state := s.getDockerState(device.ID); len(state.Containers) != 1 || state.Containers[0].Name != "web" {
+		t.Fatalf("docker state = %+v", state)
+	}
+
+	// A normal telemetry cycle did not sample the list; the cache must survive.
+	send(store.HardwareStats{CPUUsagePercent: 10})
+	assertContainers(1, "after a non-sampling cycle")
 
 	// A sample that listed zero containers must clear the cache.
 	send(store.HardwareStats{DockerContainersSampled: true})
-	stored, err = s.store.GetDevice(device.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(stored.Hardware.DockerContainers) != 0 {
-		t.Fatalf("empty sample did not clear the list: %+v", stored.Hardware.DockerContainers)
-	}
+	assertContainers(0, "after an empty sampled list")
 }

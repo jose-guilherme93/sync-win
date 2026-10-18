@@ -91,13 +91,17 @@ needed — just not every ten seconds.
   (~60 s) and marks that sample with `docker_containers_sampled: true`. Docker
   availability and engine info stay on the fast cycle (small; the header uses
   them).
-- The server keeps the previous list when a sample did not include one, and
-  replaces it when a sample really listed zero containers. The merge is tested
-  through the telemetry handler; on old agents a non-empty list is still
-  accepted, and a machine with no containers keeps the last list until its next
-  slow sample (the Docker screen can refresh through the command path).
-- Normal payload drops from ~13 KB to ~2.5 KB; the ~13 KB spike happens once a
-  minute instead of every ten seconds.
+- The server persists the sampled list in `devices.docker_state_json` and
+  strips it from the telemetry payload, so the list is written once per device
+  instead of being copied into every raw row. `/api/devices/{id}/docker` and the
+  Docker SSE stream read the column. A sample that really listed zero containers
+  clears it; non-sampling cycles leave it alone.
+- The merge/strip path is tested through the telemetry handler, including the
+  empty-list case. Old agents that send a non-empty list every cycle still work;
+  a machine with no containers keeps the last list until its next slow sample.
+- The agent's outbound payload drops from ~13 KB to ~2.5 KB (plus the ~23 KB log
+  batch once a minute); the stored telemetry rows stay ~2.5 KB instead of
+  duplicating the 10 KB container list.
 
 ## Not done
 

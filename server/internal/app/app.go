@@ -1810,14 +1810,19 @@ func (s *Server) handleTelemetry(w http.ResponseWriter, r *http.Request, deviceI
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	// The container list is sampled on a slow cadence. Keep the last one when
-	// this sample did not include it; a sample that did list containers (even an
-	// empty list) replaces it.
-	if !req.Hardware.DockerContainersSampled && len(req.Hardware.DockerContainers) == 0 {
-		if existing, derr := s.store.GetDevice(deviceID); derr == nil {
-			req.Hardware.DockerContainers = existing.Hardware.DockerContainers
+	// The container list is sampled on a slow cadence. Persist that sample in
+	// the dedicated column and keep it out of the per-sample hardware JSON: the
+	// list is several kilobytes and would otherwise be copied into every raw
+	// telemetry row. A sample that did list containers (even an empty list)
+	// replaces the column; other samples leave it untouched.
+	if req.Hardware.DockerContainersSampled || len(req.Hardware.DockerContainers) > 0 {
+		if derr := s.store.UpdateDockerState(deviceID, req.Hardware.DockerContainers); derr != nil {
+			s.log.Warn(logging.CatDevice, logging.EventSyncError, "docker state store failed",
+				map[string]any{"device_id": deviceID, "error": derr.Error()})
 		}
 	}
+	req.Hardware.DockerContainers = nil
+	req.Hardware.DockerContainersSampled = false
 
 	updated, err := s.store.UpdateHardwareStats(deviceID, req.Hardware)
 	if err != nil {
@@ -3598,42 +3603,15 @@ func (s *Server) handleDockerGetResult(w http.ResponseWriter, r *http.Request, d
 	_ = json.NewEncoder(w).Encode(result)
 }
 
-// handleDockerState returns cached Docker state from the latest telemetry.
+// handleDockerState returns the cached Docker state (last sampled container
+// list plus the engine info from the latest telemetry).
 func (s *Server) handleDockerState(w http.ResponseWriter, r *http.Request, deviceID string) {
 	device, err := s.store.GetDevice(deviceID)
 	if err != nil || device.OwnerID != s.ownerID(r) {
 		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
 		return
 	}
-	state := docker.DockerState{
-		Available:  device.Hardware.DockerAvailable,
-		Containers: make([]docker.DockerSummary, 0),
-	}
-	for _, c := range device.Hardware.DockerContainers {
-		summary := docker.DockerSummary{
-			ID: c.ID, Name: c.Name, Image: c.Image, State: c.State, Status: c.Status,
-		}
-		for _, p := range c.Ports {
-			summary.Ports = append(summary.Ports, docker.PortMapping{
-				PrivatePort: p.PrivatePort, PublicPort: p.PublicPort, Type: p.Type, IP: p.IP,
-			})
-		}
-		for _, m := range c.Mounts {
-			summary.Mounts = append(summary.Mounts, docker.MountInfo{
-				Type: m.Type, Source: m.Source, Destination: m.Destination, RW: m.RW,
-			})
-		}
-		state.Containers = append(state.Containers, summary)
-	}
-	if device.Hardware.DockerInfo != nil {
-		state.Info = &docker.DockerInfoData{
-			Version: device.Hardware.DockerInfo.Version, Total: device.Hardware.DockerInfo.Total,
-			Running: device.Hardware.DockerInfo.Running, Stopped: device.Hardware.DockerInfo.Stopped,
-			Paused: device.Hardware.DockerInfo.Paused, Images: device.Hardware.DockerInfo.Images,
-			Driver: device.Hardware.DockerInfo.Driver, NCPU: device.Hardware.DockerInfo.NCPU,
-		}
-	}
-	_ = json.NewEncoder(w).Encode(state)
+	_ = json.NewEncoder(w).Encode(s.getDockerState(deviceID))
 }
 
 // handleDockerStream is an SSE endpoint that streams Docker state updates.
@@ -3680,7 +3658,8 @@ func (s *Server) handleDockerStream(w http.ResponseWriter, r *http.Request, devi
 	}
 }
 
-// getDockerState builds a DockerState from the device's latest telemetry.
+// getDockerState builds a DockerState from the last sampled container list and
+// the engine info from the latest telemetry.
 func (s *Server) getDockerState(deviceID string) docker.DockerState {
 	device, err := s.store.GetDevice(deviceID)
 	if err != nil {
@@ -3690,7 +3669,8 @@ func (s *Server) getDockerState(deviceID string) docker.DockerState {
 		Available:  device.Hardware.DockerAvailable,
 		Containers: make([]docker.DockerSummary, 0),
 	}
-	for _, c := range device.Hardware.DockerContainers {
+	containers, _ := s.store.GetDockerStateContainers(deviceID)
+	for _, c := range containers {
 		summary := docker.DockerSummary{
 			ID: c.ID, Name: c.Name, Image: c.Image, State: c.State, Status: c.Status,
 		}

@@ -287,7 +287,7 @@ A funcionalidade P1 está concluída. A próxima etapa é uma nova priorização
 - [x] Dashboard: canvas sparklines replace per-card Chart.js; store-driven updates
 - [x] Fix modal staleness, SSE owner scoping, and `kernel_version` field mismatch
 - [x] telas do device vivas: summary do poll mesclado ao detalhe (status/telemetria), detalhe pesado em cadência própria, heartbeat fixo separado do range dos gráficos
-- [x] amostrar a lista de containers Docker no ciclo lento (~60s) e o servidor preservá-la entre amostras: payload normal cai de ~13 KB para ~2,5 KB
+- [x] amostrar a lista de containers Docker no ciclo lento (~60s) e guardá-la em `devices.docker_state_json`, fora das linhas de telemetria: payload normal e linhas cruas caem de ~13 KB para ~2,5 KB
 
 ## FASE 22 — Development and Production Environments
 - [x] `make dev` / `make prod` / `make test` / `make help` with environment separation

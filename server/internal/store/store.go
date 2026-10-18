@@ -476,6 +476,7 @@ func NewStore(root string) (*Store, error) {
 	s.migrateAddStatusColumn()
 	s.migrateAddFingerprintColumn()
 	s.migrateAddMachineIDColumn()
+	s.migrateAddDockerStateColumn()
 	if err := s.migrateAddSystemInventoryColumns(context.Background()); err != nil {
 		return nil, err
 	}
@@ -630,6 +631,15 @@ func (s *Store) migrateAddMachineIDColumn() {
 	_, _ = s.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_devices_machine ON devices(machine_id)")
 }
 
+func (s *Store) migrateAddDockerStateColumn() {
+	ctx := context.Background()
+	var count int
+	_ = s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM pragma_table_info('devices') WHERE name='docker_state_json'").Scan(&count)
+	if count == 0 {
+		_, _ = s.db.ExecContext(ctx, "ALTER TABLE devices ADD COLUMN docker_state_json TEXT NOT NULL DEFAULT '[]'")
+	}
+}
+
 func (s *Store) migrateHashDeviceTokens() {
 	rows, err := s.db.Query("SELECT id, device_token FROM devices")
 	if err != nil {
@@ -704,7 +714,11 @@ func (s *Store) initSchema() error {
 		tags_json TEXT NOT NULL DEFAULT '[]',
 		collection_interval_seconds INTEGER NOT NULL DEFAULT 10,
 		updates_json TEXT NOT NULL DEFAULT '{"status":"not_reported","updates":[]}',
-		machine_id TEXT NOT NULL DEFAULT ''
+		machine_id TEXT NOT NULL DEFAULT '',
+		-- The Docker container list is sampled slowly and is several kilobytes.
+		-- Keeping it in its own column means it is written once per sample
+		-- instead of being copied into every telemetry_raw row.
+		docker_state_json TEXT NOT NULL DEFAULT '[]'
 	);
 	-- Indexes on machine_id are deliberately NOT created here, for the same
 	-- reason as idx_logs_owner_ts below: on an existing database the CREATE TABLE
