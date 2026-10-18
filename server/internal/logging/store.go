@@ -129,6 +129,63 @@ func (s *Store) Query(params QueryParams) (*QueryResult, error) {
 	}
 	defer rows.Close()
 
+	entries, err := scanLogEntries(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	return &QueryResult{
+		Entries: entries,
+		Total:   total,
+		Limit:   params.Limit,
+		Offset:  params.Offset,
+	}, nil
+}
+
+// ChangesAfter returns the entries newer than afterID that match the same
+// filters as Query, oldest first. id is monotonic, so walking it is the one
+// cursor that cannot skip an entry or replay one.
+func (s *Store) ChangesAfter(params QueryParams, afterID int64, limit int) ([]LogEntry, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+
+	where, args := buildWhereClause(params)
+	if where == "" {
+		where = " WHERE "
+	} else {
+		where += " AND "
+	}
+	where += "id > ?"
+	args = append(args, afterID)
+
+	query := `SELECT id, ts, level, category, event, message, device_id, user_id, request_id, correlation_id, duration_ms, status, metadata, redacted
+		FROM logs` + where + ` ORDER BY id ASC LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(context.Background(), query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("stream logs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	return scanLogEntries(rows)
+}
+
+// LatestID returns the newest entry id for an owner, or 0 when there is none.
+// A stream that starts without a cursor uses it so it does not replay the
+// whole retention window on first connect.
+func (s *Store) LatestID(ownerID string) (int64, error) {
+	var id int64
+	err := s.db.QueryRowContext(context.Background(),
+		`SELECT COALESCE(MAX(id), 0) FROM logs WHERE owner_id = ?`, ownerID).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("latest log id: %w", err)
+	}
+	return id, nil
+}
+
+func scanLogEntries(rows *sql.Rows) ([]LogEntry, error) {
 	entries := make([]LogEntry, 0)
 	for rows.Next() {
 		var entry LogEntry
@@ -151,13 +208,7 @@ func (s *Store) Query(params QueryParams) (*QueryResult, error) {
 		}
 		entries = append(entries, entry)
 	}
-
-	return &QueryResult{
-		Entries: entries,
-		Total:   total,
-		Limit:   params.Limit,
-		Offset:  params.Offset,
-	}, nil
+	return entries, rows.Err()
 }
 
 // GetByID returns a single log entry.

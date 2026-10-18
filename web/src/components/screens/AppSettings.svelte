@@ -34,8 +34,8 @@
   }
 
   const PAGE_SIZE = 50
-  const LIVE_MS = 5000
   const SEARCH_DEBOUNCE_MS = 350
+  const STATS_DEBOUNCE_MS = 1500
 
   // Time windows the operator can pick. `ms: 0` means no lower bound, which is
   // what an unfiltered query wants.
@@ -72,7 +72,11 @@
   let expanded: number | null = null
 
   let live = false
-  let liveTimer: ReturnType<typeof setInterval> | null = null
+  let liveStream: EventSource | null = null
+  let liveRetry: ReturnType<typeof setTimeout> | null = null
+  let liveRetryMs = 1000
+  let liveError = ''
+  let statsTimer: ReturnType<typeof setTimeout> | null = null
   let searchTimer: ReturnType<typeof setTimeout> | null = null
   // Guards against a slow request overwriting the result of a later one.
   let requestSeq = 0
@@ -87,8 +91,8 @@
     return new Date(Date.now() - window.ms).toISOString()
   }
 
-  function buildQuery(nextOffset: number): string {
-    const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(nextOffset) })
+  function filterParams(): URLSearchParams {
+    const params = new URLSearchParams()
     if (level) params.set('level', level)
     if (category) params.set('category', category)
     if (deviceId) params.set('device_id', deviceId)
@@ -96,6 +100,22 @@
     if (requestId.trim()) params.set('request_id', requestId.trim())
     const from = fromFor(range)
     if (from) params.set('from', from)
+    return params
+  }
+
+  function buildQuery(nextOffset: number): string {
+    const params = filterParams()
+    params.set('limit', String(PAGE_SIZE))
+    params.set('offset', String(nextOffset))
+    return params.toString()
+  }
+
+  // The stream takes the same filters as the page plus the cursor and ticket.
+  // no limit/offset: it is a delta feed, not a page.
+  function buildStreamQuery(ticket: string, afterId: number): string {
+    const params = filterParams()
+    params.set('ticket', ticket)
+    if (afterId > 0) params.set('after_id', String(afterId))
     return params.toString()
   }
 
@@ -139,9 +159,10 @@
     }
   }
 
-  function reload() {
-    void fetchPage(false)
-    void loadStats()
+  async function reload() {
+    await Promise.all([fetchPage(false), loadStats()])
+    // Filters changed: the open stream is still using the old ones.
+    if (live) void startStream()
   }
 
   async function loadSettings() {
@@ -194,11 +215,96 @@
   function toggleLive() {
     live = !live
     if (live) {
-      liveTimer = setInterval(reload, LIVE_MS)
-    } else if (liveTimer) {
-      clearInterval(liveTimer)
-      liveTimer = null
+      liveError = ''
+      void startStream()
+    } else {
+      stopStream()
     }
+  }
+
+  // EventSource cannot send the Authorization header, so the session is
+  // exchanged for a single-use ticket first. The ticket is consumed by the
+  // connection, which is why a reconnect has to fetch a new one instead of
+  // letting EventSource retry the same URL forever.
+  async function startStream() {
+    stopStream(false)
+    if (!live) return
+    const afterId = entries.length > 0 ? entries[0].id : 0
+    try {
+      const res = await apiFetch(apiURL('/api/logs/stream-token'), {
+        method: 'POST',
+        headers: authHeaders
+      })
+      if (!res.ok) throw new Error(`request failed (${res.status})`)
+      const { ticket } = await res.json()
+      if (!live) return
+
+      const stream = new EventSource(`${apiURL('/api/logs/stream')}?${buildStreamQuery(ticket, afterId)}`)
+      liveStream = stream
+      stream.onopen = () => {
+        liveError = ''
+        liveRetryMs = 1000
+      }
+      stream.onmessage = (event) => {
+        let entry: LogEntry
+        try {
+          entry = JSON.parse(event.data)
+        } catch {
+          return
+        }
+        if (!entry || typeof entry.id !== 'number') return
+        // A reconnect can race with an entry that was already delivered.
+        if (entries.some((e) => e.id === entry.id)) return
+        entries = [entry, ...entries]
+        total += 1
+        offset = entries.length
+        scheduleStats()
+      }
+      stream.onerror = () => {
+        stream.close()
+        if (liveStream === stream) liveStream = null
+        if (!live) return
+        liveError = 'Live feed reconnecting…'
+        scheduleReconnect()
+      }
+    } catch (e) {
+      if (!live) return
+      liveError = `Live feed unavailable: ${e instanceof Error ? e.message : 'request failed'}`
+      scheduleReconnect()
+    }
+  }
+
+  function stopStream(clearError = true) {
+    if (liveRetry) {
+      clearTimeout(liveRetry)
+      liveRetry = null
+    }
+    if (liveStream) {
+      liveStream.close()
+      liveStream = null
+    }
+    if (clearError) {
+      liveError = ''
+      liveRetryMs = 1000
+    }
+  }
+
+  function scheduleReconnect() {
+    if (liveRetry) clearTimeout(liveRetry)
+    const delay = liveRetryMs
+    liveRetry = setTimeout(() => {
+      liveRetry = null
+      void startStream()
+    }, delay)
+    liveRetryMs = Math.min(liveRetryMs * 2, 30000)
+  }
+
+  function scheduleStats() {
+    if (statsTimer) clearTimeout(statsTimer)
+    statsTimer = setTimeout(() => {
+      statsTimer = null
+      void loadStats()
+    }, STATS_DEBOUNCE_MS)
   }
 
   function formatTime(ts: string): string {
@@ -223,7 +329,8 @@
   })
 
   onDestroy(() => {
-    if (liveTimer) clearInterval(liveTimer)
+    stopStream()
+    if (statsTimer) clearTimeout(statsTimer)
     if (searchTimer) clearTimeout(searchTimer)
   })
 </script>
@@ -239,6 +346,9 @@
       </p>
     </div>
     <div class="head-actions">
+      {#if liveError}
+        <span class="live-error" role="status">{liveError}</span>
+      {/if}
       <button class:active={live} class="ghost" on:click={toggleLive}>
         {live ? 'Live · on' : 'Live · off'}
       </button>
@@ -444,8 +554,14 @@
 
   .head-actions {
     display: flex;
+    align-items: center;
     gap: 0.4rem;
     flex-shrink: 0;
+  }
+
+  .live-error {
+    color: var(--warn);
+    font-size: 0.7rem;
   }
 
   .stat-row {

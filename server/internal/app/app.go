@@ -52,6 +52,9 @@ type Server struct {
 	// on every tick. It is atomic because the settings handler writes it while
 	// the cleanup goroutine reads it.
 	logRetentionDays atomic.Int32
+	// logStreamInterval is how often the log SSE endpoint checks the table for
+	// new rows. It is a field so tests can shorten it.
+	logStreamInterval time.Duration
 }
 
 type registerRequest struct {
@@ -160,7 +163,7 @@ func Run() error {
 	dockerBroadcaster := docker.NewBroadcaster()
 	flags := loadFeatureFlags()
 	bootstrapAdmin(dataStore, structLogger, flags.EnableRegistration)
-	server := &Server{store: dataStore, logStore: logStore, log: structLogger, aggregator: aggregator, notifier: notifier, dockerQueue: dockerQueue, dockerBroadcaster: dockerBroadcaster, streamTickets: newStreamTicketStore(), rateLimiter: newRateLimiter(), tunnelHub: tunnel.NewHub(), flags: flags, trustProxy: envBool("SYNCWIN_TRUST_PROXY", false)}
+	server := &Server{store: dataStore, logStore: logStore, log: structLogger, aggregator: aggregator, notifier: notifier, dockerQueue: dockerQueue, dockerBroadcaster: dockerBroadcaster, streamTickets: newStreamTicketStore(), rateLimiter: newRateLimiter(), tunnelHub: tunnel.NewHub(), flags: flags, trustProxy: envBool("SYNCWIN_TRUST_PROXY", false), logStreamInterval: time.Second}
 
 	// Logging settings are persisted so an operator's choice survives a
 	// restart. Seed the row on first boot from the configured defaults, then
@@ -228,6 +231,8 @@ func Run() error {
 	mux.HandleFunc("/api/logs", server.handleLogs)
 	mux.HandleFunc("/api/logs/", server.handleLogByID)
 	mux.HandleFunc("/api/logs/stats", server.handleLogStats)
+	mux.HandleFunc("/api/logs/stream-token", server.handleLogStreamToken)
+	mux.HandleFunc("/api/logs/stream", server.handleLogStream)
 	mux.HandleFunc("/api/log-settings", server.handleLogSettings)
 	mux.HandleFunc("/api/audit", server.handleAudit)
 	mux.HandleFunc("/api/errors", server.handleErrors)
@@ -2688,31 +2693,7 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	params := logging.QueryParams{
-		OwnerID:       ownerID,
-		Level:         r.URL.Query().Get("level"),
-		Category:      r.URL.Query().Get("category"),
-		Event:         r.URL.Query().Get("event"),
-		DeviceID:      r.URL.Query().Get("device_id"),
-		UserID:        r.URL.Query().Get("user_id"),
-		RequestID:     r.URL.Query().Get("request_id"),
-		CorrelationID: r.URL.Query().Get("correlation_id"),
-		From:          r.URL.Query().Get("from"),
-		To:            r.URL.Query().Get("to"),
-		Search:        r.URL.Query().Get("search"),
-	}
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			params.Limit = n
-		}
-	}
-	if v := r.URL.Query().Get("offset"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			params.Offset = n
-		}
-	}
-
-	result, err := s.logStore.Query(params)
+	result, err := s.logStore.Query(logParamsFromRequest(r, ownerID))
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return

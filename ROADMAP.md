@@ -239,6 +239,7 @@ A funcionalidade P1 está concluída. A próxima etapa é uma nova priorização
 - [x] Application metrics time-series
 - [x] Log retention settings per owner
 - [x] Dashboard log viewer with filtering by level, device, and time range
+- [x] streaming de logs por SSE (`/api/logs/stream`), substituindo o polling de 5s da tela
 
 ## FASE 18 — Hardware Telemetry
 - [x] Agent collectors: CPU, memory, disk I/O, network, temperatures, battery, disk partitions, swap, top processes

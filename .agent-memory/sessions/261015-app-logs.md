@@ -92,7 +92,8 @@ table, so a per-owner level would apply to every account while appearing scoped.
 - `go test -race` could not run locally (no cgo/gcc); CI runs it. The changed
   shared state is `atomic.Int32`, so it is race-free by construction.
 - Log streaming is polling, not SSE; the notification SSE plumbing exists but a
-  logs stream was left out to keep the change reviewable.
+  logs stream was left out to keep the change reviewable. **Superseded on
+  2026-10-17 by `sessions/261017-log-sse.md`.**
 - The "Data Retention" modal (telemetry retention) still lives in the user menu;
   it is a separate concern from application logs and was not moved into Settings.
 
