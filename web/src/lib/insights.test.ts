@@ -29,10 +29,32 @@ describe('generateInsights', () => {
 
   it('escalates CPU from warn to crit at the documented thresholds', () => {
     expect(generateInsights(hw({ cpu_usage_percent: THRESHOLDS.cpuWarn + 1 }))[0]).toEqual({
+      key: 'cpu',
       text: expect.stringContaining('CPU'),
       type: 'warn'
     })
     expect(generateInsights(hw({ cpu_usage_percent: THRESHOLDS.cpuCrit + 1 }))[0].type).toBe('crit')
+  })
+
+  it('keeps the key stable while the reading moves', () => {
+    // An alert acknowledgement is stored by key. If the key carried the value,
+    // acknowledging "CPU 92%" would come back as "CPU 95%" on the next sample.
+    const warn = generateInsights(hw({ cpu_usage_percent: THRESHOLDS.cpuWarn + 1 }))[0]
+    const crit = generateInsights(hw({ cpu_usage_percent: THRESHOLDS.cpuCrit + 1 }))[0]
+    expect(warn.key).toBe(crit.key)
+  })
+
+  it('keys disks and interfaces by their subject', () => {
+    const insights = generateInsights(hw({
+      disk_partitions: [
+        { mount: '/', device: '/dev/sda1', total_bytes: 100, used_bytes: 95, free_bytes: 5, used_percent: 95 }
+      ],
+      network_ifaces: [
+        { name: 'eth0', rx_bytes: 0, tx_bytes: 0, rx_packets: 0, tx_packets: 0, rx_errors: 3, tx_errors: 0 }
+      ]
+    }))
+    expect(insights.some((i) => i.key === 'disk:/')).toBe(true)
+    expect(insights.some((i) => i.key === 'net:eth0')).toBe(true)
   })
 
   it('uses the same boundary for memory as it does for CPU', () => {

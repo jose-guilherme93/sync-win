@@ -16,8 +16,21 @@
   // Live points from the shared store. These are what the 5-minute view uses,
   // because the store updates every poll and is fresher than any fetch.
   let liveHistory: ChartPoint[] = []
-  const unsub = deviceHistoryStore(device.id).subscribe((value) => (liveHistory = value))
-  onDestroy(unsub)
+  let liveDeviceId = ''
+  let unsubHistory: (() => void) | null = null
+
+  // The shell reuses this component when another device is selected, so the
+  // subscription has to follow the prop. Binding it once kept the previous
+  // device's live history on screen after switching.
+  function subscribeLiveHistory(id: string) {
+    if (!id || id === liveDeviceId) return
+    liveDeviceId = id
+    unsubHistory?.()
+    liveHistory = []
+    unsubHistory = deviceHistoryStore(id).subscribe((value) => (liveHistory = value))
+  }
+  $: subscribeLiveHistory(device.id)
+  onDestroy(() => unsubHistory?.())
 
   // History pulled from the server for the longer ranges. The store only holds
   // a short live window (MAX_POINTS), which is why the period selector used to
@@ -47,6 +60,7 @@
   const unsubRange = selectedRange.subscribe((value) => (range = value))
   onDestroy(unsubRange)
   let historyRequest = 0
+  let historyTimer: ReturnType<typeof setInterval> | null = null
 
   // history-v2 returns either downsampled aggregates (cpu_avg, mem_avg, …) or
   // raw payloads, depending on the window. Normalising here keeps the chart
@@ -121,9 +135,26 @@
     }
   }
 
-  // Refetch whenever the device or the shared range changes. The live window
-  // leaves this as a no-op.
-  $: if (device.id && range) void loadHistory()
+  // The range owns its history refresh cadence. The live window needs no timer:
+  // the telemetry store receives a point on every device poll.
+  function scheduleHistory(id: RangeId) {
+    if (historyTimer) {
+      clearInterval(historyTimer)
+      historyTimer = null
+    }
+    void loadHistory()
+    const option = rangeById(id)
+    if (option.id !== 'live') {
+      historyTimer = setInterval(() => void loadHistory(), option.refreshMs)
+    }
+  }
+
+  // Refetch whenever the device or the shared range changes.
+  $: if (device.id && range) scheduleHistory(range)
+
+  onDestroy(() => {
+    if (historyTimer) clearInterval(historyTimer)
+  })
 
   $: isLive = rangeById(range).id === 'live'
   $: windowed = isLive ? liveHistory : serverHistory

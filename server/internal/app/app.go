@@ -52,6 +52,9 @@ type Server struct {
 	// on every tick. It is atomic because the settings handler writes it while
 	// the cleanup goroutine reads it.
 	logRetentionDays atomic.Int32
+	// logStreamInterval is how often the log SSE endpoint checks the table for
+	// new rows. It is a field so tests can shorten it.
+	logStreamInterval time.Duration
 }
 
 type registerRequest struct {
@@ -160,7 +163,7 @@ func Run() error {
 	dockerBroadcaster := docker.NewBroadcaster()
 	flags := loadFeatureFlags()
 	bootstrapAdmin(dataStore, structLogger, flags.EnableRegistration)
-	server := &Server{store: dataStore, logStore: logStore, log: structLogger, aggregator: aggregator, notifier: notifier, dockerQueue: dockerQueue, dockerBroadcaster: dockerBroadcaster, streamTickets: newStreamTicketStore(), rateLimiter: newRateLimiter(), tunnelHub: tunnel.NewHub(), flags: flags, trustProxy: envBool("SYNCWIN_TRUST_PROXY", false)}
+	server := &Server{store: dataStore, logStore: logStore, log: structLogger, aggregator: aggregator, notifier: notifier, dockerQueue: dockerQueue, dockerBroadcaster: dockerBroadcaster, streamTickets: newStreamTicketStore(), rateLimiter: newRateLimiter(), tunnelHub: tunnel.NewHub(), flags: flags, trustProxy: envBool("SYNCWIN_TRUST_PROXY", false), logStreamInterval: time.Second}
 
 	// Logging settings are persisted so an operator's choice survives a
 	// restart. Seed the row on first boot from the configured defaults, then
@@ -228,6 +231,8 @@ func Run() error {
 	mux.HandleFunc("/api/logs", server.handleLogs)
 	mux.HandleFunc("/api/logs/", server.handleLogByID)
 	mux.HandleFunc("/api/logs/stats", server.handleLogStats)
+	mux.HandleFunc("/api/logs/stream-token", server.handleLogStreamToken)
+	mux.HandleFunc("/api/logs/stream", server.handleLogStream)
 	mux.HandleFunc("/api/log-settings", server.handleLogSettings)
 	mux.HandleFunc("/api/audit", server.handleAudit)
 	mux.HandleFunc("/api/errors", server.handleErrors)
@@ -235,6 +240,9 @@ func Run() error {
 	// Telemetry history v2 and retention
 	mux.HandleFunc("/api/retention", server.handleRetention)
 	mux.HandleFunc("/api/logs/delete", server.handleDeleteLogs)
+
+	// Alert acknowledgement state (the alerts themselves are derived by the UI)
+	mux.HandleFunc("/api/alerts", server.handleAlerts)
 
 	// Notification providers and inbox
 	mux.HandleFunc("/api/notifications/config", server.handleNotificationConfig)
@@ -1802,6 +1810,20 @@ func (s *Server) handleTelemetry(w http.ResponseWriter, r *http.Request, deviceI
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+	// The container list is sampled on a slow cadence. Persist that sample in
+	// the dedicated column and keep it out of the per-sample hardware JSON: the
+	// list is several kilobytes and would otherwise be copied into every raw
+	// telemetry row. A sample that did list containers (even an empty list)
+	// replaces the column; other samples leave it untouched.
+	if req.Hardware.DockerContainersSampled || len(req.Hardware.DockerContainers) > 0 {
+		if derr := s.store.UpdateDockerState(deviceID, req.Hardware.DockerContainers); derr != nil {
+			s.log.Warn(logging.CatDevice, logging.EventSyncError, "docker state store failed",
+				map[string]any{"device_id": deviceID, "error": derr.Error()})
+		}
+	}
+	req.Hardware.DockerContainers = nil
+	req.Hardware.DockerContainersSampled = false
+
 	updated, err := s.store.UpdateHardwareStats(deviceID, req.Hardware)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
@@ -2006,6 +2028,10 @@ func (s *Server) handleRetention(w http.ResponseWriter, r *http.Request) {
 		}
 		rs.OwnerID = ownerID
 		if err := s.store.UpdateRetentionSettings(rs); err != nil {
+			if errors.Is(err, store.ErrInvalidRetention) {
+				s.writeError(w, http.StatusBadRequest, err)
+				return
+			}
 			s.writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -2050,8 +2076,7 @@ func (s *Server) handleDeleteLogs(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	ownerID, ok := s.requireSession(w, r)
-	if !ok {
+	if _, ok := s.requireSession(w, r); !ok {
 		return
 	}
 	days := 5
@@ -2060,7 +2085,7 @@ func (s *Server) handleDeleteLogs(w http.ResponseWriter, r *http.Request) {
 			days = parsed
 		}
 	}
-	deleted, err := s.store.CleanupOldLogsForOwner(ownerID, days)
+	deleted, err := s.store.CleanupOldLogs(days)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
@@ -2680,36 +2705,11 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	ownerID, ok := s.requireSession(w, r)
-	if !ok {
+	if _, ok := s.requireSession(w, r); !ok {
 		return
 	}
 
-	params := logging.QueryParams{
-		OwnerID:       ownerID,
-		Level:         r.URL.Query().Get("level"),
-		Category:      r.URL.Query().Get("category"),
-		Event:         r.URL.Query().Get("event"),
-		DeviceID:      r.URL.Query().Get("device_id"),
-		UserID:        r.URL.Query().Get("user_id"),
-		RequestID:     r.URL.Query().Get("request_id"),
-		CorrelationID: r.URL.Query().Get("correlation_id"),
-		From:          r.URL.Query().Get("from"),
-		To:            r.URL.Query().Get("to"),
-		Search:        r.URL.Query().Get("search"),
-	}
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			params.Limit = n
-		}
-	}
-	if v := r.URL.Query().Get("offset"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			params.Offset = n
-		}
-	}
-
-	result, err := s.logStore.Query(params)
+	result, err := s.logStore.Query(logParamsFromRequest(r))
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
@@ -2724,8 +2724,7 @@ func (s *Server) handleLogByID(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	ownerID, ok := s.requireSession(w, r)
-	if !ok {
+	if _, ok := s.requireSession(w, r); !ok {
 		return
 	}
 
@@ -2742,7 +2741,7 @@ func (s *Server) handleLogByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entry, err := s.logStore.GetByIDForOwner(id, ownerID)
+	entry, err := s.logStore.GetByID(id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			s.writeError(w, http.StatusNotFound, errors.New("log entry not found"))
@@ -2761,12 +2760,11 @@ func (s *Server) handleLogStats(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	ownerID, ok := s.requireSession(w, r)
-	if !ok {
+	if _, ok := s.requireSession(w, r); !ok {
 		return
 	}
 
-	stats, err := s.logStore.StatsForOwner(ownerID)
+	stats, err := s.logStore.Stats()
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
@@ -2781,8 +2779,7 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	ownerID, ok := s.requireSession(w, r)
-	if !ok {
+	if _, ok := s.requireSession(w, r); !ok {
 		return
 	}
 
@@ -2799,7 +2796,7 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	result, err := s.logStore.GetAuditTrailForOwner(ownerID, limit, offset)
+	result, err := s.logStore.GetAuditTrail(limit, offset)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
@@ -2814,8 +2811,7 @@ func (s *Server) handleErrors(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	ownerID, ok := s.requireSession(w, r)
-	if !ok {
+	if _, ok := s.requireSession(w, r); !ok {
 		return
 	}
 
@@ -2832,7 +2828,7 @@ func (s *Server) handleErrors(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	result, err := s.logStore.GetErrorsForOwner(ownerID, limit, offset)
+	result, err := s.logStore.GetErrors(limit, offset)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
@@ -3607,42 +3603,15 @@ func (s *Server) handleDockerGetResult(w http.ResponseWriter, r *http.Request, d
 	_ = json.NewEncoder(w).Encode(result)
 }
 
-// handleDockerState returns cached Docker state from the latest telemetry.
+// handleDockerState returns the cached Docker state (last sampled container
+// list plus the engine info from the latest telemetry).
 func (s *Server) handleDockerState(w http.ResponseWriter, r *http.Request, deviceID string) {
 	device, err := s.store.GetDevice(deviceID)
 	if err != nil || device.OwnerID != s.ownerID(r) {
 		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
 		return
 	}
-	state := docker.DockerState{
-		Available:  device.Hardware.DockerAvailable,
-		Containers: make([]docker.DockerSummary, 0),
-	}
-	for _, c := range device.Hardware.DockerContainers {
-		summary := docker.DockerSummary{
-			ID: c.ID, Name: c.Name, Image: c.Image, State: c.State, Status: c.Status,
-		}
-		for _, p := range c.Ports {
-			summary.Ports = append(summary.Ports, docker.PortMapping{
-				PrivatePort: p.PrivatePort, PublicPort: p.PublicPort, Type: p.Type, IP: p.IP,
-			})
-		}
-		for _, m := range c.Mounts {
-			summary.Mounts = append(summary.Mounts, docker.MountInfo{
-				Type: m.Type, Source: m.Source, Destination: m.Destination, RW: m.RW,
-			})
-		}
-		state.Containers = append(state.Containers, summary)
-	}
-	if device.Hardware.DockerInfo != nil {
-		state.Info = &docker.DockerInfoData{
-			Version: device.Hardware.DockerInfo.Version, Total: device.Hardware.DockerInfo.Total,
-			Running: device.Hardware.DockerInfo.Running, Stopped: device.Hardware.DockerInfo.Stopped,
-			Paused: device.Hardware.DockerInfo.Paused, Images: device.Hardware.DockerInfo.Images,
-			Driver: device.Hardware.DockerInfo.Driver, NCPU: device.Hardware.DockerInfo.NCPU,
-		}
-	}
-	_ = json.NewEncoder(w).Encode(state)
+	_ = json.NewEncoder(w).Encode(s.getDockerState(deviceID))
 }
 
 // handleDockerStream is an SSE endpoint that streams Docker state updates.
@@ -3689,7 +3658,8 @@ func (s *Server) handleDockerStream(w http.ResponseWriter, r *http.Request, devi
 	}
 }
 
-// getDockerState builds a DockerState from the device's latest telemetry.
+// getDockerState builds a DockerState from the last sampled container list and
+// the engine info from the latest telemetry.
 func (s *Server) getDockerState(deviceID string) docker.DockerState {
 	device, err := s.store.GetDevice(deviceID)
 	if err != nil {
@@ -3699,7 +3669,8 @@ func (s *Server) getDockerState(deviceID string) docker.DockerState {
 		Available:  device.Hardware.DockerAvailable,
 		Containers: make([]docker.DockerSummary, 0),
 	}
-	for _, c := range device.Hardware.DockerContainers {
+	containers, _ := s.store.GetDockerStateContainers(deviceID)
+	for _, c := range containers {
 		summary := docker.DockerSummary{
 			ID: c.ID, Name: c.Name, Image: c.Image, State: c.State, Status: c.Status,
 		}

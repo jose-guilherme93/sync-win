@@ -1,6 +1,6 @@
 {
-  "contract_version": "1.6.0",
-  "agent_version": "0.7.2",
+  "contract_version": "1.7.0",
+  "agent_version": "0.9.0",
   "collection": {
     "max_file_bytes": 524288,
     "default_preference_files": [
@@ -76,6 +76,8 @@
       "uptime_seconds",
       "load_average",
       "cpu_model",
+      "cpu_clock_mhz",
+      "core_voltage_v",
       "kernel",
       "operating_system",
       "power_watts",

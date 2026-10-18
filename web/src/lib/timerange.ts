@@ -5,9 +5,11 @@ import { writable } from 'svelte/store'
 // rate — the old 1s/5s/10s/30s/1m buttons conflated the two, so a reader could
 // not tell what range they were looking at.
 //
-// Each window carries the poll cadence that suits it: the live minute is
-// refreshed every 5s, while a 30-day chart is refetched every 5 minutes rather
-// than hammering the server for data that barely changes.
+// Each window carries the *chart* refresh cadence that suits it: the live
+// minute is fed by the device poll, while a 30-day chart is refetched every 5
+// minutes rather than hammering the server for data that barely changes. This
+// cadence no longer drives the device/heartbeat poll: a wide window must not
+// make a healthy device look stale.
 //
 // The server picks the resolution from the window automatically
 // (ResolutionForInterval: <=2h raw, <=8h 1m, <=3d 5m, else 1h), so these

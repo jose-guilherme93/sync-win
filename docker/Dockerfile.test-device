@@ -1,0 +1,31 @@
+# A full-featured test device for the dev stack.
+#
+# The Alpine test agents in scripts/dev-test-agents.sh are cheap and prove the
+# enrollment/heartbeat/telemetry path, but they have no systemd, no journald and
+# no apt, so the Services, Logs and Packages screens have nothing real to show.
+# This image fills that gap: it boots systemd as PID 1, runs journald, ships
+# apt, nginx (a listening port) and Lynis (the Security audit).
+#
+# It is a development image and is started privileged by the script; never use
+# it in production or expose it to untrusted networks.
+FROM ubuntu:24.04
+
+ENV container=docker \
+    DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        systemd \
+        systemd-sysv \
+        dbus \
+        iproute2 \
+        procps \
+        curl \
+        ca-certificates \
+        nginx \
+        lynis \
+    && rm -rf /var/lib/apt/lists/*
+
+STOPSIGNAL SIGRTMIN+3
+
+CMD ["/sbin/init"]

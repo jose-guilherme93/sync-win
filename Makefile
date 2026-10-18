@@ -70,6 +70,9 @@ help: ## Show this help
 	@printf "  $(G)%-16s$(N) %s\n" "dev-logs"   "Follow dev stack logs"
 	@printf "  $(G)%-16s$(N) %s\n" "dev-ps"     "Show dev stack status"
 	@printf "  $(G)%-16s$(N) %s\n" "dev-shell"  "Open a shell in the dev server container"
+	@printf "  $(G)%-16s$(N) %s\n" "dev-agents" "Create two lightweight Alpine test devices"
+	@printf "  $(G)%-16s$(N) %s\n" "dev-agents-full" "Create one systemd test device (services/logs/packages/Docker)"
+	@printf "  $(G)%-16s$(N) %s\n" "dev-agents-down" "Remove every test device"
 	@printf "  $(G)%-16s$(N) %s\n" "prod-down"  "Stop and remove the production stack"
 	@printf "  $(G)%-16s$(N) %s\n" "prod-logs"  "Follow production logs"
 	@printf "  $(G)%-16s$(N) %s\n" "prod-ps"    "Show production stack status"
@@ -145,6 +148,18 @@ dev-ps: ## Show dev stack status
 .PHONY: dev-shell
 dev-shell: ## Open a shell in the dev server container
 	$(DEV) exec server sh
+
+.PHONY: dev-agents
+dev-agents: ## Create/refresh two lightweight Alpine test devices
+	@./scripts/dev-test-agents.sh
+
+.PHONY: dev-agents-full
+dev-agents-full: ## Create/refresh the systemd test device (services, logs, packages, Docker)
+	@./scripts/dev-test-agents.sh full
+
+.PHONY: dev-agents-down
+dev-agents-down: ## Remove every test device container
+	@./scripts/dev-test-agents.sh down
 
 .PHONY: prod
 prod: ## Build and start the production stack (detached)

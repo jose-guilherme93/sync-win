@@ -8,7 +8,10 @@ import { memoryPercent, type HardwareStats } from './types'
 // means.
 
 export type InsightType = 'info' | 'warn' | 'crit'
-export type Insight = { text: string; type: InsightType }
+// `key` identifies the rule, not the reading: acknowledging "CPU 92%" must keep
+// the alert hidden when the next sample reads 95%. The rendered `text` changes
+// with every sample and is unsuitable as an identity.
+export type Insight = { key: string; text: string; type: InsightType }
 
 // Thresholds are duplicated from the meter colours on purpose: these are the
 // points at which the UI changes state, and keeping them in one list is what
@@ -33,38 +36,38 @@ export function generateInsights(h?: HardwareStats): Insight[] {
   const mem = memoryPercent(h)
   const agentCpu = h.agent_cpu_usage || 0
 
-  if (cpu > THRESHOLDS.cpuCrit) insights.push({ text: `CPU ${cpu.toFixed(0)}%`, type: 'crit' })
-  else if (cpu > THRESHOLDS.cpuWarn) insights.push({ text: `CPU ${cpu.toFixed(0)}%`, type: 'warn' })
+  if (cpu > THRESHOLDS.cpuCrit) insights.push({ key: 'cpu', text: `CPU ${cpu.toFixed(0)}%`, type: 'crit' })
+  else if (cpu > THRESHOLDS.cpuWarn) insights.push({ key: 'cpu', text: `CPU ${cpu.toFixed(0)}%`, type: 'warn' })
 
-  if (mem > THRESHOLDS.ramCrit) insights.push({ text: `RAM ${mem.toFixed(0)}%`, type: 'crit' })
-  else if (mem > THRESHOLDS.ramWarn) insights.push({ text: `RAM ${mem.toFixed(0)}%`, type: 'warn' })
+  if (mem > THRESHOLDS.ramCrit) insights.push({ key: 'memory', text: `RAM ${mem.toFixed(0)}%`, type: 'crit' })
+  else if (mem > THRESHOLDS.ramWarn) insights.push({ key: 'memory', text: `RAM ${mem.toFixed(0)}%`, type: 'warn' })
 
   if (h.cpu_temperature && h.cpu_temperature > THRESHOLDS.tempCrit) {
-    insights.push({ text: `Temp ${h.cpu_temperature.toFixed(0)}°C`, type: 'crit' })
+    insights.push({ key: 'cpu-temp', text: `Temp ${h.cpu_temperature.toFixed(0)}°C`, type: 'crit' })
   } else if (h.cpu_temperature && h.cpu_temperature > THRESHOLDS.tempWarn) {
-    insights.push({ text: `Temp ${h.cpu_temperature.toFixed(0)}°C`, type: 'warn' })
+    insights.push({ key: 'cpu-temp', text: `Temp ${h.cpu_temperature.toFixed(0)}°C`, type: 'warn' })
   }
 
   if (h.battery_percent != null && h.battery_percent > 0 && h.battery_percent < THRESHOLDS.batteryLow && h.battery_status !== 'charging') {
-    insights.push({ text: `Battery ${h.battery_percent.toFixed(0)}%`, type: 'crit' })
+    insights.push({ key: 'battery', text: `Battery ${h.battery_percent.toFixed(0)}%`, type: 'crit' })
   }
 
   for (const part of h.disk_partitions ?? []) {
     if (part.used_percent > THRESHOLDS.diskCrit) {
-      insights.push({ text: `${part.mount} ${part.used_percent.toFixed(0)}% full`, type: 'crit' })
+      insights.push({ key: `disk:${part.mount}`, text: `${part.mount} ${part.used_percent.toFixed(0)}% full`, type: 'crit' })
     } else if (part.used_percent > THRESHOLDS.diskWarn) {
-      insights.push({ text: `${part.mount} ${part.used_percent.toFixed(0)}%`, type: 'warn' })
+      insights.push({ key: `disk:${part.mount}`, text: `${part.mount} ${part.used_percent.toFixed(0)}%`, type: 'warn' })
     }
   }
 
   for (const iface of h.network_ifaces ?? []) {
     if (iface.rx_errors > 0 || iface.tx_errors > 0) {
-      insights.push({ text: `Net err ${iface.name}`, type: 'warn' })
+      insights.push({ key: `net:${iface.name}`, text: `Net err ${iface.name}`, type: 'warn' })
     }
   }
 
   if (agentCpu > THRESHOLDS.agentCpuWarn) {
-    insights.push({ text: `Agent ${agentCpu.toFixed(1)}%`, type: 'warn' })
+    insights.push({ key: 'agent-cpu', text: `Agent ${agentCpu.toFixed(1)}%`, type: 'warn' })
   }
 
   if (h.kernel_version) {
@@ -73,7 +76,7 @@ export function generateInsights(h?: HardwareStats): Insight[] {
       const major = parseInt(parts[0], 10)
       const minor = parseInt(parts[1], 10)
       if (major < 5 || (major === 5 && minor < 15)) {
-        insights.push({ text: `Kernel ${h.kernel_version}`, type: 'warn' })
+        insights.push({ key: 'kernel', text: `Kernel ${h.kernel_version}`, type: 'warn' })
       }
     }
   }

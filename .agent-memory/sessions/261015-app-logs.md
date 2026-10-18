@@ -92,19 +92,22 @@ table, so a per-owner level would apply to every account while appearing scoped.
 - `go test -race` could not run locally (no cgo/gcc); CI runs it. The changed
   shared state is `atomic.Int32`, so it is race-free by construction.
 - Log streaming is polling, not SSE; the notification SSE plumbing exists but a
-  logs stream was left out to keep the change reviewable.
+  logs stream was left out to keep the change reviewable. **Superseded on
+  2026-10-17 by `sessions/261017-log-sse.md`.**
 - The "Data Retention" modal (telemetry retention) still lives in the user menu;
   it is a separate concern from application logs and was not moved into Settings.
+  **Superseded on 2026-10-17 by `sessions/261017-retention-settings.md`.**
 
 ## Follow-up pass (same day)
 
 Reviewed the feature and closed the gaps found:
 
-- **Test coverage for the query API** (`logs_test.go`): owner scoping, the
+- **Test coverage for the query API** (`logs_test.go`): the
   level/category/search filters, pagination, the oversized-limit clamp to 100,
   the session requirement, method rejection, and the audit/errors views. The
   query endpoints were previously only exercised indirectly through an owner
-  isolation test.
+  isolation test. (The owner filter itself was removed on 2026-10-17; it made
+  the viewer empty. See `sessions/261017-log-scope.md`.)
 - **Trace a single request**: the viewer now filters by `request_id` and shows
   both `request_id` and `correlation_id` in the detail row. The backend already
   supported them; the UI exposed neither.

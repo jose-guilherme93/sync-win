@@ -372,6 +372,8 @@ type telemetryStats struct {
 	MemoryUsedBytes    uint64            `json:"memory_used_bytes"`
 	MemoryTotalBytes   uint64            `json:"memory_total_bytes"`
 	CPUTemperature     float64           `json:"cpu_temperature"`
+	CPUClockMHz        float64           `json:"cpu_clock_mhz,omitempty"`
+	CoreVoltageV       float64           `json:"core_voltage_v,omitempty"`
 	GPUTemperature     float64           `json:"gpu_temperature_celsius,omitempty"`
 	PowerWatts         float64           `json:"power_watts"`
 	BatteryPercent     float64           `json:"battery_percent,omitempty"`
@@ -406,10 +408,14 @@ type telemetryStats struct {
 	TopMemProcesses    []processInfo     `json:"top_mem_processes,omitempty"`
 	DockerAvailable    bool              `json:"docker_available"`
 	DockerContainers   []dockerContainer `json:"docker_containers,omitempty"`
-	DockerInfo         *dockerInfo       `json:"docker_info,omitempty"`
-	LynisAvailable     bool              `json:"lynis_available"`
-	LynisInstallCmd    string            `json:"lynis_install_cmd,omitempty"`
-	Logs               []deviceLog       `json:"logs,omitempty"`
+	// True only on the cycles that actually listed containers. Without it the
+	// server cannot tell "not sampled this time" from "Docker has no containers"
+	// and either keeps stale rows or deletes the list every cycle.
+	DockerContainersSampled bool        `json:"docker_containers_sampled,omitempty"`
+	DockerInfo              *dockerInfo `json:"docker_info,omitempty"`
+	LynisAvailable          bool        `json:"lynis_available"`
+	LynisInstallCmd         string      `json:"lynis_install_cmd,omitempty"`
+	Logs                    []deviceLog `json:"logs,omitempty"`
 	// LogsStatus explains a device with no logs. Without it an unreadable
 	// journal and a device that genuinely has nothing to report look identical
 	// on the dashboard, which is exactly the bug this field exists to prevent.
@@ -611,7 +617,9 @@ func cmdDaemon(args []string) {
 	// Logs are heavier to collect (journalctl), so sample them less often
 	// than hardware telemetry: roughly every 60s at the default 10s interval.
 	const logCollectCycles = 6
-	logCycle := 0
+	// Start at the limit so the first cycle also emits the one routine line we
+	// keep (the telemetry summary) instead of staying silent for a minute.
+	logCycle := logCollectCycles
 	// Version check cadence: ~5 minutes at the default 10s interval. Cheap
 	// (one small GET) and independent of the unit the updater runs from, which
 	// is the point: a device whose update timer was never installed still
@@ -634,7 +642,6 @@ func cmdDaemon(args []string) {
 
 	for {
 		now := time.Now()
-		log.Printf("cycle started device=%s failures=%d", *deviceID, consecutiveFailures)
 		hadError := false
 
 		// Remote access is opt-in on the device, and `set ssh on` rewrites the
@@ -724,12 +731,15 @@ func cmdDaemon(args []string) {
 			log.Printf("command processing failed: %v", err)
 			hadError = true
 		}
-		stats, sample, err := collectHardwareStats(&previous, now)
+		logCycle++
+		sampleSlow := logCycle >= logCollectCycles
+		if sampleSlow {
+			logCycle = 0
+		}
+		stats, sample, err := collectHardwareStats(&previous, now, sampleSlow)
 		previous = sample
 		if err == nil {
-			logCycle++
-			if logCycle >= logCollectCycles {
-				logCycle = 0
+			if sampleSlow {
 				// A journal read failure is not fatal: telemetry continues with
 				// no lines. The reason travels back to the server so the Logs
 				// screen can say why it is empty instead of looking broken.
@@ -747,7 +757,10 @@ func cmdDaemon(args []string) {
 		if err != nil {
 			log.Printf("telemetry failed: %v", err)
 			hadError = true
-		} else {
+		} else if logCycle == 0 {
+			// Once a minute, not every ten seconds. The agent's own journal is
+			// shipped back to the server's device Logs screen, so a per-cycle
+			// line turned that screen into a wall of "telemetry sent" rows.
 			log.Printf("telemetry sent cpu=%.1f%% memory=%d/%d power=%.1fW agent=%.1f%% os=%q", stats.CPUUsagePercent, stats.MemoryUsedBytes, stats.MemoryTotalBytes, stats.PowerWatts, stats.AgentCPUUsage, stats.OperatingSystem)
 		}
 		if err == nil {
@@ -912,6 +925,10 @@ func main() {
 		}
 	case "--version", "version":
 		fmt.Println(agentVersion)
+	case "fingerprint":
+		// Printed for the installer and for support: the fingerprint is stable
+		// hardware metadata, never an authenticator.
+		fmt.Println(collectors.CollectHardwareID().Fingerprint)
 	default:
 		log.Fatalf("unknown command: %s", os.Args[1])
 	}
@@ -1364,7 +1381,7 @@ type hardwareSample struct {
 // collectHardwareStats collects real hardware data from /proc, /sys, and collectors.
 // Independent data sources are collected in parallel using goroutines.
 // It returns the telemetry payload and the sample to feed into the next call.
-func collectHardwareStats(prev *hardwareSample, now time.Time) (telemetryStats, hardwareSample, error) {
+func collectHardwareStats(prev *hardwareSample, now time.Time, sampleDocker bool) (telemetryStats, hardwareSample, error) {
 	var stats telemetryStats
 	next := hardwareSample{
 		At:          now,
@@ -1401,7 +1418,6 @@ func collectHardwareStats(prev *hardwareSample, now time.Time) (telemetryStats, 
 
 	// Parallel collectors for heavier I/O operations
 	var wg sync.WaitGroup
-	var mu sync.Mutex
 
 	// CPU cores + core usage
 	var newCPUCores []uint64
@@ -1426,6 +1442,22 @@ func collectHardwareStats(prev *hardwareSample, now time.Time) (telemetryStats, 
 	go func() {
 		defer wg.Done()
 		gpuTemp = collectors.CollectGPUTemperature()
+	}()
+
+	// Current CPU clock (average across logical CPUs)
+	var clockMHz float64
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		clockMHz = collectors.CollectCPUClockMHz()
+	}()
+
+	// CPU core voltage from hwmon; 0 when the host exposes no CPU rail
+	var coreVoltage float64
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		coreVoltage = collectors.CollectCoreVoltageV()
 	}()
 
 	// Battery (percent + status)
@@ -1529,36 +1561,44 @@ func collectHardwareStats(prev *hardwareSample, now time.Time) (telemetryStats, 
 		agentMem = readAgentMemory()
 	}()
 
-	// Docker (potentially slow socket communication)
+	// Docker (potentially slow socket communication). The container list is the
+	// single largest part of the payload and the Docker screen reads it from the
+	// server's cached state, so it is sampled on the same slow cycle as the
+	// journal rather than every ten seconds. Availability and the engine info
+	// stay on the fast cycle: they are tiny and the header uses them.
 	var dockerAvailable bool
 	var dockerContainers []dockerContainer
+	var dockerContainersSampled bool
 	var dockerInf *dockerInfo
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		dockerAvailable = collectors.DockerIsAvailable()
+		if sampleDocker {
+			dockerContainersSampled = true
+		}
 		if dockerAvailable {
-			if containers, err := collectors.DockerListContainers(false); err == nil {
-				var dc []dockerContainer
-				for _, c := range containers {
-					name := ""
-					if len(c.Names) > 0 {
-						name = strings.TrimPrefix(c.Names[0], "/")
+			if sampleDocker {
+				if containers, err := collectors.DockerListContainers(false); err == nil {
+					var dc []dockerContainer
+					for _, c := range containers {
+						name := ""
+						if len(c.Names) > 0 {
+							name = strings.TrimPrefix(c.Names[0], "/")
+						}
+						dc = append(dc, dockerContainer{
+							ID:     c.ID,
+							Names:  c.Names,
+							Name:   name,
+							Image:  c.Image,
+							State:  c.State,
+							Status: c.Status,
+							Ports:  c.Ports,
+							Mounts: c.Mounts,
+						})
 					}
-					dc = append(dc, dockerContainer{
-						ID:     c.ID,
-						Names:  c.Names,
-						Name:   name,
-						Image:  c.Image,
-						State:  c.State,
-						Status: c.Status,
-						Ports:  c.Ports,
-						Mounts: c.Mounts,
-					})
+					dockerContainers = dc
 				}
-				mu.Lock()
-				dockerContainers = dc
-				mu.Unlock()
 			}
 			if info, err := collectors.GetDockerInfo(); err == nil {
 				dockerInf = &dockerInfo{
@@ -1587,6 +1627,8 @@ func collectHardwareStats(prev *hardwareSample, now time.Time) (telemetryStats, 
 
 	// Merge results
 	stats.CPUTemperature = temp
+	stats.CPUClockMHz = clockMHz
+	stats.CoreVoltageV = coreVoltage
 	stats.GPUTemperature = gpuTemp
 	stats.PowerWatts = powerWatts
 	stats.BatteryPercent = batteryPercent
@@ -1604,27 +1646,29 @@ func collectHardwareStats(prev *hardwareSample, now time.Time) (telemetryStats, 
 	stats.CPUCoreUsage = corePercents
 	stats.DockerAvailable = dockerAvailable
 	stats.DockerContainers = dockerContainers
+	stats.DockerContainersSampled = dockerContainersSampled
 	stats.DockerInfo = dockerInf
 	stats.HardwareFingerprint = hwID.Fingerprint
 
-	// Lynis availability
-	if path, err := exec.LookPath("lynis"); err == nil {
-		stats.LynisAvailable = true
-		log.Printf("lynis found at %s", path)
-	} else if _, err := os.Stat("/usr/bin/lynis"); err == nil {
-		stats.LynisAvailable = true
-		log.Printf("lynis found at /usr/bin/lynis")
-	} else if _, err := os.Stat("/usr/sbin/lynis"); err == nil {
-		stats.LynisAvailable = true
-		log.Printf("lynis found at /usr/sbin/lynis")
+	// Lynis availability. Detection is cheap, but the answer almost never
+	// changes, so log it only on a transition: the agent's journal is shipped
+	// to the device Logs screen, and a per-cycle "lynis found" made that screen
+	// a wall of the same line.
+	lynisPath, lynisAvailable := findLynis()
+	stats.LynisAvailable = lynisAvailable
+	if lynisAvailable {
+		stats.LynisInstallCmd = ""
+	} else if isArchLinux() {
+		stats.LynisInstallCmd = "sudo pacman -S lynis"
 	} else {
-		stats.LynisAvailable = false
-		if isArchLinux() {
-			stats.LynisInstallCmd = "sudo pacman -S lynis"
+		stats.LynisInstallCmd = "sudo apt install lynis"
+	}
+	if lynisDetection.update(lynisAvailable, lynisPath) {
+		if lynisAvailable {
+			log.Printf("lynis found at %s", lynisPath)
 		} else {
-			stats.LynisInstallCmd = "sudo apt install lynis"
+			log.Printf("lynis not found, install_cmd=%s", stats.LynisInstallCmd)
 		}
-		log.Printf("lynis not found, install_cmd=%s", stats.LynisInstallCmd)
 	}
 
 	// Memory expanded

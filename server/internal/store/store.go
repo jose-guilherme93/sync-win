@@ -44,6 +44,9 @@ const (
 var sessionTTL = defaultSessionTTL
 
 var (
+	// ErrInvalidRetention marks a retention payload the handler can reject with
+	// 400 instead of reporting an internal failure.
+	ErrInvalidRetention   = errors.New("invalid retention settings")
 	errInvalidFilename    = errors.New("invalid filename")
 	errInvalidCategory    = errors.New("invalid category")
 	errInvalidPath        = errors.New("invalid path")
@@ -140,6 +143,8 @@ type HardwareSummary struct {
 	MemoryUsedBytes    uint64          `json:"memory_used_bytes"`
 	MemoryTotalBytes   uint64          `json:"memory_total_bytes"`
 	CPUTemperature     float64         `json:"cpu_temperature"`
+	CPUClockMHz        float64         `json:"cpu_clock_mhz,omitempty"`
+	CoreVoltageV       float64         `json:"core_voltage_v,omitempty"`
 	PowerWatts         float64         `json:"power_watts"`
 	BatteryPercent     float64         `json:"battery_percent"`
 	BatteryStatus      string          `json:"battery_status"`
@@ -178,6 +183,8 @@ type HardwareStats struct {
 	MemoryUsedBytes    uint64            `json:"memory_used_bytes"`
 	MemoryTotalBytes   uint64            `json:"memory_total_bytes"`
 	CPUTemperature     float64           `json:"cpu_temperature"`
+	CPUClockMHz        float64           `json:"cpu_clock_mhz,omitempty"`
+	CoreVoltageV       float64           `json:"core_voltage_v,omitempty"`
 	GPUTemperature     float64           `json:"gpu_temperature_celsius"`
 	PowerWatts         float64           `json:"power_watts"`
 	BatteryPercent     float64           `json:"battery_percent"`
@@ -212,10 +219,15 @@ type HardwareStats struct {
 	TopMemProcesses    []ProcessInfo     `json:"top_mem_processes,omitempty"`
 	DockerAvailable    bool              `json:"docker_available"`
 	DockerContainers   []DockerContainer `json:"docker_containers,omitempty"`
-	DockerInfo         *DockerInfo       `json:"docker_info,omitempty"`
-	LynisAvailable     bool              `json:"lynis_available"`
-	LynisInstallCmd    string            `json:"lynis_install_cmd,omitempty"`
-	Logs               []DeviceLog       `json:"logs,omitempty"`
+	// True only when the agent actually listed containers on this sample. The
+	// list is sampled slowly; without this flag the handler cannot distinguish
+	// "not sampled" from "Docker now has no containers" and either keeps stale
+	// rows or wipes the cache every ten seconds.
+	DockerContainersSampled bool        `json:"docker_containers_sampled,omitempty"`
+	DockerInfo              *DockerInfo `json:"docker_info,omitempty"`
+	LynisAvailable          bool        `json:"lynis_available"`
+	LynisInstallCmd         string      `json:"lynis_install_cmd,omitempty"`
+	Logs                    []DeviceLog `json:"logs,omitempty"`
 	// LogsStatus is the agent's explanation for having no logs, carried in the
 	// telemetry payload so the dashboard can distinguish an unreadable journal
 	// from a device with nothing to report.
@@ -464,6 +476,7 @@ func NewStore(root string) (*Store, error) {
 	s.migrateAddStatusColumn()
 	s.migrateAddFingerprintColumn()
 	s.migrateAddMachineIDColumn()
+	s.migrateAddDockerStateColumn()
 	if err := s.migrateAddSystemInventoryColumns(context.Background()); err != nil {
 		return nil, err
 	}
@@ -618,6 +631,15 @@ func (s *Store) migrateAddMachineIDColumn() {
 	_, _ = s.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_devices_machine ON devices(machine_id)")
 }
 
+func (s *Store) migrateAddDockerStateColumn() {
+	ctx := context.Background()
+	var count int
+	_ = s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM pragma_table_info('devices') WHERE name='docker_state_json'").Scan(&count)
+	if count == 0 {
+		_, _ = s.db.ExecContext(ctx, "ALTER TABLE devices ADD COLUMN docker_state_json TEXT NOT NULL DEFAULT '[]'")
+	}
+}
+
 func (s *Store) migrateHashDeviceTokens() {
 	rows, err := s.db.Query("SELECT id, device_token FROM devices")
 	if err != nil {
@@ -692,7 +714,11 @@ func (s *Store) initSchema() error {
 		tags_json TEXT NOT NULL DEFAULT '[]',
 		collection_interval_seconds INTEGER NOT NULL DEFAULT 10,
 		updates_json TEXT NOT NULL DEFAULT '{"status":"not_reported","updates":[]}',
-		machine_id TEXT NOT NULL DEFAULT ''
+		machine_id TEXT NOT NULL DEFAULT '',
+		-- The Docker container list is sampled slowly and is several kilobytes.
+		-- Keeping it in its own column means it is written once per sample
+		-- instead of being copied into every telemetry_raw row.
+		docker_state_json TEXT NOT NULL DEFAULT '[]'
 	);
 	-- Indexes on machine_id are deliberately NOT created here, for the same
 	-- reason as idx_logs_owner_ts below: on an existing database the CREATE TABLE
@@ -814,6 +840,15 @@ func (s *Store) initSchema() error {
 		console_level  TEXT NOT NULL DEFAULT 'WARN',
 		retention_days INTEGER NOT NULL DEFAULT 14,
 		updated_at     TEXT NOT NULL
+	);
+	-- Alert acknowledgements. Alerts themselves are derived in the dashboard
+	-- from lib/insights.ts, which is the single source of thresholds; the
+	-- server only persists which findings the operator has dismissed.
+	CREATE TABLE IF NOT EXISTS alert_acks (
+		owner_id  TEXT NOT NULL,
+		alert_id  TEXT NOT NULL,
+		acked_at  TEXT NOT NULL,
+		PRIMARY KEY (owner_id, alert_id)
 	);
 	CREATE TABLE IF NOT EXISTS device_notes (
 		id TEXT PRIMARY KEY,
@@ -3144,11 +3179,14 @@ func (s *Store) GetExtraDirs(ownerID string) ([]string, error) {
 
 // RetentionSettings holds data retention configuration per owner.
 type RetentionSettings struct {
-	OwnerID          string `json:"owner_id"`
-	RawHours         int    `json:"raw_hours"`
-	Resolution1mDays int    `json:"1m_days"`
-	Resolution5mDays int    `json:"5m_days"`
-	Resolution1hDays int    `json:"1h_days"`
+	OwnerID  string `json:"owner_id"`
+	RawHours int    `json:"raw_hours"`
+	// The JSON names match the SQL columns and the documented API. They were
+	// "1m_days"/"5m_days"/"1h_days", which the UI and API.md never sent, so a
+	// PUT decoded zeros and every save failed validation.
+	Resolution1mDays int `json:"resolution_1m_days"`
+	Resolution5mDays int `json:"resolution_5m_days"`
+	Resolution1hDays int `json:"resolution_1h_days"`
 }
 
 // Rejection represents a rejected preference file (alias for PreferenceRejection).
@@ -3172,18 +3210,18 @@ func (s *Store) GetRetentionSettings(ownerID string) (*RetentionSettings, error)
 
 func validateRetentionSettings(rs RetentionSettings) error {
 	if strings.TrimSpace(rs.OwnerID) == "" {
-		return errors.New("owner_id is required")
+		return fmt.Errorf("%w: owner_id is required", ErrInvalidRetention)
 	}
 	if rs.RawHours < 1 || rs.RawHours > 168 {
-		return errors.New("raw_hours must be between 1 and 168")
+		return fmt.Errorf("%w: raw_hours must be between 1 and 168", ErrInvalidRetention)
 	}
 	for name, value := range map[string]int{
-		"1m_days": rs.Resolution1mDays,
-		"5m_days": rs.Resolution5mDays,
-		"1h_days": rs.Resolution1hDays,
+		"resolution_1m_days": rs.Resolution1mDays,
+		"resolution_5m_days": rs.Resolution5mDays,
+		"resolution_1h_days": rs.Resolution1hDays,
 	} {
 		if value < 1 || value > 3650 {
-			return fmt.Errorf("%s must be between 1 and 3650", name)
+			return fmt.Errorf("%w: %s must be between 1 and 3650", ErrInvalidRetention, name)
 		}
 	}
 	return nil

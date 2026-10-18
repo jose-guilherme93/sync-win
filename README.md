@@ -270,6 +270,29 @@ DEV_HOST=dev.example.com make dev-d   # any other name
 use `localhost` or the tailnet IP; the name works from devices that have
 MagicDNS enabled.
 
+**Test devices**
+
+The dashboard is more useful with devices reporting. Two kinds of container run
+the real agent against the dev stack; both use the demo account
+(`make dev-account`) and a stable `machine_id`, so re-running adopts the same
+device record instead of creating a duplicate.
+
+```bash
+make dev-agents        # alpine-test-1/2: ~4 MB each, enrollment + telemetry
+make dev-agents-full   # ubuntu-full-1: systemd, journald, apt, nginx, Lynis, Docker
+make dev-agents-down   # remove the containers (the device records stay)
+```
+
+The Alpine pair is capped at 64 MB / 0.25 CPU and covers heartbeats, telemetry
+and the honest "not collected yet" states: it has no systemd, journald or apt.
+The **full** device is a privileged Ubuntu container booting systemd as PID 1,
+with journald, apt, nginx (a listening port), Lynis and the host's Docker
+socket. That is the device to use for Services, Logs, Packages, Security and
+Docker; it needs about 100 MB of RAM and is development-only. Its `/proc` is
+still the host's, so CPU, memory and kernel are host numbers, and it has no
+sshd, block devices or GPU, so remote access, SMART and GPU collection cannot be
+tested there. Those need real hardware.
+
 **Without containers**
 
 ```bash

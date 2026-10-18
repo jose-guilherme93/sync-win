@@ -183,7 +183,15 @@ not need CORS.
 - The structured JSON logger automatically redacts secrets before storage.
 - Known patterns (API keys, tokens, passwords, cookies, device credentials) are replaced with `[REDACTED]`.
 - Redacted entries are marked in the database.
-- Log, audit, error, retention, and SSE queries are scoped to the authenticated owner.
+- Application logs, the audit and error views, and the log SSE stream are
+  **server-wide**. The server writes most entries itself (startup, HTTP, agent,
+  sync) and those rows carry no owner, so an owner-scoped viewer returned
+  nothing at all. Every authenticated account is an operator and sees the same
+  fleet-wide log; the Settings screen is an administration view, not per-account
+  data. Device journal logs (`/api/devices/{id}/logs`) remain scoped to the
+  device owner, and retention is global (the `log_settings` row). With public
+  registration enabled, treat the instance as trusted-admin-only — the same
+  caveat as the logging settings below.
 
 ### Audit trail
 

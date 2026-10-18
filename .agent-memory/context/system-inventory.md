@@ -108,9 +108,9 @@ still has not been opened in a browser.
 
 The remaining backend items are now tracked as an explicit "Pendências de backend
 conhecidas" section in `ROADMAP.md` instead of only living in a memory file:
-`smart`, `updates`, `alerts` + ack, `PATCH /devices/{id}`,
-`POST /devices/{id}/actions`, CPU clock/voltage, and
-`agent/collectors/gpu_nvidia.go`.
+`smart` and `agent/collectors/gpu_nvidia.go`. (`updates`,
+`PATCH /devices/{id}`, `POST /devices/{id}/actions`, the alert
+acknowledgements and CPU clock/voltage have since shipped.)
 
 ## Note on this change
 

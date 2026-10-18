@@ -48,6 +48,14 @@ SYNCWIN_UPDATE_REQUEST_FILE="/var/lib/sync-win/update-request"
 SYNCWIN_HELPER_SERVICE_NAME="sync-win-agent-helper.service"
 SYNCWIN_HELPER_SERVICE_FILE="/etc/systemd/system/${SYNCWIN_HELPER_SERVICE_NAME}"
 SYNCWIN_HELPER_SERVICE_TEMPLATE=""
+
+# The project was renamed from LEM. Devices installed under the old name can
+# still carry the old unit, binary, user and state directories; the installer is
+# the one process that can remove them without asking.
+LEGACY_UNIT_NAMES=("lem-agent.service" "lem-agent-update.service" "lem-agent-update.timer")
+LEGACY_BINARY_PATHS=("/usr/local/bin/lem-agent" "/usr/bin/lem-agent")
+LEGACY_DIRS=("/var/lib/lem" "/var/log/lem" "/etc/lem")
+LEGACY_USER="lem"
 # Optional capabilities. Empty means "not chosen yet": an interactive install
 # asks, a non-interactive one (or --yes) takes the defaults. The Add-device
 # screen may preset them through the install command.
@@ -112,7 +120,7 @@ rollback() {
             systemctl daemon-reload 2>/dev/null || true
             ;;
         binary_installed)
-            if [ -n "$ROLLBACK_BACKUP_BINARY" && -f "$ROLLBACK_BACKUP_BINARY" ]; then
+            if [ -n "$ROLLBACK_BACKUP_BINARY" ] && [ -f "$ROLLBACK_BACKUP_BINARY" ]; then
                 mv -f "$ROLLBACK_BACKUP_BINARY" "$SYNCWIN_BINARY"
             else
                 rm -f "$SYNCWIN_BINARY"
@@ -121,6 +129,7 @@ rollback() {
             systemctl daemon-reload 2>/dev/null || true
             ;;
     esac
+    discard_backups
     ROLLBACK_NEEDED=""
 }
 trap rollback EXIT
@@ -376,6 +385,75 @@ backup_existing() {
         ROLLBACK_BACKUP_SERVICE=$(mktemp "${SYNCWIN_SERVICE_FILE}.bak.XXXXXX")
         cp -a "$SYNCWIN_SERVICE_FILE" "$ROLLBACK_BACKUP_SERVICE"
         info "Existing service file backed up"
+    fi
+}
+
+# discard_backups removes the rollback copies once they are no longer needed.
+# They used to stay next to the binary and the unit forever: one real device had
+# five binary backups and two unit backups, ~55 MB of dead weight.
+discard_backups() {
+    if [ -n "${ROLLBACK_BACKUP_BINARY}" ]; then
+        rm -f "$ROLLBACK_BACKUP_BINARY"
+    fi
+    if [ -n "${ROLLBACK_BACKUP_SERVICE}" ]; then
+        rm -f "$ROLLBACK_BACKUP_SERVICE"
+    fi
+    ROLLBACK_BACKUP_BINARY=""
+    ROLLBACK_BACKUP_SERVICE=""
+}
+
+# cleanup_stale_backups handles files left by installs that predate
+# discard_backups. It only ever matches this project's own backup prefixes.
+cleanup_stale_backups() {
+    local pattern path removed=0
+    for pattern in "${SYNCWIN_BINARY}.bak.*" "${SYNCWIN_BINARY}.rollback" \
+                   "${SYNCWIN_SERVICE_FILE}.bak.*"; do
+        for path in $pattern; do
+            [ -e "$path" ] || continue
+            rm -f "$path"
+            removed=$((removed + 1))
+        done
+    done
+    if [ "$removed" -gt 0 ]; then
+        info "Removed ${removed} stale backup file(s) from earlier installs"
+    fi
+}
+
+# cleanup_legacy_agent removes what a LEM-era install left behind. The policy is
+# migrated before /etc/lem is deleted, so an operator's SSH choice survives.
+cleanup_legacy_agent() {
+    local found=0 unit path
+    for unit in "${LEGACY_UNIT_NAMES[@]}"; do
+        path="/etc/systemd/system/${unit}"
+        [ -f "$path" ] || continue
+        systemctl disable --now "$unit" >/dev/null 2>&1 || true
+        rm -f "$path"
+        found=1
+    done
+    for path in "${LEGACY_BINARY_PATHS[@]}"; do
+        [ -e "$path" ] || continue
+        rm -f "$path"
+        found=1
+    done
+    if [ -f /etc/lem/policy.json ] && [ ! -f "${SYNCWIN_CONFIG_DIR}/policy.json" ]; then
+        mkdir -p "$SYNCWIN_CONFIG_DIR"
+        cp -a /etc/lem/policy.json "${SYNCWIN_CONFIG_DIR}/policy.json"
+        info "Migrated the old LEM policy to ${SYNCWIN_CONFIG_DIR}/policy.json"
+    fi
+    for path in "${LEGACY_DIRS[@]}"; do
+        [ -e "$path" ] || continue
+        rm -rf "$path"
+        found=1
+    done
+    if [ "$found" -eq 1 ]; then
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        success "Removed legacy LEM agent artifacts"
+    fi
+    if id -u "$LEGACY_USER" >/dev/null 2>&1; then
+        if ! command -v pgrep >/dev/null 2>&1 || ! pgrep -u "$LEGACY_USER" >/dev/null 2>&1; then
+            userdel "$LEGACY_USER" >/dev/null 2>&1 || true
+            success "Removed the legacy LEM service user"
+        fi
     fi
 }
 
@@ -780,11 +858,12 @@ read_machine_id() {
 enroll_device() {
     info "Registering device with server..."
     local enroll_payload
-    local host_name kernel_ver agent_ver machine_id
+    local host_name kernel_ver agent_ver machine_id fingerprint
     host_name="$(hostname | tr -d '\n')"
     kernel_ver="$(uname -r | tr -d '\n')"
     agent_ver="$(get_installed_version | tr -d '\n')"
     machine_id="$(read_machine_id)"
+    fingerprint="$(get_fingerprint)"
     enroll_payload=$(cat <<EOF
 {
     "token": "${SYNCWIN_TOKEN}",
@@ -793,7 +872,8 @@ enroll_device() {
     "os": "${SYNCWIN_DISTRO_ID}",
     "kernel": "${kernel_ver}",
     "agent_version": "${agent_ver}",
-    "machine_id": "${machine_id}"
+    "machine_id": "${machine_id}",
+    "fingerprint": "${fingerprint}"
 }
 EOF
 )
@@ -855,6 +935,24 @@ get_installed_version() {
     else
         echo "none"
     fi
+}
+
+# The fingerprint is computed by the freshly installed binary so the installer
+# does not duplicate the CPU/RAM/MAC hash logic in shell. It lets the server
+# adopt a machine-less device record left by an older agent instead of creating
+# a duplicate.
+get_fingerprint() {
+    local fingerprint=""
+    if [ -x "$SYNCWIN_BINARY" ]; then
+        fingerprint="$("$SYNCWIN_BINARY" fingerprint 2>/dev/null | tr -d '[:space:]' || true)"
+    fi
+    case "$fingerprint" in
+        *[!0-9a-f]*) fingerprint="" ;;
+    esac
+    if [ "${#fingerprint}" -ne 64 ]; then
+        fingerprint=""
+    fi
+    printf '%s' "$fingerprint"
 }
 
 configure_service() {
@@ -1001,6 +1099,8 @@ main() {
     add_docker_group
     configure_user_group
     create_directories
+    cleanup_legacy_agent
+    cleanup_stale_backups
     step "6" "Backing up existing installation..."
     backup_existing
     step "7" "Downloading SyncWin Agent..."
@@ -1027,6 +1127,7 @@ main() {
     # running from a definition systemd no longer had -- "Loaded: not-found"
     # while "Active: active" -- and vanished at the next restart or boot.
     ROLLBACK_NEEDED=""
+    discard_backups
 
     print_summary
 }

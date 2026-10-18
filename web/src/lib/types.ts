@@ -13,6 +13,8 @@ export type HardwareStats = {
   cpu_core_usage?: number[]
   cpu_model?: string
   cpu_temperature?: number
+  cpu_clock_mhz?: number
+  core_voltage_v?: number
   memory_used_bytes: number
   memory_total_bytes: number
   memory_buffers_bytes?: number

@@ -137,6 +137,7 @@ A funcionalidade P1 está concluída. A próxima etapa é uma nova priorização
 - [x] retry states
 - [x] stale devices
 - [x] alert visibility in UI
+- [x] acknowledge persistente por owner (`GET`/`POST`/`DELETE /api/alerts`); as regras continuam em `web/src/lib/insights.ts` e o servidor guarda apenas o ack
 
 ## FASE 10 — Observability
 - [x] structured logs
@@ -177,6 +178,9 @@ A funcionalidade P1 está concluída. A próxima etapa é uma nova priorização
 - [x] limite de upload usa min(limite local, limite espelhado do server) — nada é enviado sabidamente rejeitável
 - [x] E2E real: agent daemon sobrevive à queda do servidor (backoff visível) e se recupera sozinho ("connection recovered") sem re-enviar arquivos inalterados
 - [x] recovery de credencial exige novo enrollment token; fingerprint reconexão foi desabilitada por não ser autenticador
+- [x] log do agente sem ruído: disponibilidade do Lynis só em transição e resumo de telemetria 1x/min, em vez de 3 linhas a cada 10s
+- [x] limpeza automática de `.bak`/`.rollback` do instalador e de resquícios LEM (units, binário, diretórios e usuário) no instalador e no updater root; policy antiga é migrada
+- [x] `sync-win-agent fingerprint` + envio no enroll; o servidor adota registro sem `machine_id` quando o fingerprint bate, em vez de criar duplicata
 
 ## FASE 12 — Save Game Sync
 - [x] Contract v1.1.0: categoria `saves` com roots, extensões, filtros e limites
@@ -238,9 +242,12 @@ A funcionalidade P1 está concluída. A próxima etapa é uma nova priorização
 - [x] Application metrics time-series
 - [x] Log retention settings per owner
 - [x] Dashboard log viewer with filtering by level, device, and time range
+- [x] streaming de logs por SSE (`/api/logs/stream`), substituindo o polling de 5s da tela
+- [x] retenção de telemetria (raw/1m/5m/1h) movida do menu do usuário para Administração → Settings
 
 ## FASE 18 — Hardware Telemetry
 - [x] Agent collectors: CPU, memory, disk I/O, network, temperatures, battery, disk partitions, swap, top processes
+- [x] clock atual da CPU (`cpu_clock_mhz`, média das CPUs lógicas) e tensão de core (`core_voltage_v`) quando o host expõe um rail de CPU no hwmon
 - [x] Agent self-impact measurement (CPU and memory usage)
 - [x] Hardware fingerprint collection for device identification
 - [x] Real-time telemetry sparklines (Sparkline.svelte, canvas, no Chart.js)
@@ -279,6 +286,8 @@ A funcionalidade P1 está concluída. A próxima etapa é uma nova priorização
 - [x] Agent: real power watts, throttled log sampling, state writes only on change
 - [x] Dashboard: canvas sparklines replace per-card Chart.js; store-driven updates
 - [x] Fix modal staleness, SSE owner scoping, and `kernel_version` field mismatch
+- [x] telas do device vivas: summary do poll mesclado ao detalhe (status/telemetria), detalhe pesado em cadência própria, heartbeat fixo separado do range dos gráficos
+- [x] amostrar a lista de containers Docker no ciclo lento (~60s) e guardá-la em `devices.docker_state_json`, fora das linhas de telemetria: payload normal e linhas cruas caem de ~13 KB para ~2,5 KB
 
 ## FASE 22 — Development and Production Environments
 - [x] `make dev` / `make prod` / `make test` / `make help` with environment separation
@@ -320,17 +329,16 @@ via sshd, mediado pela política local do device e pela flag do servidor.
 
 ## Pendências de backend conhecidas
 
-Fases ainda não implementadas, levantadas na auditoria do dashboard. Nenhuma
-existe no código; o dashboard mostra estado honesto "não coletado ainda" para cada
-uma e nomeia o endpoint que falta.
+Itens ainda não implementados, levantados na auditoria do dashboard. O dashboard
+mostra estado honesto "não coletado ainda" para cada um e nomeia o endpoint que
+falta.
 
 - [ ] `GET /api/devices/{id}/smart` — saúde dos discos (SMART)
-- [ ] `GET /api/devices/{id}/updates` — pacotes com atualização pendente
-- [ ] `GET /api/alerts` + ack — alertas derivados do inventário
-- [ ] `PATCH /api/devices/{id}` — renomear e etiquetar device
-- [ ] `POST /api/devices/{id}/actions` — reboot, update-packages, restart-agent
-- [ ] campos de agente: clock da CPU (MHz) e tensão de core (V)
 - [ ] `agent/collectors/gpu_nvidia.go` — nvidia-smi: carga, potência, hotspot, memória, fan, clock, VRAM
+
+Os itens `GET /api/devices/{id}/updates`, `PATCH /api/devices/{id}` (renomear e
+etiquetar) e `POST /api/devices/{id}/actions` (reboot, update-packages,
+restart-agent) foram implementados e não são mais pendências.
 
 ## Regras do produto
 

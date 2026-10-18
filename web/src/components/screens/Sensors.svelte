@@ -11,6 +11,17 @@
   const MAX_SAMPLES = 60
   let tempSeries: number[] = []
   let lastStamp = ''
+  let seriesDeviceId = ''
+
+  // The shell reuses this component when another device is selected. Without
+  // this reset the sparkline would mix samples from two devices.
+  function resetSeries(id: string) {
+    if (!id || id === seriesDeviceId) return
+    seriesDeviceId = id
+    tempSeries = []
+    lastStamp = ''
+  }
+  $: resetSeries(device.id)
 
   type Severity = 'ok' | 'warn' | 'crit'
   type Reading = { group: string; name: string; detail: string; value: string; severity: Severity }

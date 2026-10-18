@@ -87,3 +87,24 @@ entries:
   - id: sessions/261015-app-logs
     path: sessions/261015-app-logs.md
     type: session
+  - id: sessions/261017-alert-acks
+    path: sessions/261017-alert-acks.md
+    type: session
+  - id: sessions/261017-log-sse
+    path: sessions/261017-log-sse.md
+    type: session
+  - id: sessions/261017-log-scope
+    path: sessions/261017-log-scope.md
+    type: session
+  - id: sessions/261017-cpu-clock
+    path: sessions/261017-cpu-clock.md
+    type: session
+  - id: sessions/261017-retention-settings
+    path: sessions/261017-retention-settings.md
+    type: session
+  - id: sessions/261018-live-device-status
+    path: sessions/261018-live-device-status.md
+    type: session
+  - id: sessions/261018-agent-housekeeping
+    path: sessions/261018-agent-housekeeping.md
+    type: session

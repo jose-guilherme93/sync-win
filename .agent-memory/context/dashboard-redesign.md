@@ -105,9 +105,11 @@ Ordered. Each is independent enough to be its own commit or PR.
 6. **Backend — services and ports done, rest pending.** Implemented in
    `34e9f15`; details in `system-inventory.md`. Still missing, all tracked in
    `ROADMAP.md` under "Pendências de backend conhecidas":
-   - endpoints: `GET /smart`, `GET /updates`, `GET /alerts` (+ ack),
-     `PATCH /devices/{id}` (rename/tags), `POST /devices/{id}/actions`
-   - agent fields: CPU clock (MHz) and core voltage (V)
+   - endpoints: `GET /smart`
+     (`GET /updates`, `PATCH /devices/{id}` and `POST /devices/{id}/actions`
+     shipped later; alert acknowledgements are covered by `/api/alerts`)
+   - agent fields: CPU clock (MHz) and core voltage (V) — shipped
+     2026-10-17 (`sessions/261017-cpu-clock.md`)
    - new collector: `agent/collectors/gpu_nvidia.go` (nvidia-smi: load, power,
      hotspot, memory junction, fan RPM, core clock, VRAM)
 

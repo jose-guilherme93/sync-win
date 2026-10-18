@@ -33,9 +33,16 @@
     categories: string[]
   }
 
+  type Retention = {
+    raw_hours: number
+    resolution_1m_days: number
+    resolution_5m_days: number
+    resolution_1h_days: number
+  }
+
   const PAGE_SIZE = 50
-  const LIVE_MS = 5000
   const SEARCH_DEBOUNCE_MS = 350
+  const STATS_DEBOUNCE_MS = 1500
 
   // Time windows the operator can pick. `ms: 0` means no lower bound, which is
   // what an unfiltered query wants.
@@ -52,6 +59,13 @@
   let settingsError = ''
   let savingSettings = false
   let savedNote = ''
+
+  // Telemetry retention is per account (each owner's devices keep their own
+  // history), unlike the application log settings above, which are global.
+  let retention: Retention | null = null
+  let retentionError = ''
+  let retentionNote = ''
+  let retentionSaving = false
 
   let level = ''
   let category = ''
@@ -72,7 +86,11 @@
   let expanded: number | null = null
 
   let live = false
-  let liveTimer: ReturnType<typeof setInterval> | null = null
+  let liveStream: EventSource | null = null
+  let liveRetry: ReturnType<typeof setTimeout> | null = null
+  let liveRetryMs = 1000
+  let liveError = ''
+  let statsTimer: ReturnType<typeof setTimeout> | null = null
   let searchTimer: ReturnType<typeof setTimeout> | null = null
   // Guards against a slow request overwriting the result of a later one.
   let requestSeq = 0
@@ -87,8 +105,8 @@
     return new Date(Date.now() - window.ms).toISOString()
   }
 
-  function buildQuery(nextOffset: number): string {
-    const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(nextOffset) })
+  function filterParams(): URLSearchParams {
+    const params = new URLSearchParams()
     if (level) params.set('level', level)
     if (category) params.set('category', category)
     if (deviceId) params.set('device_id', deviceId)
@@ -96,6 +114,22 @@
     if (requestId.trim()) params.set('request_id', requestId.trim())
     const from = fromFor(range)
     if (from) params.set('from', from)
+    return params
+  }
+
+  function buildQuery(nextOffset: number): string {
+    const params = filterParams()
+    params.set('limit', String(PAGE_SIZE))
+    params.set('offset', String(nextOffset))
+    return params.toString()
+  }
+
+  // The stream takes the same filters as the page plus the cursor and ticket.
+  // no limit/offset: it is a delta feed, not a page.
+  function buildStreamQuery(ticket: string, afterId: number): string {
+    const params = filterParams()
+    params.set('ticket', ticket)
+    if (afterId > 0) params.set('after_id', String(afterId))
     return params.toString()
   }
 
@@ -139,9 +173,10 @@
     }
   }
 
-  function reload() {
-    void fetchPage(false)
-    void loadStats()
+  async function reload() {
+    await Promise.all([fetchPage(false), loadStats()])
+    // Filters changed: the open stream is still using the old ones.
+    if (live) void startStream()
   }
 
   async function loadSettings() {
@@ -183,6 +218,61 @@
     }
   }
 
+  async function loadRetention() {
+    retentionError = ''
+    try {
+      const res = await apiFetch(apiURL('/api/retention'), { headers: authHeaders })
+      if (!res.ok) throw new Error(`request failed (${res.status})`)
+      const data = await res.json()
+      if (!data || typeof data !== 'object' || typeof data.raw_hours !== 'number') {
+        throw new Error('unexpected retention payload')
+      }
+      retention = {
+        raw_hours: data.raw_hours,
+        resolution_1m_days: data.resolution_1m_days,
+        resolution_5m_days: data.resolution_5m_days,
+        resolution_1h_days: data.resolution_1h_days
+      }
+    } catch (e) {
+      retentionError = e instanceof Error ? e.message : 'Could not load retention'
+    }
+  }
+
+  async function saveRetention() {
+    if (!retention) return
+    retentionSaving = true
+    retentionError = ''
+    retentionNote = ''
+    try {
+      const res = await apiFetch(apiURL('/api/retention'), {
+        method: 'PUT',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          raw_hours: Number(retention.raw_hours),
+          resolution_1m_days: Number(retention.resolution_1m_days),
+          resolution_5m_days: Number(retention.resolution_5m_days),
+          resolution_1h_days: Number(retention.resolution_1h_days)
+        })
+      })
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}))
+        throw new Error(payload.error || `request failed (${res.status})`)
+      }
+      const data = await res.json()
+      retention = {
+        raw_hours: data.raw_hours,
+        resolution_1m_days: data.resolution_1m_days,
+        resolution_5m_days: data.resolution_5m_days,
+        resolution_1h_days: data.resolution_1h_days
+      }
+      retentionNote = 'Saved. Older history is removed at the next cleanup cycle.'
+    } catch (e) {
+      retentionError = e instanceof Error ? e.message : 'Could not save retention'
+    } finally {
+      retentionSaving = false
+    }
+  }
+
   function onFilterInput() {
     if (searchTimer) clearTimeout(searchTimer)
     searchTimer = setTimeout(() => {
@@ -194,11 +284,96 @@
   function toggleLive() {
     live = !live
     if (live) {
-      liveTimer = setInterval(reload, LIVE_MS)
-    } else if (liveTimer) {
-      clearInterval(liveTimer)
-      liveTimer = null
+      liveError = ''
+      void startStream()
+    } else {
+      stopStream()
     }
+  }
+
+  // EventSource cannot send the Authorization header, so the session is
+  // exchanged for a single-use ticket first. The ticket is consumed by the
+  // connection, which is why a reconnect has to fetch a new one instead of
+  // letting EventSource retry the same URL forever.
+  async function startStream() {
+    stopStream(false)
+    if (!live) return
+    const afterId = entries.length > 0 ? entries[0].id : 0
+    try {
+      const res = await apiFetch(apiURL('/api/logs/stream-token'), {
+        method: 'POST',
+        headers: authHeaders
+      })
+      if (!res.ok) throw new Error(`request failed (${res.status})`)
+      const { ticket } = await res.json()
+      if (!live) return
+
+      const stream = new EventSource(`${apiURL('/api/logs/stream')}?${buildStreamQuery(ticket, afterId)}`)
+      liveStream = stream
+      stream.onopen = () => {
+        liveError = ''
+        liveRetryMs = 1000
+      }
+      stream.onmessage = (event) => {
+        let entry: LogEntry
+        try {
+          entry = JSON.parse(event.data)
+        } catch {
+          return
+        }
+        if (!entry || typeof entry.id !== 'number') return
+        // A reconnect can race with an entry that was already delivered.
+        if (entries.some((e) => e.id === entry.id)) return
+        entries = [entry, ...entries]
+        total += 1
+        offset = entries.length
+        scheduleStats()
+      }
+      stream.onerror = () => {
+        stream.close()
+        if (liveStream === stream) liveStream = null
+        if (!live) return
+        liveError = 'Live feed reconnecting…'
+        scheduleReconnect()
+      }
+    } catch (e) {
+      if (!live) return
+      liveError = `Live feed unavailable: ${e instanceof Error ? e.message : 'request failed'}`
+      scheduleReconnect()
+    }
+  }
+
+  function stopStream(clearError = true) {
+    if (liveRetry) {
+      clearTimeout(liveRetry)
+      liveRetry = null
+    }
+    if (liveStream) {
+      liveStream.close()
+      liveStream = null
+    }
+    if (clearError) {
+      liveError = ''
+      liveRetryMs = 1000
+    }
+  }
+
+  function scheduleReconnect() {
+    if (liveRetry) clearTimeout(liveRetry)
+    const delay = liveRetryMs
+    liveRetry = setTimeout(() => {
+      liveRetry = null
+      void startStream()
+    }, delay)
+    liveRetryMs = Math.min(liveRetryMs * 2, 30000)
+  }
+
+  function scheduleStats() {
+    if (statsTimer) clearTimeout(statsTimer)
+    statsTimer = setTimeout(() => {
+      statsTimer = null
+      void loadStats()
+    }, STATS_DEBOUNCE_MS)
   }
 
   function formatTime(ts: string): string {
@@ -219,11 +394,13 @@
 
   onMount(() => {
     void loadSettings()
+    void loadRetention()
     reload()
   })
 
   onDestroy(() => {
-    if (liveTimer) clearInterval(liveTimer)
+    stopStream()
+    if (statsTimer) clearTimeout(statsTimer)
     if (searchTimer) clearTimeout(searchTimer)
   })
 </script>
@@ -232,13 +409,16 @@
   <header class="page-head">
     <div>
       <p class="eyebrow">Administration</p>
-      <h1>Application logs</h1>
+      <h1>Settings</h1>
       <p class="muted">
-        Every structured event the server records — HTTP, auth, devices, commands and sync — plus the
-        thresholds that decide what is kept.
+        Every structured event the server records — HTTP, auth, devices, commands and sync — the
+        thresholds that decide what is kept, and how long telemetry history is retained.
       </p>
     </div>
     <div class="head-actions">
+      {#if liveError}
+        <span class="live-error" role="status">{liveError}</span>
+      {/if}
       <button class:active={live} class="ghost" on:click={toggleLive}>
         {live ? 'Live · on' : 'Live · off'}
       </button>
@@ -405,6 +585,60 @@
       </div>
     {/if}
   </section>
+
+  <section class="settings-card">
+    <header>
+      <h2>Telemetry retention</h2>
+      <p class="muted">
+        How long this account's devices keep history at each resolution. Raw samples are the
+        ten-second telemetry; the aggregations are what the long-range charts read. Older rows are
+        deleted by the cleanup cycle.
+      </p>
+    </header>
+
+    {#if retentionError}<p class="error-inline" role="alert">{retentionError}</p>{/if}
+    {#if retentionNote}<p class="ok-inline">{retentionNote}</p>{/if}
+
+    {#if !retention}
+      <p class="muted">Loading retention…</p>
+    {:else}
+      <div class="settings-grid">
+        <div class="field">
+          <label>
+            <span class="k">Raw telemetry (hours)</span>
+            <input type="number" min="1" max="168" bind:value={retention.raw_hours} />
+          </label>
+          <small class="muted">10-second samples, 1–168 hours.</small>
+        </div>
+        <div class="field">
+          <label>
+            <span class="k">1-minute aggregation (days)</span>
+            <input type="number" min="1" max="365" bind:value={retention.resolution_1m_days} />
+          </label>
+          <small class="muted">One point per minute, 1–365 days.</small>
+        </div>
+        <div class="field">
+          <label>
+            <span class="k">5-minute aggregation (days)</span>
+            <input type="number" min="1" max="730" bind:value={retention.resolution_5m_days} />
+          </label>
+          <small class="muted">One point per five minutes, 1–730 days.</small>
+        </div>
+        <div class="field">
+          <label>
+            <span class="k">1-hour aggregation (days)</span>
+            <input type="number" min="1" max="3650" bind:value={retention.resolution_1h_days} />
+          </label>
+          <small class="muted">One point per hour, 1–3650 days.</small>
+        </div>
+      </div>
+      <div class="settings-actions">
+        <button class="primary" on:click={saveRetention} disabled={retentionSaving}>
+          {retentionSaving ? 'Saving…' : 'Save retention'}
+        </button>
+      </div>
+    {/if}
+  </section>
 </section>
 
 <style>
@@ -444,8 +678,14 @@
 
   .head-actions {
     display: flex;
+    align-items: center;
     gap: 0.4rem;
     flex-shrink: 0;
+  }
+
+  .live-error {
+    color: var(--warn);
+    font-size: 0.7rem;
   }
 
   .stat-row {

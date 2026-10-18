@@ -48,7 +48,29 @@ func (s *Store) EnrollDevice(hostname, ownerID, machineID, fingerprint string) (
 		).Scan(&existingID)
 		switch {
 		case err == nil:
-			return s.adoptDeviceLocked(existingID, hostname, fingerprint)
+			return s.adoptDeviceLocked(existingID, hostname, fingerprint, machineID)
+		case !errors.Is(err, sql.ErrNoRows):
+			return Device{}, false, err
+		}
+	}
+
+	// A record created before machine IDs existed (or by an interim agent that
+	// sent only a fingerprint) has no machine_id. Adopt it when the fingerprint
+	// matches, but only for this owner and only while it is still unbound: a
+	// record with a different machine_id belongs to another machine that happens
+	// to share hardware metadata (cloned VM, reused MAC).
+	if fingerprint != "" {
+		var existingID string
+		err := s.db.QueryRowContext(ctx,
+			`SELECT id FROM devices
+			 WHERE owner_id = ? AND hardware_fingerprint = ?
+			   AND (machine_id IS NULL OR machine_id = '')
+			 ORDER BY updated_at DESC LIMIT 1`,
+			ownerID, fingerprint,
+		).Scan(&existingID)
+		switch {
+		case err == nil:
+			return s.adoptDeviceLocked(existingID, hostname, fingerprint, machineID)
 		case !errors.Is(err, sql.ErrNoRows):
 			return Device{}, false, err
 		}
@@ -67,18 +89,19 @@ func (s *Store) EnrollDevice(hostname, ownerID, machineID, fingerprint string) (
 }
 
 // adoptDeviceLocked reuses an existing device record for a returning machine.
-func (s *Store) adoptDeviceLocked(deviceID, hostname, fingerprint string) (Device, bool, error) {
+func (s *Store) adoptDeviceLocked(deviceID, hostname, fingerprint, machineID string) (Device, bool, error) {
 	token := newToken()
 	now := timeText(time.Now().UTC())
 
-	// The fingerprint is only written when one was supplied, so a reinstall
-	// without it does not erase the value already stored.
+	// The fingerprint and machine id are only written when supplied, so a
+	// reinstall without one does not erase what is stored.
 	_, err := s.db.ExecContext(context.Background(),
 		`UPDATE devices SET hostname = ?, device_token = ?,
 		   hardware_fingerprint = CASE WHEN ? != '' THEN ? ELSE hardware_fingerprint END,
+		   machine_id = CASE WHEN ? != '' THEN ? ELSE machine_id END,
 		   status = 'online', sync_failures = 0, last_error = '', updated_at = ?
 		 WHERE id = ?`,
-		hostname, hashToken(token), fingerprint, fingerprint, now, deviceID,
+		hostname, hashToken(token), fingerprint, fingerprint, machineID, machineID, now, deviceID,
 	)
 	if err != nil {
 		return Device{}, false, err

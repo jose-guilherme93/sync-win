@@ -39,6 +39,13 @@ const SETTINGS = {
   categories: ['system', 'http', 'sync']
 }
 
+const RETENTION = {
+  raw_hours: 2,
+  resolution_1m_days: 7,
+  resolution_5m_days: 30,
+  resolution_1h_days: 365
+}
+
 function stubFetch(
   handler: (url: string, init?: RequestInit) => Response | Promise<Response>
 ): { calls: { url: string; init?: RequestInit }[] } {
@@ -60,6 +67,10 @@ function route(
 ): Response {
   const { entries = ENTRIES, total = ENTRIES.length, status = 200, settings = SETTINGS } = opts
   if (url.includes('/api/log-settings')) return json(settings, status)
+  if (url.includes('/api/retention')) return json(RETENTION)
+  // Before the /api/logs catch-all: the token request is a POST whose body is
+  // not a page.
+  if (url.includes('/api/logs/stream-token')) return json({ ticket: 'ticket-1' })
   if (url.includes('/api/logs/stats')) {
     return json({ total, by_level: { ERROR: 1, INFO: 1 }, errors_24h: 1 })
   }
@@ -67,9 +78,34 @@ function route(
   return json([], status)
 }
 
+// jsdom has no EventSource. The fake records the URL the screen opened and lets
+// a test push one server event.
+class FakeEventSource {
+  static instances: FakeEventSource[] = []
+  url: string
+  closed = false
+  onopen: (() => void) | null = null
+  onmessage: ((event: MessageEvent) => void) | null = null
+  onerror: (() => void) | null = null
+
+  constructor(url: string) {
+    this.url = url
+    FakeEventSource.instances.push(this)
+  }
+
+  close() {
+    this.closed = true
+  }
+
+  emit(entry: unknown) {
+    this.onmessage?.({ data: JSON.stringify(entry) } as MessageEvent)
+  }
+}
+
 describe('Application settings screen', () => {
   afterEach(() => {
     cleanup()
+    FakeEventSource.instances = []
     vi.unstubAllGlobals()
   })
 
@@ -147,6 +183,58 @@ describe('Application settings screen', () => {
     expect(await screen.findByText(/Saved\./)).toBeTruthy()
   })
 
+  it('renders the stored telemetry retention values', async () => {
+    stubFetch((url) => route(url))
+    render(AppSettings)
+
+    const raw = (await screen.findByLabelText('Raw telemetry (hours)')) as HTMLInputElement
+    expect(raw.value).toBe('2')
+    const oneMinute = (await screen.findByLabelText('1-minute aggregation (days)')) as HTMLInputElement
+    expect(oneMinute.value).toBe('7')
+    const oneHour = (await screen.findByLabelText('1-hour aggregation (days)')) as HTMLInputElement
+    expect(oneHour.value).toBe('365')
+  })
+
+  it('saves telemetry retention and confirms', async () => {
+    const { calls } = stubFetch((url, init) => {
+      if (url.includes('/api/retention') && init?.method === 'PUT') {
+        return json({ ...JSON.parse(String(init.body)) })
+      }
+      return route(url)
+    })
+    render(AppSettings)
+
+    const raw = (await screen.findByLabelText('Raw telemetry (hours)')) as HTMLInputElement
+    await fireEvent.input(raw, { target: { value: '6' } })
+    const oneMinute = (await screen.findByLabelText('1-minute aggregation (days)')) as HTMLInputElement
+    await fireEvent.input(oneMinute, { target: { value: '14' } })
+    await fireEvent.click(screen.getByText('Save retention'))
+
+    const put = calls.find((c) => c.init?.method === 'PUT' && c.url.includes('/api/retention'))
+    expect(put).toBeTruthy()
+    expect(JSON.parse(String(put?.init?.body))).toEqual({
+      raw_hours: 6,
+      resolution_1m_days: 14,
+      resolution_5m_days: 30,
+      resolution_1h_days: 365
+    })
+    expect(await screen.findByText(/Saved\./)).toBeTruthy()
+  })
+
+  it('surfaces a failed retention save instead of pretending it stuck', async () => {
+    stubFetch((url, init) => {
+      if (url.includes('/api/retention') && init?.method === 'PUT') return json({ error: 'nope' }, 500)
+      return route(url)
+    })
+    render(AppSettings)
+
+    await screen.findByLabelText('Raw telemetry (hours)')
+    await fireEvent.click(screen.getByText('Save retention'))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('nope')
+  })
+
   it('surfaces a failed log request with a retry instead of a blank list', async () => {
     let fail = true
     stubFetch((url) => {
@@ -160,5 +248,63 @@ describe('Application settings screen', () => {
     fail = false
     await fireEvent.click(screen.getByText('Retry'))
     expect(await screen.findByText('http_error')).toBeTruthy()
+  })
+
+  it('streams new entries when live is turned on', async () => {
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const { calls } = stubFetch((url) => route(url))
+    render(AppSettings)
+    await screen.findByText('http_error')
+
+    await fireEvent.click(screen.getByRole('button', { name: /Live/ }))
+
+    await vi.waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    expect(calls.some((c) => c.init?.method === 'POST' && c.url.includes('/api/logs/stream-token'))).toBe(true)
+    const stream = FakeEventSource.instances[0]
+    expect(stream.url).toContain('ticket=ticket-1')
+    expect(stream.url).not.toContain('limit=')
+
+    stream.emit({
+      id: 77,
+      timestamp: '2026-10-17T12:00:00Z',
+      level: 'ERROR',
+      category: 'http',
+      event: 'streamed_event',
+      message: 'pushed live'
+    })
+
+    expect(await screen.findByText('streamed_event')).toBeTruthy()
+    expect(screen.getByText('pushed live')).toBeTruthy()
+  })
+
+  it('reopens the stream with the new filter instead of polling', async () => {
+    vi.stubGlobal('EventSource', FakeEventSource)
+    stubFetch((url) => route(url))
+    render(AppSettings)
+    await screen.findByText('http_error')
+
+    await fireEvent.click(screen.getByRole('button', { name: /Live/ }))
+    await vi.waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+
+    const level = await screen.findByLabelText('Level')
+    await fireEvent.change(level, { target: { value: 'WARN' } })
+
+    await vi.waitFor(() => expect(FakeEventSource.instances).toHaveLength(2))
+    expect(FakeEventSource.instances[0].closed).toBe(true)
+    expect(FakeEventSource.instances[1].url).toContain('level=WARN')
+  })
+
+  it('closes the stream when live is turned off', async () => {
+    vi.stubGlobal('EventSource', FakeEventSource)
+    stubFetch((url) => route(url))
+    render(AppSettings)
+    await screen.findByText('http_error')
+
+    const live = screen.getByRole('button', { name: /Live/ })
+    await fireEvent.click(live)
+    await vi.waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+
+    await fireEvent.click(live)
+    expect(FakeEventSource.instances[0].closed).toBe(true)
   })
 })

@@ -1012,6 +1012,38 @@ Get a specific log entry. Requires session token.
 
 **Response:** `200 OK` (log entry object)
 
+### `POST /api/logs/stream-token`
+
+Exchange a session for a single-use ticket for the log stream. EventSource
+cannot send an `Authorization` header, so the stream is authorized by the
+session cookie plus this ticket. Requires session token.
+
+**Response:** `200 OK`
+```json
+{ "ticket": "..." }
+```
+
+Tickets expire after 30 seconds and are consumed by the first connection. A
+reconnect must request a new one.
+
+### `GET /api/logs/stream?ticket=...`
+
+Stream new log entries over Server-Sent Events. Accepts the same filters as
+`GET /api/logs` (`level`, `category`, `event`, `device_id`, `user_id`,
+`request_id`, `correlation_id`, `from`, `to`, `search`). `limit` and `offset`
+do not apply.
+
+Cursor: `after_id=<id>` (or the standard `Last-Event-ID` header) sends only
+entries newer than that id. Without a cursor the stream starts at the newest
+entry, so it never replays the retention window into a page that already
+loaded it. Each event carries `id: <id>` and `data: <log entry JSON>`. Idle
+streams receive a `: keep-alive` comment every ~15 seconds.
+
+The server tails the `logs` table on a short interval because the logger
+flushes in batches; the wire protocol is still push, not client polling.
+
+**Response:** `200 OK` (`text/event-stream`), or `401` without a valid ticket.
+
 ### `GET /api/logs/stats`
 
 Get log statistics. Requires session token.
@@ -1101,6 +1133,55 @@ Update telemetry retention settings. Requires session token.
 ```
 
 **Response:** `200 OK`
+
+### `GET /api/alerts`
+
+List the alert acknowledgements stored for the authenticated owner. Alerts
+themselves are derived in the dashboard from the current telemetry
+(`web/src/lib/insights.ts`); the server persists only which findings the
+operator dismissed, so they survive a reload and follow the account to another
+browser. Requires session token.
+
+**Response:** `200 OK`
+```json
+{
+  "acks": [
+    { "id": "device-id:cpu", "acked_at": "2026-10-17T12:00:00Z" }
+  ]
+}
+```
+
+The id is the alert's stable identity (`<device_id>:<rule key>`), not the
+rendered text: a CPU alert stays acknowledged when the reading moves from 92% to
+95%.
+
+### `POST /api/alerts`
+
+Acknowledge a finding. Requires session token.
+
+**Request:**
+```json
+{ "id": "device-id:cpu" }
+```
+
+Acking the same id twice is idempotent and keeps the original timestamp.
+
+**Response:** `200 OK` (the stored acknowledgement)
+
+### `DELETE /api/alerts?id=<id>`
+
+Remove one acknowledgement. Removing an absent one is not an error.
+
+**Response:** `204 No Content`
+
+### `DELETE /api/alerts`
+
+Restore every acknowledgement for the owner.
+
+**Response:** `200 OK`
+```json
+{ "cleared": 2 }
+```
 
 ---
 

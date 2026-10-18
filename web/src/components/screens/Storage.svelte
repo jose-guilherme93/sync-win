@@ -11,6 +11,18 @@
   let readSeries: number[] = []
   let writeSeries: number[] = []
   let lastStamp = ''
+  let seriesDeviceId = ''
+
+  // The shell reuses this component when another device is selected. Without
+  // this reset the sparklines would mix samples from two devices.
+  function resetSeries(id: string) {
+    if (!id || id === seriesDeviceId) return
+    seriesDeviceId = id
+    readSeries = []
+    writeSeries = []
+    lastStamp = ''
+  }
+  $: resetSeries(device.id)
 
   $: hw = device.hardware
   $: disks = (hw?.disk_partitions ?? [])

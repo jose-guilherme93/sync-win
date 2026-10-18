@@ -28,7 +28,8 @@
   import DeviceSettings from './components/screens/DeviceSettings.svelte'
   import AppSettings from './components/screens/AppSettings.svelte'
   import { nav, type Section } from './lib/router'
-  import { selectedRange, rangeById, DEFAULT_RANGE, type RangeId } from './lib/timerange'
+  import { selectedRange, DEFAULT_RANGE, type RangeId } from './lib/timerange'
+  import { mergeDeviceDetail } from './lib/device'
   import type { AppInfo, Device, HardwareStats } from './lib/types'
   import type { SecurityPosture } from './lib/security-posture'
   import { uniquePorts } from './lib/ports'
@@ -63,14 +64,18 @@
   // operator can turn it off here.
   let enableSsh = false
   let enableAutoUpdate = true
-  // Poll interval is user-selectable in the topbar, so it is mutable rather
-  // than a constant. The backoff ceiling still applies when the server errors.
-  // The poll cadence follows the selected time range: a live minute refreshes
-  // every few seconds, a 30-day window every few minutes.
+  // The device list/heartbeat poll is fixed. It used to follow the chart range,
+  // which meant a 30-day window polled every five minutes and made a healthy
+  // device look stale. The topbar range now only controls how often the charts
+  // refetch their history.
   let currentRange: RangeId = DEFAULT_RANGE
-  let POLL_MS = rangeById(DEFAULT_RANGE).refreshMs
+  const DEVICE_POLL_MS = 10000
   const MAX_POLL_MS = 60000
   const PANEL_REFRESH_MS = 60000
+  // Top processes, Docker containers and the security posture only exist in
+  // /detail. Refresh that snapshot on a slow cadence; the summary merge keeps
+  // everything else live in between.
+  const DETAIL_REFRESH_MS = 60000
   // The device list is polled every 10s but written to localStorage far less
   // often: it only speeds up the first paint, so a stale copy is harmless.
   const CACHE_WRITE_MS = 60000
@@ -105,6 +110,7 @@
   let lastDevicesJson = ''
   let lastCacheWrite = 0
   let lastPanelLoad = 0
+  let lastDetailLoad = 0
 
   let anonymousId = ''
   let ownerIdentity = ''
@@ -127,7 +133,6 @@
   let installOpen = localStorage.getItem('sync-win-install-open') === '1'
   let appQuery = ''
 
-  let deviceModalOpen = false
   let deviceDetails: Record<string, Device> = {}
 
   // Shell navigation. The sidebar writes into this store and the main area
@@ -179,10 +184,14 @@
   // device section now has a dedicated screen, so nothing else falls through.
   const HARDWARE_SECTIONS = new Set(['overview'])
   $: isHardwareSection = HARDWARE_SECTIONS.has(navState.section)
-  // The modal prefers the full detail payload (logs, processes, Docker state)
-  // and falls back to the lightweight list entry while it loads.
+  // The selected device is the polled summary merged with the heavier detail
+  // snapshot. Preferring the snapshot outright froze last_seen_at and hardware,
+  // so the topbar turned stale while the list said online.
   $: modalDevice = selectedDeviceId
-    ? deviceDetails[selectedDeviceId] || devices.find((d) => d.id === selectedDeviceId) || null
+    ? mergeDeviceDetail(
+        deviceDetails[selectedDeviceId],
+        devices.find((d) => d.id === selectedDeviceId)
+      )
     : null
   // The Security screen's posture is stored on the device-detail object so it
   // rides the same reactive path as the rest of the detail payload.
@@ -223,13 +232,6 @@
   let profileNewPassword = ''
   let profileSaving = false
   let profileError = ''
-  let retentionOpen = false
-  let retentionRawHours = 2
-  let retention1mDays = 7
-  let retention5mDays = 30
-  let retention1hDays = 365
-  let retentionSaving = false
-  let retentionError = ''
   const authHeaders = (token: string): Record<string, string> => (token ? { Authorization: `Bearer ${token}` } : {})
   $: ownerHeaders = authHeaders(authToken)
   $: normalizedInstallServer = (() => {
@@ -455,23 +457,21 @@
     // While signed out, keep the timer alive but issue no requests so a stale
     // session (logout or expiry) does not poll the API unauthenticated.
     if (!signedIn) {
-      schedulePoll(POLL_MS)
+      schedulePoll(DEVICE_POLL_MS)
       return
     }
     if (document.hidden) {
       liveState = 'paused'
-      schedulePoll(POLL_MS)
+      schedulePoll(DEVICE_POLL_MS)
       return
     }
     await Promise.all([loadDevices(false), pollNotifications()])
-    if (deviceModalOpen && selectedDeviceId) {
+    // The summary merge keeps the selected device live; the detail payload is
+    // only needed for the heavy fields and is refreshed on its own cadence.
+    if (selectedDeviceId && Date.now() - lastDetailLoad >= DETAIL_REFRESH_MS) {
       void loadDeviceDetail(selectedDeviceId)
     }
-    // Back off on failure, but never below the range's own cadence: a 30-day
-    // window polls every 5 minutes, so capping at the 60s ceiling would make a
-    // failing server get polled *more* often than a healthy one.
-    const backoffCap = Math.max(POLL_MS, MAX_POLL_MS)
-    schedulePoll(Math.min(POLL_MS * 2 ** Math.min(consecutiveFailures, 4), backoffCap))
+    schedulePoll(Math.min(DEVICE_POLL_MS * 2 ** Math.min(consecutiveFailures, 4), MAX_POLL_MS))
   }
 
   function schedulePoll(delay: number) {
@@ -732,6 +732,7 @@
 
   async function loadDeviceDetail(deviceId: string, includePosture = false) {
     if (!deviceId) return
+    lastDetailLoad = Date.now()
     try {
       const response = await apiFetch(apiURL(`/api/devices/${deviceId}/detail`), { headers: ownerHeaders })
       if (!response.ok) return
@@ -797,21 +798,22 @@
     await Promise.all([loadDevices(), loadDeviceDetail(deviceId)])
   }
 
-  function closeDeviceModal() {
-    deviceModalOpen = false
-    selectedDeviceId = ''
+  // The topbar refresh has to force the detail too; reloading only the summary
+  // left the selected screen looking frozen.
+  function refreshNow() {
+    void loadDevices(true)
+    if (selectedDeviceId) {
+      lastDetailLoad = 0
+      void loadDeviceDetail(selectedDeviceId, navState.section === 'security')
+    }
   }
 
-  // Topbar range selector. The poller reschedules itself each cycle, so setting
-  // the cadence and kicking it once makes the change take effect immediately
-  // instead of after the current (possibly minutes-long) wait. The chosen range
-  // is also published to the shared store so the charts follow it.
+  // Topbar range selector. It only publishes the chart window now: the device
+  // poll is fixed so a wide window cannot make a healthy device look stale.
+  // DeviceOverview owns the history refresh cadence for that window.
   function setRange(id: RangeId) {
     currentRange = id
     selectedRange.set(id)
-    POLL_MS = rangeById(id).refreshMs
-    if (pollTimer) window.clearTimeout(pollTimer)
-    schedulePoll(POLL_MS)
   }
 
   // Global search (Ctrl+K). Until a dedicated command palette exists, this
@@ -1077,7 +1079,7 @@
     appsLoadedAt = {}
     expandedGroups = {}
     selectedDeviceId = ''
-    deviceModalOpen = false
+    lastDetailLoad = 0
     resetTelemetry()
   }
 
@@ -1163,54 +1165,6 @@
   function openAppLogs() {
     userMenuOpen = false
     nav.setSection('configuration')
-  }
-
-  function openRetention() {
-    userMenuOpen = false
-    retentionOpen = true
-    void loadRetention()
-  }
-
-  function closeRetention() {
-    retentionOpen = false
-  }
-
-  async function loadRetention() {
-    try {
-      const response = await apiFetch(apiURL(`/api/retention`), { headers: ownerHeaders })
-      if (!response.ok) throw new Error(`${response.status}`)
-      const data = await response.json()
-      retentionRawHours = data.raw_hours ?? 2
-      retention1mDays = data.resolution_1m_days ?? 7
-      retention5mDays = data.resolution_5m_days ?? 30
-      retention1hDays = data.resolution_1h_days ?? 365
-      retentionError = ''
-    } catch (e) {
-      retentionError = e instanceof Error ? e.message : 'Failed to load retention'
-    }
-  }
-
-  async function saveRetention() {
-    retentionSaving = true
-    retentionError = ''
-    try {
-      const response = await apiFetch(apiURL(`/api/retention`), {
-        method: 'PUT',
-        headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          raw_hours: retentionRawHours,
-          resolution_1m_days: retention1mDays,
-          resolution_5m_days: retention5mDays,
-          resolution_1h_days: retention1hDays
-        })
-      })
-      if (!response.ok) throw new Error(`${response.status}`)
-      retentionError = ''
-    } catch (e) {
-      retentionError = e instanceof Error ? e.message : 'Failed to save'
-    } finally {
-      retentionSaving = false
-    }
   }
 
   function openAddDevice() {
@@ -1420,7 +1374,7 @@
     void loadAuthConfig()
     void restoreSession()
     loadNotifSound()
-    schedulePoll(POLL_MS)
+    schedulePoll(DEVICE_POLL_MS)
     const clock = window.setInterval(() => (now = Date.now()), 15000)
     const onVisibility = () => {
       if (!document.hidden) {
@@ -1503,7 +1457,7 @@
         sectionTitle={sectionTitleFor(navState.section)}
         rangeId={currentRange}
         onRangeChange={setRange}
-        onManualRefresh={() => loadDevices(true)}
+        onManualRefresh={refreshNow}
         onOpenSearch={openGlobalSearch}
         onOpenNotifications={toggleBell}
         onOpenUserMenu={toggleUserMenu}
@@ -1574,9 +1528,6 @@
             </button>
             <button class="dropdown-item" on:click={openNotifications}>
               <span class="dropdown-icon">🔔</span> Notifications
-            </button>
-            <button class="dropdown-item" on:click={openRetention}>
-              <span class="dropdown-icon">🗄</span> Data Retention
             </button>
             <div class="dropdown-divider"></div>
             <div class="dropdown-profile">
@@ -1664,7 +1615,7 @@
               />
             {/if}
           {:else if navState.section === 'alerts'}
-            <Alerts {devices} onSelect={selectDevice} />
+            <Alerts {devices} authHeaders={ownerHeaders} onSelect={selectDevice} />
           {:else if navState.section === 'findings'}
             <Findings {devices} onSelect={selectDevice} />
           {:else if navState.section === 'reports'}
@@ -1905,57 +1856,6 @@
         </div>
         <p class="muted">The agent never changes a capability on its own.</p>
       </details>
-    </div>
-  </div>
-{/if}
-
-{#if retentionOpen}
-  <div class="modal-backdrop" role="presentation" on:click={closeRetention}>
-    <div class="retention-modal" role="dialog" aria-modal="true" aria-labelledby="retention-title" tabindex="-1" on:click|stopPropagation on:keydown|stopPropagation>
-      <div class="modal-header">
-        <div>
-          <p class="eyebrow">Storage</p>
-          <h2 id="retention-title">Data Retention</h2>
-        </div>
-        <button class="secondary" on:click={closeRetention}>Close</button>
-      </div>
-      <div class="retention-body">
-        <p class="retention-desc">Configure how long telemetry history is kept at each resolution. Older data is automatically deleted.</p>
-        {#if retentionError}<p class="error-inline">{retentionError}</p>{/if}
-        <div class="retention-grid">
-          <label class="retention-field">
-            <span>Raw (10s intervals)</span>
-            <div class="retention-input">
-              <input type="number" bind:value={retentionRawHours} min="1" max="168" />
-              <span class="retention-unit">hours</span>
-            </div>
-          </label>
-          <label class="retention-field">
-            <span>1-minute aggregation</span>
-            <div class="retention-input">
-              <input type="number" bind:value={retention1mDays} min="1" max="365" />
-              <span class="retention-unit">days</span>
-            </div>
-          </label>
-          <label class="retention-field">
-            <span>5-minute aggregation</span>
-            <div class="retention-input">
-              <input type="number" bind:value={retention5mDays} min="1" max="730" />
-              <span class="retention-unit">days</span>
-            </div>
-          </label>
-          <label class="retention-field">
-            <span>1-hour aggregation</span>
-            <div class="retention-input">
-              <input type="number" bind:value={retention1hDays} min="1" max="3650" />
-              <span class="retention-unit">days</span>
-            </div>
-          </label>
-        </div>
-        <button class="primary" on:click={saveRetention} disabled={retentionSaving}>
-          {retentionSaving ? 'Saving...' : 'Save settings'}
-        </button>
-      </div>
     </div>
   </div>
 {/if}
