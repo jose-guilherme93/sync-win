@@ -80,29 +80,28 @@ func getLogs(t *testing.T, s *Server, token, query string) (int, logPage) {
 	return rec.Code, page
 }
 
-func TestLogsListIsOwnerScoped(t *testing.T) {
+// Application logs are server-wide: the server writes startup, HTTP, agent and
+// sync entries with no owner, so an owner-scoped query returned nothing at all.
+// Every authenticated account is an operator (SECURITY.md), and every operator
+// sees the same fleet-wide log.
+func TestLogsListIsFleetWide(t *testing.T) {
 	s := newTestServer(t)
 	a := sessionFor(t, s, "a@example.com")
 	b := sessionFor(t, s, "b@example.com")
 
-	// Owners are keyed by user id, so seed via the ids the tokens map to.
 	aOwner := ownerFor(t, s, a)
 	bOwner := ownerFor(t, s, b)
 
 	seedLog(t, s, aOwner, logging.LevelInfo, logging.CatSync, "sync_completed", "a-info")
-	seedLog(t, s, aOwner, logging.LevelError, logging.CatHTTP, "http_error", "a-error")
-	seedLog(t, s, bOwner, logging.LevelError, logging.CatHTTP, "http_error", "b-secret")
+	seedLog(t, s, bOwner, logging.LevelError, logging.CatHTTP, "http_error", "b-entry")
 
-	code, page := getLogs(t, s, a, "")
-	if code != http.StatusOK {
-		t.Fatalf("status = %d", code)
-	}
-	if page.Total != 2 {
-		t.Fatalf("total = %d, want 2 (only owner A's entries)", page.Total)
-	}
-	for _, e := range page.Entries {
-		if e.Message == "b-secret" {
-			t.Fatal("owner B's entry leaked into owner A's page")
+	for name, token := range map[string]string{"a": a, "b": b} {
+		code, page := getLogs(t, s, token, "")
+		if code != http.StatusOK {
+			t.Fatalf("%s: status = %d", name, code)
+		}
+		if page.Total != 2 {
+			t.Fatalf("%s: total = %d, want both entries", name, page.Total)
 		}
 	}
 }

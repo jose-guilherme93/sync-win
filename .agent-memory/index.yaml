@@ -93,3 +93,6 @@ entries:
   - id: sessions/261017-log-sse
     path: sessions/261017-log-sse.md
     type: session
+  - id: sessions/261017-log-scope
+    path: sessions/261017-log-scope.md
+    type: session

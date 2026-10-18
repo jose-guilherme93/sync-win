@@ -23,10 +23,14 @@ import (
 // from the logger, keeps every filter in one place: the SQL that the page
 // already uses.
 
-func logParamsFromRequest(r *http.Request, ownerID string) logging.QueryParams {
+// logParamsFromRequest maps the query string the viewer uses. It deliberately
+// does not scope by owner: application logs are written by the server itself
+// (startup, HTTP, agent, sync) with no owner, so an owner-scoped viewer shows
+// nothing. Every authenticated account is an operator, as documented in
+// SECURITY.md; the device journal log endpoint remains owner-scoped.
+func logParamsFromRequest(r *http.Request) logging.QueryParams {
 	q := r.URL.Query()
 	params := logging.QueryParams{
-		OwnerID:       ownerID,
 		Level:         q.Get("level"),
 		Category:      q.Get("category"),
 		Event:         q.Get("event"),
@@ -94,7 +98,7 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 	// Filters come from the same query the page sends. Pagination does not
 	// apply to a stream, so a client that reuses the page URL does not drag
 	// limit/offset along.
-	params := logParamsFromRequest(r, ownerID)
+	params := logParamsFromRequest(r)
 	params.Limit = 0
 	params.Offset = 0
 
@@ -111,7 +115,7 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 	// No cursor means "from now": replaying the whole retention window into a
 	// browser that already rendered the first page would duplicate history.
 	if after == 0 {
-		latest, err := s.logStore.LatestID(ownerID)
+		latest, err := s.logStore.LatestID()
 		if err != nil {
 			s.writeError(w, http.StatusInternalServerError, err)
 			return

@@ -2058,8 +2058,7 @@ func (s *Server) handleDeleteLogs(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	ownerID, ok := s.requireSession(w, r)
-	if !ok {
+	if _, ok := s.requireSession(w, r); !ok {
 		return
 	}
 	days := 5
@@ -2068,7 +2067,7 @@ func (s *Server) handleDeleteLogs(w http.ResponseWriter, r *http.Request) {
 			days = parsed
 		}
 	}
-	deleted, err := s.store.CleanupOldLogsForOwner(ownerID, days)
+	deleted, err := s.store.CleanupOldLogs(days)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
@@ -2688,12 +2687,11 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	ownerID, ok := s.requireSession(w, r)
-	if !ok {
+	if _, ok := s.requireSession(w, r); !ok {
 		return
 	}
 
-	result, err := s.logStore.Query(logParamsFromRequest(r, ownerID))
+	result, err := s.logStore.Query(logParamsFromRequest(r))
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
@@ -2708,8 +2706,7 @@ func (s *Server) handleLogByID(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	ownerID, ok := s.requireSession(w, r)
-	if !ok {
+	if _, ok := s.requireSession(w, r); !ok {
 		return
 	}
 
@@ -2726,7 +2723,7 @@ func (s *Server) handleLogByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entry, err := s.logStore.GetByIDForOwner(id, ownerID)
+	entry, err := s.logStore.GetByID(id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			s.writeError(w, http.StatusNotFound, errors.New("log entry not found"))
@@ -2745,12 +2742,11 @@ func (s *Server) handleLogStats(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	ownerID, ok := s.requireSession(w, r)
-	if !ok {
+	if _, ok := s.requireSession(w, r); !ok {
 		return
 	}
 
-	stats, err := s.logStore.StatsForOwner(ownerID)
+	stats, err := s.logStore.Stats()
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
@@ -2765,8 +2761,7 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	ownerID, ok := s.requireSession(w, r)
-	if !ok {
+	if _, ok := s.requireSession(w, r); !ok {
 		return
 	}
 
@@ -2783,7 +2778,7 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	result, err := s.logStore.GetAuditTrailForOwner(ownerID, limit, offset)
+	result, err := s.logStore.GetAuditTrail(limit, offset)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
@@ -2798,8 +2793,7 @@ func (s *Server) handleErrors(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	ownerID, ok := s.requireSession(w, r)
-	if !ok {
+	if _, ok := s.requireSession(w, r); !ok {
 		return
 	}
 
@@ -2816,7 +2810,7 @@ func (s *Server) handleErrors(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	result, err := s.logStore.GetErrorsForOwner(ownerID, limit, offset)
+	result, err := s.logStore.GetErrors(limit, offset)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return

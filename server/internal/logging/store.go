@@ -172,13 +172,14 @@ func (s *Store) ChangesAfter(params QueryParams, afterID int64, limit int) ([]Lo
 	return scanLogEntries(rows)
 }
 
-// LatestID returns the newest entry id for an owner, or 0 when there is none.
-// A stream that starts without a cursor uses it so it does not replay the
-// whole retention window on first connect.
-func (s *Store) LatestID(ownerID string) (int64, error) {
+// LatestID returns the newest entry id in the table, or 0 when it is empty. A
+// stream that starts without a cursor uses it so it does not replay the whole
+// retention window on first connect. Application logs are server-wide, so this
+// is not scoped to an owner.
+func (s *Store) LatestID() (int64, error) {
 	var id int64
 	err := s.db.QueryRowContext(context.Background(),
-		`SELECT COALESCE(MAX(id), 0) FROM logs WHERE owner_id = ?`, ownerID).Scan(&id)
+		`SELECT COALESCE(MAX(id), 0) FROM logs`).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("latest log id: %w", err)
 	}

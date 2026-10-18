@@ -164,7 +164,7 @@ func TestLogStreamAppliesFilters(t *testing.T) {
 	// The cursor is the newest existing entry, so only entries written by the
 	// callback are eligible.
 	writeTestLog(t, s, ownerID, logging.LevelInfo, logging.Event("cursor"), "cursor")
-	cursor, err := s.logStore.LatestID(ownerID)
+	cursor, err := s.logStore.LatestID()
 	if err != nil {
 		t.Fatal(err)
 	}

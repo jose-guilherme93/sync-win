@@ -101,11 +101,12 @@ table, so a per-owner level would apply to every account while appearing scoped.
 
 Reviewed the feature and closed the gaps found:
 
-- **Test coverage for the query API** (`logs_test.go`): owner scoping, the
+- **Test coverage for the query API** (`logs_test.go`): the
   level/category/search filters, pagination, the oversized-limit clamp to 100,
   the session requirement, method rejection, and the audit/errors views. The
   query endpoints were previously only exercised indirectly through an owner
-  isolation test.
+  isolation test. (The owner filter itself was removed on 2026-10-17; it made
+  the viewer empty. See `sessions/261017-log-scope.md`.)
 - **Trace a single request**: the viewer now filters by `request_id` and shows
   both `request_id` and `correlation_id` in the detail row. The backend already
   supported them; the UI exposed neither.
