@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"time"
@@ -50,14 +51,15 @@ func (s *Store) ListAlertAcks(ownerID string) ([]AlertAck, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	rows, err := s.db.Query(
+	rows, err := s.db.QueryContext(
+		context.Background(),
 		`SELECT alert_id, acked_at FROM alert_acks WHERE owner_id = ? ORDER BY acked_at DESC`,
 		ownerID,
 	)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	acks := make([]AlertAck, 0)
 	for rows.Next() {
@@ -82,7 +84,8 @@ func (s *Store) AckAlert(ownerID, alertID string) (AlertAck, error) {
 	defer s.mu.Unlock()
 
 	now := timeText(time.Now().UTC())
-	_, err = s.db.Exec(
+	_, err = s.db.ExecContext(
+		context.Background(),
 		`INSERT INTO alert_acks (owner_id, alert_id, acked_at) VALUES (?, ?, ?)
 		 ON CONFLICT(owner_id, alert_id) DO NOTHING`,
 		ownerID, id, now,
@@ -92,7 +95,8 @@ func (s *Store) AckAlert(ownerID, alertID string) (AlertAck, error) {
 	}
 
 	var ackedAt string
-	if err := s.db.QueryRow(
+	if err := s.db.QueryRowContext(
+		context.Background(),
 		`SELECT acked_at FROM alert_acks WHERE owner_id = ? AND alert_id = ?`,
 		ownerID, id,
 	).Scan(&ackedAt); err != nil {
@@ -112,7 +116,8 @@ func (s *Store) UnackAlert(ownerID, alertID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	_, err = s.db.Exec(
+	_, err = s.db.ExecContext(
+		context.Background(),
 		`DELETE FROM alert_acks WHERE owner_id = ? AND alert_id = ?`,
 		ownerID, id,
 	)
@@ -125,7 +130,7 @@ func (s *Store) ClearAlertAcks(ownerID string) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	res, err := s.db.Exec(`DELETE FROM alert_acks WHERE owner_id = ?`, ownerID)
+	res, err := s.db.ExecContext(context.Background(), `DELETE FROM alert_acks WHERE owner_id = ?`, ownerID)
 	if err != nil {
 		return 0, err
 	}
