@@ -108,7 +108,7 @@ sync-win/
 │   └── Dockerfile.test-device      # Ubuntu + systemd test device for the dev stack
 ├── scripts/
 │   ├── install.sh                  # Agent installer (616 lines, idempotent)
-│   └── dev-test-agents.sh          # Two Alpine containers running the dev agent
+│   └── dev-test-agents.sh          # Alpine pair + one systemd Ubuntu test device
 ├── docs/
 │   └── INSTALL.md                  # Installation architecture and security
 ├── data/                           # Runtime: SQLite DB + mirrored preference files
