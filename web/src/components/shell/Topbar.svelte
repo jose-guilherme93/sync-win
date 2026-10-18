@@ -7,7 +7,7 @@
 
   // The topbar answers "which device am I looking at, is it alive, and how
   // fresh is this data" without the user having to scroll. The range selector
-  // owns the chart window and, with it, the shared poll interval.
+  // owns the chart window; the device heartbeat poll is fixed and independent.
   export let device: Device | null = null
   export let sectionTitle = ''
   export let rangeId: RangeId = DEFAULT_RANGE
@@ -59,7 +59,7 @@
         <button
           class:active={rangeId === range.id}
           on:click={() => onRangeChange(range.id)}
-          title={`${range.label} window · refreshes every ${Math.round(range.refreshMs / 1000)}s`}
+          title={`${range.label} window · chart refreshes every ${Math.round(range.refreshMs / 1000)}s`}
         >
           {range.label}
         </button>

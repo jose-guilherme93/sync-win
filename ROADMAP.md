@@ -283,6 +283,7 @@ A funcionalidade P1 está concluída. A próxima etapa é uma nova priorização
 - [x] Agent: real power watts, throttled log sampling, state writes only on change
 - [x] Dashboard: canvas sparklines replace per-card Chart.js; store-driven updates
 - [x] Fix modal staleness, SSE owner scoping, and `kernel_version` field mismatch
+- [x] telas do device vivas: summary do poll mesclado ao detalhe (status/telemetria), detalhe pesado em cadência própria, heartbeat fixo separado do range dos gráficos
 
 ## FASE 22 — Development and Production Environments
 - [x] `make dev` / `make prod` / `make test` / `make help` with environment separation

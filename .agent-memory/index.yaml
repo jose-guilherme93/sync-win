@@ -102,3 +102,6 @@ entries:
   - id: sessions/261017-retention-settings
     path: sessions/261017-retention-settings.md
     type: session
+  - id: sessions/261018-live-device-status
+    path: sessions/261018-live-device-status.md
+    type: session

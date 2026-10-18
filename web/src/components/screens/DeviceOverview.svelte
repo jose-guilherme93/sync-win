@@ -47,6 +47,7 @@
   const unsubRange = selectedRange.subscribe((value) => (range = value))
   onDestroy(unsubRange)
   let historyRequest = 0
+  let historyTimer: ReturnType<typeof setInterval> | null = null
 
   // history-v2 returns either downsampled aggregates (cpu_avg, mem_avg, …) or
   // raw payloads, depending on the window. Normalising here keeps the chart
@@ -121,9 +122,26 @@
     }
   }
 
-  // Refetch whenever the device or the shared range changes. The live window
-  // leaves this as a no-op.
-  $: if (device.id && range) void loadHistory()
+  // The range owns its history refresh cadence. The live window needs no timer:
+  // the telemetry store receives a point on every device poll.
+  function scheduleHistory(id: RangeId) {
+    if (historyTimer) {
+      clearInterval(historyTimer)
+      historyTimer = null
+    }
+    void loadHistory()
+    const option = rangeById(id)
+    if (option.id !== 'live') {
+      historyTimer = setInterval(() => void loadHistory(), option.refreshMs)
+    }
+  }
+
+  // Refetch whenever the device or the shared range changes.
+  $: if (device.id && range) scheduleHistory(range)
+
+  onDestroy(() => {
+    if (historyTimer) clearInterval(historyTimer)
+  })
 
   $: isLive = rangeById(range).id === 'live'
   $: windowed = isLive ? liveHistory : serverHistory
