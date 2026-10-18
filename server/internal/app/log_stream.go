@@ -149,7 +149,11 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 				// the stream stays open and the next tick retries.
 				idle++
 			} else if len(entries) > 0 {
-				for _, entry := range entries {
+				for i := range entries {
+					// LogEntry marshals Level through a pointer-receiver
+					// MarshalJSON; passing a value here emitted the raw int
+					// (level: 4) while /api/logs emitted "WARN".
+					entry := &entries[i]
 					data, marshalErr := json.Marshal(entry)
 					if marshalErr != nil {
 						continue

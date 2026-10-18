@@ -140,6 +140,11 @@ func TestLogStreamPushesNewEntries(t *testing.T) {
 	if !strings.Contains(body, "data: ") || !strings.Contains(body, "id: ") {
 		t.Fatalf("missing SSE framing: %q", body)
 	}
+	// Level has a pointer-receiver MarshalJSON; a value would encode as the
+	// number 4 and the screen would render an empty badge.
+	if !strings.Contains(body, `"level":"WARN"`) {
+		t.Fatalf("level was not marshaled as a string: %q", body)
+	}
 }
 
 func TestLogStreamDoesNotReplayHistory(t *testing.T) {
