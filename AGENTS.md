@@ -86,7 +86,8 @@ sync-win/
 │   │   │   ├── ui/                 # Icon, StatusDot, GaugeCard, StatCard, Skeleton, ConfirmDialog…
 │   │   │   ├── screens/            # Home, DeviceOverview, CpuThermal, Memory, Sensors, Alerts, Reports, Storage, Network, Services, Security, Docker, Processes, Packages, RemoteAccess, DeviceSettings, DeviceLogs, AppSettings
 │   │   │   ├── DeviceModal.svelte  # Device detail tabs; variant="page" renders inline
-│   │   │   ├── DockerTab.svelte    # Docker container management
+│   │   │   ├── DockerTab.svelte    # Docker container list, actions, live state
+│   │   │   ├── docker/             # Container drawer, compose editor, cleanup cards
 │   │   │   ├── SystemMetrics.svelte    # Detailed hardware telemetry
 │   │   │   ├── NotificationsModal.svelte  # Notification settings and inbox
 │   │   │   └── NotificationToast.svelte   # Toast notifications
@@ -96,6 +97,8 @@ sync-win/
 │   │       ├── types.ts            # Shared Device / HardwareStats shapes
 │   │       ├── insights.ts         # Alert thresholds (single source)
 │   │       ├── device-logs.ts      # Device log viewer types, formatting, query building
+│   │       ├── docker.ts           # Docker wire-shape normalisation, filters, parse helpers
+│   │       ├── docker-client.ts    # Docker command queue, result polling and live stream
 │   │       ├── flags.ts            # VITE_MOCK_* switches for screens without an API
 │   │       ├── format.ts           # Timestamp/byte/severity helpers (guards the Go zero time)
 │   │       ├── telemetry-store.ts  # Telemetry state management

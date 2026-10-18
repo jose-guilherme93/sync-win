@@ -3707,6 +3707,7 @@ func (s *Server) getDockerState(deviceID string) docker.DockerState {
 	for _, c := range containers {
 		summary := docker.DockerSummary{
 			ID: c.ID, Name: c.Name, Image: c.Image, State: c.State, Status: c.Status,
+			CreatedAt: c.CreatedAt,
 		}
 		for _, p := range c.Ports {
 			summary.Ports = append(summary.Ports, docker.PortMapping{
@@ -3744,6 +3745,52 @@ func (s *Server) handleDockerPending(w http.ResponseWriter, r *http.Request, dev
 	_ = json.NewEncoder(w).Encode(requests)
 }
 
+// dockerListResultContainer is the Engine shape a `list` command returns. The
+// agent sends `names` (with a leading slash) and never the cached `name`, so it
+// is converted before it can replace the stored snapshot.
+type dockerListResultContainer struct {
+	ID        string              `json:"id"`
+	Names     []string            `json:"names,omitempty"`
+	Name      string              `json:"name,omitempty"`
+	Image     string              `json:"image"`
+	State     string              `json:"state"`
+	Status    string              `json:"status,omitempty"`
+	CreatedAt int64               `json:"created_at,omitempty"`
+	Ports     []store.DockerPort  `json:"ports,omitempty"`
+	Mounts    []store.DockerMount `json:"mounts,omitempty"`
+}
+
+// parseDockerListResult decodes a completed list command into the shape the
+// docker_state_json column stores. An unreadable body is an error: an empty
+// device and a broken reply look identical if this returns an empty slice.
+func parseDockerListResult(message string) ([]store.DockerContainer, error) {
+	var raw []dockerListResultContainer
+	if err := json.Unmarshal([]byte(message), &raw); err != nil {
+		return nil, fmt.Errorf("decode container list: %w", err)
+	}
+	containers := make([]store.DockerContainer, 0, len(raw))
+	for _, c := range raw {
+		if c.ID == "" {
+			continue
+		}
+		name := c.Name
+		if name == "" && len(c.Names) > 0 {
+			name = c.Names[0]
+		}
+		containers = append(containers, store.DockerContainer{
+			ID:        c.ID,
+			Name:      strings.TrimPrefix(name, "/"),
+			Image:     c.Image,
+			State:     c.State,
+			Status:    c.Status,
+			CreatedAt: c.CreatedAt,
+			Ports:     c.Ports,
+			Mounts:    c.Mounts,
+		})
+	}
+	return containers, nil
+}
+
 // handleDockerPostResult stores a Docker result from the agent and broadcasts to SSE subscribers.
 func (s *Server) handleDockerPostResult(w http.ResponseWriter, r *http.Request, deviceID string) {
 	if !s.validDeviceToken(r, deviceID) {
@@ -3761,6 +3808,21 @@ func (s *Server) handleDockerPostResult(w http.ResponseWriter, r *http.Request, 
 	if len(req.Message) > 64<<10 {
 		s.writeError(w, http.StatusRequestEntityTooLarge, errors.New("docker result is too large"))
 		return
+	}
+	// A completed list is a fresh sample of the truth, and the cache is only
+	// sampled by the agent once a minute. Persisting it here means the screen
+	// that asked for a refresh, the next screen that opens, and every SSE
+	// subscriber all see the same list instead of falling back to the stale
+	// sample. Other commands change state too, but their effect is only known
+	// after a follow-up list, so they must not touch this column.
+	if req.Status == "completed" && s.dockerQueue.RequestType(req.RequestID) == "list" {
+		if containers, perr := parseDockerListResult(req.Message); perr != nil {
+			s.log.Warn(logging.CatCommand, logging.EventCommandResult, "docker list result not cached",
+				map[string]any{"device_id": deviceID, "request_id": req.RequestID, "error": perr.Error()})
+		} else if derr := s.store.UpdateDockerState(deviceID, containers); derr != nil {
+			s.log.Warn(logging.CatCommand, logging.EventCommandResult, "docker list cache update failed",
+				map[string]any{"device_id": deviceID, "request_id": req.RequestID, "error": derr.Error()})
+		}
 	}
 	s.dockerQueue.StoreResult(&docker.Response{
 		DeviceID:  deviceID,

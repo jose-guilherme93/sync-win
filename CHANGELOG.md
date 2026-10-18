@@ -11,6 +11,34 @@ version, and a breaking change increases the major version.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-18
+
+### Changed
+
+- **Docker screen rebuilt** to match the rest of the dashboard: tiles for
+  running, stopped, paused and images; a searchable container list with state
+  filters; a details drawer with overview, live resources, logs and a shell;
+  and compose and cleanup together on the page instead of hidden behind tabs.
+- **The container list is live.** The screen subscribes to the server's Docker
+  state stream, and Refresh asks the device for a fresh list instead of
+  re-reading a snapshot that can be a minute old.
+- **Container actions answer in about two seconds.** The agent drains the Docker
+  request queue on its own two-second poller rather than waiting for the
+  telemetry cycle, and a failed command states the device's reason.
+- Paused containers are shown as needing attention on the device instead of
+  offering start/restart buttons that Docker would reject.
+
+### Fixed
+
+- Published container ports now appear. The agent decoded the Engine's
+  `PrivatePort`/`PublicPort` keys into underscore-tagged fields, so every port
+  arrived as zero and the screen showed "no ports".
+- A compose scan now reports "no compose project found" when the device simply
+  has none, instead of an error caused by a `null` reply.
+- A completed container list now refreshes the cached snapshot, so the screen
+  that requested it, the next screen that opens, and every live subscriber see
+  the same state after an action.
+
 ## [0.11.0] - 2026-10-18
 
 ### Added

@@ -16,13 +16,14 @@ type DockerState struct {
 
 // DockerSummary is a lightweight container snapshot.
 type DockerSummary struct {
-	ID     string        `json:"id"`
-	Name   string        `json:"name"`
-	Image  string        `json:"image"`
-	State  string        `json:"state"`
-	Status string        `json:"status"`
-	Ports  []PortMapping `json:"ports,omitempty"`
-	Mounts []MountInfo   `json:"mounts,omitempty"`
+	ID        string        `json:"id"`
+	Name      string        `json:"name"`
+	Image     string        `json:"image"`
+	State     string        `json:"state"`
+	Status    string        `json:"status"`
+	CreatedAt int64         `json:"created_at,omitempty"`
+	Ports     []PortMapping `json:"ports,omitempty"`
+	Mounts    []MountInfo   `json:"mounts,omitempty"`
 }
 
 // PortMapping is a container port published on the host.

@@ -191,6 +191,56 @@ func processDockerRequests(serverURL, deviceID, deviceToken string) error {
 	return nil
 }
 
+const (
+	// Docker management gets its own cadence instead of riding the telemetry
+	// cycle. It used to be polled once per telemetry interval (10s by default),
+	// so a click in the dashboard could wait a full interval, and longer when a
+	// slow inventory step ran before it. The pending endpoint is in-memory on
+	// the server, so two seconds is cheap.
+	dockerRequestPollInterval = 2 * time.Second
+	dockerRequestMaxBackoff   = 30 * time.Second
+)
+
+// runDockerRequestPoller drains the server's Docker request queue on a short,
+// independent loop. Docker execution checks availability per request, so a
+// device without Docker still answers each queued command with a reason
+// instead of leaving the dashboard waiting for a result that never comes.
+func runDockerRequestPoller(ctx context.Context, serverURL, deviceID, deviceToken string) {
+	wait := dockerRequestPollInterval
+	failures := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+		}
+
+		if err := processDockerRequests(serverURL, deviceID, deviceToken); err != nil {
+			// The main loop already reports connection failures at its own
+			// cadence; here one line per outage is enough to explain the
+			// Docker screen's delay without flooding the journal.
+			if failures == 0 {
+				log.Printf("docker request polling failed: %v", err)
+			}
+			failures++
+			if failures > 5 {
+				failures = 5
+			}
+			wait = dockerRequestPollInterval * time.Duration(1<<uint(failures-1))
+			if wait > dockerRequestMaxBackoff {
+				wait = dockerRequestMaxBackoff
+			}
+			continue
+		}
+
+		if failures > 0 {
+			log.Printf("docker request polling recovered")
+			failures = 0
+		}
+		wait = dockerRequestPollInterval
+	}
+}
+
 func dockerRequestAllowed(policy localPolicy, reqType string) bool {
 	switch reqType {
 	case "list", "stats", "logs":
@@ -293,6 +343,11 @@ func executeDockerRequest(req dockerRequest) dockerResult {
 		files, err := collectors.DockerComposeFiles()
 		if err != nil {
 			return dockerResult{"failed", err.Error()}
+		}
+		// Marshal an empty list, never null: a device with no compose files and
+		// an unreadable reply must not look the same to the dashboard.
+		if files == nil {
+			files = []collectors.DockerComposeFile{}
 		}
 		data, err := json.Marshal(files)
 		if err != nil {
@@ -607,6 +662,12 @@ func cmdDaemon(args []string) {
 	defer tunnelCancel()
 	go runRemoteTunnel(tunnelCtx, *serverURL, *deviceID, *deviceToken)
 
+	// Docker management has its own poller for the same reason: a busy
+	// telemetry cycle must not delay a container action by a full interval.
+	dockerCtx, dockerCancel := context.WithCancel(context.Background())
+	defer dockerCancel()
+	go runDockerRequestPoller(dockerCtx, *serverURL, *deviceID, *deviceToken)
+
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
@@ -712,13 +773,6 @@ func cmdDaemon(args []string) {
 			lastWorkspaceAttempt = now
 			if err := syncWorkspaceConfigs(*serverURL, *deviceID, *deviceToken, state); err != nil {
 				log.Printf("workspace sync failed: %v", err)
-				hadError = true
-			}
-		}
-
-		if collectors.DockerIsAvailable() {
-			if err := processDockerRequests(*serverURL, *deviceID, *deviceToken); err != nil {
-				log.Printf("docker request processing failed: %v", err)
 				hadError = true
 			}
 		}

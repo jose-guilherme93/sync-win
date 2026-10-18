@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -978,5 +979,62 @@ func TestParseLynisReportIgnoresGarbage(t *testing.T) {
 	r := parseLynisReport("not a report\n\n=no key\nsuggestion[]=|-|\n")
 	if r.HardeningIndex != 0 || r.TotalWarnings != 0 || r.TotalSuggestions != 0 || r.TotalTests != 0 {
 		t.Fatalf("garbage produced counts: %+v", r)
+	}
+}
+
+// Docker requests used to be drained inside the telemetry loop, so the agent
+// only answered them once per interval. The poller is what makes the Docker
+// screen responsive; this checks the queue is drained without that loop and
+// that an unusable request is answered rather than left pending.
+func TestDockerRequestPollerDrainsQueueWithoutMainLoop(t *testing.T) {
+	results := make(chan map[string]string, 1)
+	pendingCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/docker/pending"):
+			pendingCalls++
+			w.Header().Set("Content-Type", "application/json")
+			if pendingCalls == 1 {
+				_ = json.NewEncoder(w).Encode([]map[string]string{{"id": "dreq-test", "type": "unknown_type"}})
+				return
+			}
+			_ = json.NewEncoder(w).Encode([]any{})
+		case strings.HasSuffix(r.URL.Path, "/docker/result"):
+			var body map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode result body: %v", err)
+			}
+			results <- body
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		runDockerRequestPoller(ctx, srv.URL, "dev-1", "device-token")
+		close(done)
+	}()
+
+	select {
+	case body := <-results:
+		if body["status"] != "failed" {
+			t.Fatalf("status = %q, want failed", body["status"])
+		}
+		if !strings.Contains(body["message"], "local policy") {
+			t.Fatalf("message = %q, want a local-policy reason", body["message"])
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("poller did not answer the queued request")
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("poller did not stop when its context was canceled")
 	}
 }

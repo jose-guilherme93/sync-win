@@ -73,13 +73,13 @@ Key UI components:
 - `components/screens/Storage.svelte`, `Processes.svelte`, `Packages.svelte`, `Services.svelte`: per-device hardware and system views
 - `components/screens/RemoteAccess.svelte`, `DeviceSettings.svelte`: the SSH terminal plus the confirmed device actions with an audit trail, and device identity/removal
 - `DeviceModal.svelte`: device detail; still owns the Files / Packages / Saves / Notes / Docker / Security tabs, and can render inline via `variant="page"` rather than as a popup
-- `DockerTab.svelte`: container management (list, start/stop/restart/kill/remove, exec, compose editor, prune)
+- `DockerTab.svelte`, `components/docker/`: container management (live list, start/stop/restart/kill/remove, exec, compose editor, prune). `lib/docker.ts` owns the wire-shape normalisation and filters; `lib/docker-client.ts` owns the command queue, result polling and live state stream.
 - `SecurityTab.svelte`: Lynis security audit runner, hardening index gauge, warnings/suggestions, history
 - `SystemMetrics.svelte`: detailed hardware telemetry display and history charts
 - `NotificationsModal.svelte`: notification provider settings and inbox
 - `NotificationToast.svelte`: real-time toast notifications via SSE
 
-**Status:** the shell and every fleet and device screen are implemented. A few screens render honest "not collected yet" states for the parts whose API does not exist: `Services` (systemd units, open ports), the pending-updates half of `Packages`, and the SMART half of `Storage`. `RemoteAccess` hosts the SSH terminal (over the remote-access tunnel) and the confirmed device actions (reboot / update-packages / restart-agent). Those are marked in the UI with the missing endpoint, and `lib/flags.ts` (`VITE_MOCK_*`) can swap in labelled sample data for layout review. `cpu`, `memory`, `network` and `sensors` currently all resolve to the same `DeviceOverview`; `containers` and `security` still resolve to `DeviceModal` tabs. `logs` is a dedicated screen (`DeviceLogs`) that the sidebar section and the modal tab both render.
+**Status:** the shell and every fleet and device screen are implemented. A few screens render honest "not collected yet" states for the parts whose API does not exist: `Services` (systemd units, open ports), the pending-updates half of `Packages`, and the SMART half of `Storage`. `RemoteAccess` hosts the SSH terminal (over the remote-access tunnel) and the confirmed device actions (reboot / update-packages / restart-agent). Those are marked in the UI with the missing endpoint, and `lib/flags.ts` (`VITE_MOCK_*`) can swap in labelled sample data for layout review. `cpu`, `memory`, `network` and `sensors` currently all resolve to the same `DeviceOverview`; `containers` resolves to the dedicated Docker screen and `security` to the dedicated Security screen. `logs` is a dedicated screen (`DeviceLogs`) that the sidebar section and the modal tab both render.
 
 Note that `svelte-check` does not reliably catch malformed Svelte block structure in this repo; `vite build` is the trustworthy gate for template changes.
 
@@ -136,7 +136,7 @@ Communication is API-first and intentionally simple:
 2. The agent sends the payload to the server together with metadata such as device ID and synced-at timestamp.
 3. The server stores small text files and JSON metadata in SQLite and mirrors them to `/data/<device>/<category>/`.
 4. The web dashboard reads the server data and shows the current device state.
-5. Docker management commands flow from the dashboard to the server (command queue), then to the agent (polling), and results flow back.
+5. Docker management commands flow from the dashboard to the server (command queue), then to the agent, and results flow back. The agent polls that queue every two seconds on its own goroutine, independent of the telemetry cycle. A completed `list` replaces the cached container snapshot, and the server pushes the new state to open dashboards over SSE.
 6. Notifications flow from the server dispatcher to enabled providers asynchronously.
 7. For remote access, the agent keeps an outbound tunnel; the server issues a one-time ticket, and bytes flow browser → server → agent → loopback sshd. The server never names a host or port.
 

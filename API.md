@@ -773,13 +773,16 @@ Docker endpoints are under `/api/devices/{id}/docker/...` and require device tok
 
 #### `GET /api/devices/{id}/docker/pending`
 
-Poll for pending Docker commands. Called by the agent.
+Poll for pending Docker commands. Called by the agent every two seconds on its
+own goroutine, independent of the telemetry cycle.
 
 **Response:** `200 OK` (array of pending Docker requests, or empty array)
 
 #### `POST /api/devices/{id}/docker/result`
 
-Report Docker command result. Called by the agent.
+Report Docker command result. Called by the agent. When the result belongs to a
+`list` request, the server replaces the cached container snapshot before it
+broadcasts the new state.
 
 **Request:**
 ```json
@@ -795,7 +798,7 @@ Report Docker command result. Called by the agent.
 
 ### Dashboard Endpoints
 
-#### `POST /api/devices/{id}/docker/request`
+#### `POST /api/devices/{id}/docker`
 
 Queue a Docker command from the dashboard. Requires session token.
 
@@ -803,14 +806,15 @@ Queue a Docker command from the dashboard. Requires session token.
 ```json
 {
   "type": "start",
-  "target": "container-id-or-name"
+  "target": "container-id-or-name",
+  "payload": ""
 }
 ```
 
 **Response:** `200 OK`
 ```json
 {
-  "request_id": "dreq-abc123"
+  "id": "dreq-abc123"
 }
 ```
 
@@ -818,13 +822,33 @@ Queue a Docker command from the dashboard. Requires session token.
 
 Get the result of a Docker request. Requires session token.
 
-**Response:** `200 OK` (result object) or `202 Accepted` (still pending)
+**Response:** `200 OK` (result object) or `202 Accepted` (still pending, empty body)
 
-#### `GET /api/devices/{id}/docker/state`
+#### `GET /api/devices/{id}/docker`
 
-Get current Docker container state. Requires session token.
+Get the cached container state. Requires session token. The list is sampled by
+the agent roughly once a minute; a completed `list` command refreshes it.
 
-**Response:** `200 OK` (container list with state)
+**Response:** `200 OK`
+
+```json
+{
+  "available": true,
+  "containers": [
+    {
+      "id": "abc123",
+      "name": "web",
+      "image": "nginx:alpine",
+      "state": "running",
+      "status": "Up 2 minutes",
+      "created_at": 1700000000,
+      "ports": [{ "ip": "0.0.0.0", "private_port": 80, "public_port": 8080, "type": "tcp" }],
+      "mounts": [{ "type": "bind", "source": "/srv/web", "destination": "/usr/share/nginx/html", "rw": true }]
+    }
+  ],
+  "info": { "version": "27.1", "running": 1, "total": 1 }
+}
+```
 
 #### `GET /api/devices/{id}/docker/stream`
 

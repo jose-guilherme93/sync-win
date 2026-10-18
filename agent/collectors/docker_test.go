@@ -360,3 +360,48 @@ func TestComposeWriteRejectsNonComposeFilename(t *testing.T) {
 		t.Fatal("non-compose filename was accepted")
 	}
 }
+
+// Docker's container list spells ports PrivatePort/PublicPort. Decoding that
+// straight into the agent's underscore-tagged DockerPort silently zeroed every
+// port, so no dashboard ever showed a published port. Exercise the real Engine
+// JSON through the conversion.
+func TestContainersFromAPIPreservesPublishedPorts(t *testing.T) {
+	var raw []dockerAPIContainer
+	const engineJSON = `[{
+		"Id": "829ddf0f932d",
+		"Names": ["/web"],
+		"Image": "nginx:alpine",
+		"State": "running",
+		"Status": "Up 2 minutes",
+		"Ports": [
+			{"IP": "0.0.0.0", "PrivatePort": 80, "PublicPort": 8080, "Type": "tcp"},
+			{"IP": "::", "PrivatePort": 443, "Type": "tcp"}
+		],
+		"Mounts": [{"Type": "bind", "Source": "/srv/web", "Destination": "/usr/share/nginx/html", "RW": true}],
+		"Created": 1700000000
+	}]`
+	if err := json.Unmarshal([]byte(engineJSON), &raw); err != nil {
+		t.Fatalf("decode Engine JSON: %v", err)
+	}
+
+	containers := containersFromAPI(raw)
+	if len(containers) != 1 {
+		t.Fatalf("containers = %d, want 1", len(containers))
+	}
+	c := containers[0]
+	if len(c.Ports) != 2 {
+		t.Fatalf("ports = %+v", c.Ports)
+	}
+	if c.Ports[0].PrivatePort != 80 || c.Ports[0].PublicPort != 8080 || c.Ports[0].Type != "tcp" {
+		t.Fatalf("published port = %+v", c.Ports[0])
+	}
+	if c.Ports[1].PrivatePort != 443 || c.Ports[1].PublicPort != 0 {
+		t.Fatalf("unpublished port = %+v", c.Ports[1])
+	}
+	if c.CreatedAt != 1700000000 {
+		t.Fatalf("created = %d", c.CreatedAt)
+	}
+	if len(c.Mounts) != 1 || c.Mounts[0].Destination != "/usr/share/nginx/html" {
+		t.Fatalf("mounts = %+v", c.Mounts)
+	}
+}

@@ -99,12 +99,23 @@ type dockerAPIContainer struct {
 	Image      string            `json:"Image"`
 	State      string            `json:"State"`
 	Status     string            `json:"Status"`
-	Ports      []DockerPort      `json:"Ports"`
+	Ports      []dockerAPIPort   `json:"Ports"`
 	Mounts     []DockerMount     `json:"Mounts"`
 	Created    int64             `json:"Created"`
 	Labels     map[string]string `json:"Labels"`
 	SizeRw     int64             `json:"SizeRw"`
 	SizeRootFs int64             `json:"SizeRootFs"`
+}
+
+// dockerAPIPort is the Engine's port shape. It cannot reuse DockerPort: the
+// Engine spells the keys PrivatePort/PublicPort, and Go's case-insensitive
+// field matching does not bridge that to the underscore-tagged wire shape the
+// agent sends, so decoding straight into DockerPort produced zeroed ports.
+type dockerAPIPort struct {
+	IP          string `json:"IP"`
+	PrivatePort int    `json:"PrivatePort"`
+	PublicPort  int    `json:"PublicPort"`
+	Type        string `json:"Type"`
 }
 
 // dockerStatsResponse is the raw stats response from Docker Engine.
@@ -239,15 +250,25 @@ func DockerListContainers(all bool) ([]DockerContainer, error) {
 		return nil, fmt.Errorf("unmarshal containers: %w", err)
 	}
 
+	return containersFromAPI(raw), nil
+}
+
+// containersFromAPI converts the Engine response into the agent's wire shape.
+func containersFromAPI(raw []dockerAPIContainer) []DockerContainer {
 	containers := make([]DockerContainer, 0, len(raw))
 	for _, c := range raw {
+		ports := make([]DockerPort, 0, len(c.Ports))
+		for _, p := range c.Ports {
+			// Same fields, different JSON tags: the conversion is structural.
+			ports = append(ports, DockerPort(p))
+		}
 		containers = append(containers, DockerContainer{
 			ID:         c.ID,
 			Names:      c.Names,
 			Image:      c.Image,
 			State:      c.State,
 			Status:     c.Status,
-			Ports:      c.Ports,
+			Ports:      ports,
 			Mounts:     c.Mounts,
 			CreatedAt:  c.Created,
 			Labels:     c.Labels,
@@ -255,7 +276,7 @@ func DockerListContainers(all bool) ([]DockerContainer, error) {
 			SizeRootFs: c.SizeRootFs,
 		})
 	}
-	return containers, nil
+	return containers
 }
 
 // DockerContainerStats returns resource usage stats for a single container.
