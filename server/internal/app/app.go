@@ -2014,6 +2014,10 @@ func (s *Server) handleRetention(w http.ResponseWriter, r *http.Request) {
 		}
 		rs.OwnerID = ownerID
 		if err := s.store.UpdateRetentionSettings(rs); err != nil {
+			if errors.Is(err, store.ErrInvalidRetention) {
+				s.writeError(w, http.StatusBadRequest, err)
+				return
+			}
 			s.writeError(w, http.StatusInternalServerError, err)
 			return
 		}

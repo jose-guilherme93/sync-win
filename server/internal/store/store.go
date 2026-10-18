@@ -44,6 +44,9 @@ const (
 var sessionTTL = defaultSessionTTL
 
 var (
+	// ErrInvalidRetention marks a retention payload the handler can reject with
+	// 400 instead of reporting an internal failure.
+	ErrInvalidRetention   = errors.New("invalid retention settings")
 	errInvalidFilename    = errors.New("invalid filename")
 	errInvalidCategory    = errors.New("invalid category")
 	errInvalidPath        = errors.New("invalid path")
@@ -3157,11 +3160,14 @@ func (s *Store) GetExtraDirs(ownerID string) ([]string, error) {
 
 // RetentionSettings holds data retention configuration per owner.
 type RetentionSettings struct {
-	OwnerID          string `json:"owner_id"`
-	RawHours         int    `json:"raw_hours"`
-	Resolution1mDays int    `json:"1m_days"`
-	Resolution5mDays int    `json:"5m_days"`
-	Resolution1hDays int    `json:"1h_days"`
+	OwnerID  string `json:"owner_id"`
+	RawHours int    `json:"raw_hours"`
+	// The JSON names match the SQL columns and the documented API. They were
+	// "1m_days"/"5m_days"/"1h_days", which the UI and API.md never sent, so a
+	// PUT decoded zeros and every save failed validation.
+	Resolution1mDays int `json:"resolution_1m_days"`
+	Resolution5mDays int `json:"resolution_5m_days"`
+	Resolution1hDays int `json:"resolution_1h_days"`
 }
 
 // Rejection represents a rejected preference file (alias for PreferenceRejection).
@@ -3185,18 +3191,18 @@ func (s *Store) GetRetentionSettings(ownerID string) (*RetentionSettings, error)
 
 func validateRetentionSettings(rs RetentionSettings) error {
 	if strings.TrimSpace(rs.OwnerID) == "" {
-		return errors.New("owner_id is required")
+		return fmt.Errorf("%w: owner_id is required", ErrInvalidRetention)
 	}
 	if rs.RawHours < 1 || rs.RawHours > 168 {
-		return errors.New("raw_hours must be between 1 and 168")
+		return fmt.Errorf("%w: raw_hours must be between 1 and 168", ErrInvalidRetention)
 	}
 	for name, value := range map[string]int{
-		"1m_days": rs.Resolution1mDays,
-		"5m_days": rs.Resolution5mDays,
-		"1h_days": rs.Resolution1hDays,
+		"resolution_1m_days": rs.Resolution1mDays,
+		"resolution_5m_days": rs.Resolution5mDays,
+		"resolution_1h_days": rs.Resolution1hDays,
 	} {
 		if value < 1 || value > 3650 {
-			return fmt.Errorf("%s must be between 1 and 3650", name)
+			return fmt.Errorf("%w: %s must be between 1 and 3650", ErrInvalidRetention, name)
 		}
 	}
 	return nil
