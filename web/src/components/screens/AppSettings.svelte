@@ -33,6 +33,13 @@
     categories: string[]
   }
 
+  type Retention = {
+    raw_hours: number
+    resolution_1m_days: number
+    resolution_5m_days: number
+    resolution_1h_days: number
+  }
+
   const PAGE_SIZE = 50
   const SEARCH_DEBOUNCE_MS = 350
   const STATS_DEBOUNCE_MS = 1500
@@ -52,6 +59,13 @@
   let settingsError = ''
   let savingSettings = false
   let savedNote = ''
+
+  // Telemetry retention is per account (each owner's devices keep their own
+  // history), unlike the application log settings above, which are global.
+  let retention: Retention | null = null
+  let retentionError = ''
+  let retentionNote = ''
+  let retentionSaving = false
 
   let level = ''
   let category = ''
@@ -204,6 +218,61 @@
     }
   }
 
+  async function loadRetention() {
+    retentionError = ''
+    try {
+      const res = await apiFetch(apiURL('/api/retention'), { headers: authHeaders })
+      if (!res.ok) throw new Error(`request failed (${res.status})`)
+      const data = await res.json()
+      if (!data || typeof data !== 'object' || typeof data.raw_hours !== 'number') {
+        throw new Error('unexpected retention payload')
+      }
+      retention = {
+        raw_hours: data.raw_hours,
+        resolution_1m_days: data.resolution_1m_days,
+        resolution_5m_days: data.resolution_5m_days,
+        resolution_1h_days: data.resolution_1h_days
+      }
+    } catch (e) {
+      retentionError = e instanceof Error ? e.message : 'Could not load retention'
+    }
+  }
+
+  async function saveRetention() {
+    if (!retention) return
+    retentionSaving = true
+    retentionError = ''
+    retentionNote = ''
+    try {
+      const res = await apiFetch(apiURL('/api/retention'), {
+        method: 'PUT',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          raw_hours: Number(retention.raw_hours),
+          resolution_1m_days: Number(retention.resolution_1m_days),
+          resolution_5m_days: Number(retention.resolution_5m_days),
+          resolution_1h_days: Number(retention.resolution_1h_days)
+        })
+      })
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}))
+        throw new Error(payload.error || `request failed (${res.status})`)
+      }
+      const data = await res.json()
+      retention = {
+        raw_hours: data.raw_hours,
+        resolution_1m_days: data.resolution_1m_days,
+        resolution_5m_days: data.resolution_5m_days,
+        resolution_1h_days: data.resolution_1h_days
+      }
+      retentionNote = 'Saved. Older history is removed at the next cleanup cycle.'
+    } catch (e) {
+      retentionError = e instanceof Error ? e.message : 'Could not save retention'
+    } finally {
+      retentionSaving = false
+    }
+  }
+
   function onFilterInput() {
     if (searchTimer) clearTimeout(searchTimer)
     searchTimer = setTimeout(() => {
@@ -325,6 +394,7 @@
 
   onMount(() => {
     void loadSettings()
+    void loadRetention()
     reload()
   })
 
@@ -339,10 +409,10 @@
   <header class="page-head">
     <div>
       <p class="eyebrow">Administration</p>
-      <h1>Application logs</h1>
+      <h1>Settings</h1>
       <p class="muted">
-        Every structured event the server records — HTTP, auth, devices, commands and sync — plus the
-        thresholds that decide what is kept.
+        Every structured event the server records — HTTP, auth, devices, commands and sync — the
+        thresholds that decide what is kept, and how long telemetry history is retained.
       </p>
     </div>
     <div class="head-actions">
@@ -511,6 +581,60 @@
       <div class="settings-actions">
         <button class="primary" on:click={saveSettings} disabled={savingSettings}>
           {savingSettings ? 'Saving…' : 'Save settings'}
+        </button>
+      </div>
+    {/if}
+  </section>
+
+  <section class="settings-card">
+    <header>
+      <h2>Telemetry retention</h2>
+      <p class="muted">
+        How long this account's devices keep history at each resolution. Raw samples are the
+        ten-second telemetry; the aggregations are what the long-range charts read. Older rows are
+        deleted by the cleanup cycle.
+      </p>
+    </header>
+
+    {#if retentionError}<p class="error-inline" role="alert">{retentionError}</p>{/if}
+    {#if retentionNote}<p class="ok-inline">{retentionNote}</p>{/if}
+
+    {#if !retention}
+      <p class="muted">Loading retention…</p>
+    {:else}
+      <div class="settings-grid">
+        <div class="field">
+          <label>
+            <span class="k">Raw telemetry (hours)</span>
+            <input type="number" min="1" max="168" bind:value={retention.raw_hours} />
+          </label>
+          <small class="muted">10-second samples, 1–168 hours.</small>
+        </div>
+        <div class="field">
+          <label>
+            <span class="k">1-minute aggregation (days)</span>
+            <input type="number" min="1" max="365" bind:value={retention.resolution_1m_days} />
+          </label>
+          <small class="muted">One point per minute, 1–365 days.</small>
+        </div>
+        <div class="field">
+          <label>
+            <span class="k">5-minute aggregation (days)</span>
+            <input type="number" min="1" max="730" bind:value={retention.resolution_5m_days} />
+          </label>
+          <small class="muted">One point per five minutes, 1–730 days.</small>
+        </div>
+        <div class="field">
+          <label>
+            <span class="k">1-hour aggregation (days)</span>
+            <input type="number" min="1" max="3650" bind:value={retention.resolution_1h_days} />
+          </label>
+          <small class="muted">One point per hour, 1–3650 days.</small>
+        </div>
+      </div>
+      <div class="settings-actions">
+        <button class="primary" on:click={saveRetention} disabled={retentionSaving}>
+          {retentionSaving ? 'Saving…' : 'Save retention'}
         </button>
       </div>
     {/if}

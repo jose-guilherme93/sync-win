@@ -223,13 +223,6 @@
   let profileNewPassword = ''
   let profileSaving = false
   let profileError = ''
-  let retentionOpen = false
-  let retentionRawHours = 2
-  let retention1mDays = 7
-  let retention5mDays = 30
-  let retention1hDays = 365
-  let retentionSaving = false
-  let retentionError = ''
   const authHeaders = (token: string): Record<string, string> => (token ? { Authorization: `Bearer ${token}` } : {})
   $: ownerHeaders = authHeaders(authToken)
   $: normalizedInstallServer = (() => {
@@ -1165,54 +1158,6 @@
     nav.setSection('configuration')
   }
 
-  function openRetention() {
-    userMenuOpen = false
-    retentionOpen = true
-    void loadRetention()
-  }
-
-  function closeRetention() {
-    retentionOpen = false
-  }
-
-  async function loadRetention() {
-    try {
-      const response = await apiFetch(apiURL(`/api/retention`), { headers: ownerHeaders })
-      if (!response.ok) throw new Error(`${response.status}`)
-      const data = await response.json()
-      retentionRawHours = data.raw_hours ?? 2
-      retention1mDays = data.resolution_1m_days ?? 7
-      retention5mDays = data.resolution_5m_days ?? 30
-      retention1hDays = data.resolution_1h_days ?? 365
-      retentionError = ''
-    } catch (e) {
-      retentionError = e instanceof Error ? e.message : 'Failed to load retention'
-    }
-  }
-
-  async function saveRetention() {
-    retentionSaving = true
-    retentionError = ''
-    try {
-      const response = await apiFetch(apiURL(`/api/retention`), {
-        method: 'PUT',
-        headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          raw_hours: retentionRawHours,
-          resolution_1m_days: retention1mDays,
-          resolution_5m_days: retention5mDays,
-          resolution_1h_days: retention1hDays
-        })
-      })
-      if (!response.ok) throw new Error(`${response.status}`)
-      retentionError = ''
-    } catch (e) {
-      retentionError = e instanceof Error ? e.message : 'Failed to save'
-    } finally {
-      retentionSaving = false
-    }
-  }
-
   function openAddDevice() {
     addDeviceOpen = true
     if (signedIn && !enrollmentToken) {
@@ -1575,9 +1520,6 @@
             <button class="dropdown-item" on:click={openNotifications}>
               <span class="dropdown-icon">🔔</span> Notifications
             </button>
-            <button class="dropdown-item" on:click={openRetention}>
-              <span class="dropdown-icon">🗄</span> Data Retention
-            </button>
             <div class="dropdown-divider"></div>
             <div class="dropdown-profile">
               <h4>Profile</h4>
@@ -1905,57 +1847,6 @@
         </div>
         <p class="muted">The agent never changes a capability on its own.</p>
       </details>
-    </div>
-  </div>
-{/if}
-
-{#if retentionOpen}
-  <div class="modal-backdrop" role="presentation" on:click={closeRetention}>
-    <div class="retention-modal" role="dialog" aria-modal="true" aria-labelledby="retention-title" tabindex="-1" on:click|stopPropagation on:keydown|stopPropagation>
-      <div class="modal-header">
-        <div>
-          <p class="eyebrow">Storage</p>
-          <h2 id="retention-title">Data Retention</h2>
-        </div>
-        <button class="secondary" on:click={closeRetention}>Close</button>
-      </div>
-      <div class="retention-body">
-        <p class="retention-desc">Configure how long telemetry history is kept at each resolution. Older data is automatically deleted.</p>
-        {#if retentionError}<p class="error-inline">{retentionError}</p>{/if}
-        <div class="retention-grid">
-          <label class="retention-field">
-            <span>Raw (10s intervals)</span>
-            <div class="retention-input">
-              <input type="number" bind:value={retentionRawHours} min="1" max="168" />
-              <span class="retention-unit">hours</span>
-            </div>
-          </label>
-          <label class="retention-field">
-            <span>1-minute aggregation</span>
-            <div class="retention-input">
-              <input type="number" bind:value={retention1mDays} min="1" max="365" />
-              <span class="retention-unit">days</span>
-            </div>
-          </label>
-          <label class="retention-field">
-            <span>5-minute aggregation</span>
-            <div class="retention-input">
-              <input type="number" bind:value={retention5mDays} min="1" max="730" />
-              <span class="retention-unit">days</span>
-            </div>
-          </label>
-          <label class="retention-field">
-            <span>1-hour aggregation</span>
-            <div class="retention-input">
-              <input type="number" bind:value={retention1hDays} min="1" max="3650" />
-              <span class="retention-unit">days</span>
-            </div>
-          </label>
-        </div>
-        <button class="primary" on:click={saveRetention} disabled={retentionSaving}>
-          {retentionSaving ? 'Saving...' : 'Save settings'}
-        </button>
-      </div>
     </div>
   </div>
 {/if}

@@ -39,6 +39,13 @@ const SETTINGS = {
   categories: ['system', 'http', 'sync']
 }
 
+const RETENTION = {
+  raw_hours: 2,
+  resolution_1m_days: 7,
+  resolution_5m_days: 30,
+  resolution_1h_days: 365
+}
+
 function stubFetch(
   handler: (url: string, init?: RequestInit) => Response | Promise<Response>
 ): { calls: { url: string; init?: RequestInit }[] } {
@@ -60,6 +67,7 @@ function route(
 ): Response {
   const { entries = ENTRIES, total = ENTRIES.length, status = 200, settings = SETTINGS } = opts
   if (url.includes('/api/log-settings')) return json(settings, status)
+  if (url.includes('/api/retention')) return json(RETENTION)
   // Before the /api/logs catch-all: the token request is a POST whose body is
   // not a page.
   if (url.includes('/api/logs/stream-token')) return json({ ticket: 'ticket-1' })
@@ -173,6 +181,58 @@ describe('Application settings screen', () => {
     const put = calls.find((c) => c.init?.method === 'PUT' && c.url.includes('/api/log-settings'))
     expect(put).toBeTruthy()
     expect(await screen.findByText(/Saved\./)).toBeTruthy()
+  })
+
+  it('renders the stored telemetry retention values', async () => {
+    stubFetch((url) => route(url))
+    render(AppSettings)
+
+    const raw = (await screen.findByLabelText('Raw telemetry (hours)')) as HTMLInputElement
+    expect(raw.value).toBe('2')
+    const oneMinute = (await screen.findByLabelText('1-minute aggregation (days)')) as HTMLInputElement
+    expect(oneMinute.value).toBe('7')
+    const oneHour = (await screen.findByLabelText('1-hour aggregation (days)')) as HTMLInputElement
+    expect(oneHour.value).toBe('365')
+  })
+
+  it('saves telemetry retention and confirms', async () => {
+    const { calls } = stubFetch((url, init) => {
+      if (url.includes('/api/retention') && init?.method === 'PUT') {
+        return json({ ...JSON.parse(String(init.body)) })
+      }
+      return route(url)
+    })
+    render(AppSettings)
+
+    const raw = (await screen.findByLabelText('Raw telemetry (hours)')) as HTMLInputElement
+    await fireEvent.input(raw, { target: { value: '6' } })
+    const oneMinute = (await screen.findByLabelText('1-minute aggregation (days)')) as HTMLInputElement
+    await fireEvent.input(oneMinute, { target: { value: '14' } })
+    await fireEvent.click(screen.getByText('Save retention'))
+
+    const put = calls.find((c) => c.init?.method === 'PUT' && c.url.includes('/api/retention'))
+    expect(put).toBeTruthy()
+    expect(JSON.parse(String(put?.init?.body))).toEqual({
+      raw_hours: 6,
+      resolution_1m_days: 14,
+      resolution_5m_days: 30,
+      resolution_1h_days: 365
+    })
+    expect(await screen.findByText(/Saved\./)).toBeTruthy()
+  })
+
+  it('surfaces a failed retention save instead of pretending it stuck', async () => {
+    stubFetch((url, init) => {
+      if (url.includes('/api/retention') && init?.method === 'PUT') return json({ error: 'nope' }, 500)
+      return route(url)
+    })
+    render(AppSettings)
+
+    await screen.findByLabelText('Raw telemetry (hours)')
+    await fireEvent.click(screen.getByText('Save retention'))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('nope')
   })
 
   it('surfaces a failed log request with a retry instead of a blank list', async () => {

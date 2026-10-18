@@ -99,3 +99,6 @@ entries:
   - id: sessions/261017-cpu-clock
     path: sessions/261017-cpu-clock.md
     type: session
+  - id: sessions/261017-retention-settings
+    path: sessions/261017-retention-settings.md
+    type: session

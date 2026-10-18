@@ -96,6 +96,7 @@ table, so a per-owner level would apply to every account while appearing scoped.
   2026-10-17 by `sessions/261017-log-sse.md`.**
 - The "Data Retention" modal (telemetry retention) still lives in the user menu;
   it is a separate concern from application logs and was not moved into Settings.
+  **Superseded on 2026-10-17 by `sessions/261017-retention-settings.md`.**
 
 ## Follow-up pass (same day)
 
