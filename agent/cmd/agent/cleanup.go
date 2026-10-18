@@ -1,14 +1,24 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const agentUnitPath = "/etc/systemd/system/sync-win-agent.service"
+
+// runCleanupCommand bounds every external call: this runs at the start of an
+// auto-update, and a wedged systemctl must not hold the updater forever.
+func runCleanupCommand(name string, args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, name, args...).Run()
+}
 
 // removeStaleBackups deletes this project's own backup files next to the binary
 // and the unit. The installer used to leave one `.bak.XXXXXX` per run; a real
@@ -53,7 +63,7 @@ func cleanupLegacyArtifacts(executable string) {
 		if _, err := os.Stat(path); err != nil {
 			continue
 		}
-		_ = exec.Command("systemctl", "disable", "--now", name).Run()
+		_ = runCleanupCommand("systemctl", "disable", "--now", name)
 		if err := os.Remove(path); err == nil {
 			removed = append(removed, path)
 			unitRemoved = true
@@ -88,16 +98,16 @@ func cleanupLegacyArtifacts(executable string) {
 
 	// The LEM service user has no process once its unit and directories are
 	// gone. Leave it alone if something still runs as it.
-	if err := exec.Command("id", "-u", "lem").Run(); err == nil {
-		if err := exec.Command("pgrep", "-u", "lem").Run(); err != nil {
-			if err := exec.Command("userdel", "lem").Run(); err == nil {
+	if err := runCleanupCommand("id", "-u", "lem"); err == nil {
+		if err := runCleanupCommand("pgrep", "-u", "lem"); err != nil {
+			if err := runCleanupCommand("userdel", "lem"); err == nil {
 				removed = append(removed, "user lem")
 			}
 		}
 	}
 
 	if unitRemoved {
-		_ = exec.Command("systemctl", "daemon-reload").Run()
+		_ = runCleanupCommand("systemctl", "daemon-reload")
 	}
 
 	if len(removed) > 0 {
