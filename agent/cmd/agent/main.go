@@ -613,7 +613,9 @@ func cmdDaemon(args []string) {
 	// Logs are heavier to collect (journalctl), so sample them less often
 	// than hardware telemetry: roughly every 60s at the default 10s interval.
 	const logCollectCycles = 6
-	logCycle := 0
+	// Start at the limit so the first cycle also emits the one routine line we
+	// keep (the telemetry summary) instead of staying silent for a minute.
+	logCycle := logCollectCycles
 	// Version check cadence: ~5 minutes at the default 10s interval. Cheap
 	// (one small GET) and independent of the unit the updater runs from, which
 	// is the point: a device whose update timer was never installed still
@@ -636,7 +638,6 @@ func cmdDaemon(args []string) {
 
 	for {
 		now := time.Now()
-		log.Printf("cycle started device=%s failures=%d", *deviceID, consecutiveFailures)
 		hadError := false
 
 		// Remote access is opt-in on the device, and `set ssh on` rewrites the
@@ -749,7 +750,10 @@ func cmdDaemon(args []string) {
 		if err != nil {
 			log.Printf("telemetry failed: %v", err)
 			hadError = true
-		} else {
+		} else if logCycle == 0 {
+			// Once a minute, not every ten seconds. The agent's own journal is
+			// shipped back to the server's device Logs screen, so a per-cycle
+			// line turned that screen into a wall of "telemetry sent" rows.
 			log.Printf("telemetry sent cpu=%.1f%% memory=%d/%d power=%.1fW agent=%.1f%% os=%q", stats.CPUUsagePercent, stats.MemoryUsedBytes, stats.MemoryTotalBytes, stats.PowerWatts, stats.AgentCPUUsage, stats.OperatingSystem)
 		}
 		if err == nil {
@@ -1627,24 +1631,25 @@ func collectHardwareStats(prev *hardwareSample, now time.Time) (telemetryStats, 
 	stats.DockerInfo = dockerInf
 	stats.HardwareFingerprint = hwID.Fingerprint
 
-	// Lynis availability
-	if path, err := exec.LookPath("lynis"); err == nil {
-		stats.LynisAvailable = true
-		log.Printf("lynis found at %s", path)
-	} else if _, err := os.Stat("/usr/bin/lynis"); err == nil {
-		stats.LynisAvailable = true
-		log.Printf("lynis found at /usr/bin/lynis")
-	} else if _, err := os.Stat("/usr/sbin/lynis"); err == nil {
-		stats.LynisAvailable = true
-		log.Printf("lynis found at /usr/sbin/lynis")
+	// Lynis availability. Detection is cheap, but the answer almost never
+	// changes, so log it only on a transition: the agent's journal is shipped
+	// to the device Logs screen, and a per-cycle "lynis found" made that screen
+	// a wall of the same line.
+	lynisPath, lynisAvailable := findLynis()
+	stats.LynisAvailable = lynisAvailable
+	if lynisAvailable {
+		stats.LynisInstallCmd = ""
+	} else if isArchLinux() {
+		stats.LynisInstallCmd = "sudo pacman -S lynis"
 	} else {
-		stats.LynisAvailable = false
-		if isArchLinux() {
-			stats.LynisInstallCmd = "sudo pacman -S lynis"
+		stats.LynisInstallCmd = "sudo apt install lynis"
+	}
+	if lynisDetection.update(lynisAvailable, lynisPath) {
+		if lynisAvailable {
+			log.Printf("lynis found at %s", lynisPath)
 		} else {
-			stats.LynisInstallCmd = "sudo apt install lynis"
+			log.Printf("lynis not found, install_cmd=%s", stats.LynisInstallCmd)
 		}
-		log.Printf("lynis not found, install_cmd=%s", stats.LynisInstallCmd)
 	}
 
 	// Memory expanded
