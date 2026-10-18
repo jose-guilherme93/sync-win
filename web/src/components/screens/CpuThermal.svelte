@@ -28,6 +28,10 @@
   $: loadPerCore = load1 != null && coreCount > 0 ? load1 / coreCount : null
   $: loadSeverity = loadPerCore == null ? 'ok' : loadPerCore >= 1 ? 'crit' : loadPerCore >= 0.7 ? 'warn' : 'ok'
   $: temp = hw?.cpu_temperature ?? 0
+  $: clockMhz = hw?.cpu_clock_mhz ?? 0
+  $: clockValue = clockMhz >= 1000 ? (clockMhz / 1000).toFixed(2) : clockMhz.toFixed(0)
+  $: clockUnit = clockMhz >= 1000 ? 'GHz' : 'MHz'
+  $: coreVoltage = hw?.core_voltage_v ?? 0
   $: gpuTemp = hw?.gpu_temperature_celsius ?? 0
   $: procs = (hw?.top_cpu_processes ?? []).slice(0, 10)
   $: busiest = cores.length > 0 ? Math.max(...cores) : null
@@ -73,6 +77,20 @@
         {:else}
           <span class="sub">no thermal zone reported</span>
         {/if}
+      </article>
+      <article class="stat">
+        <span class="label">CPU clock</span>
+        <span class="value">
+          {#if clockMhz > 0}{clockValue}<small>{clockUnit}</small>{:else}—{/if}
+        </span>
+        <span class="sub">{clockMhz > 0 ? 'average across logical CPUs' : 'no cpufreq or cpu MHz reported'}</span>
+      </article>
+      <article class="stat">
+        <span class="label">Core voltage</span>
+        <span class="value">
+          {#if coreVoltage > 0}{coreVoltage.toFixed(3)}<small>V</small>{:else}—{/if}
+        </span>
+        <span class="sub">{coreVoltage > 0 ? 'hwmon CPU rail' : 'no CPU voltage sensor'}</span>
       </article>
       <article class="stat">
         <span class="label">Load (1 min)</span>
@@ -138,6 +156,8 @@
           <div><dt>Model</dt><dd class="mono">{hw.cpu_model || '—'}</dd></div>
           <div><dt>Architecture</dt><dd>{hw.architecture || '—'}</dd></div>
           <div><dt>Cores</dt><dd>{coreCount > 0 ? coreCount : '—'}</dd></div>
+          <div><dt>Clock</dt><dd>{clockMhz > 0 ? `${clockValue} ${clockUnit}` : '—'}</dd></div>
+          <div><dt>Core voltage</dt><dd>{coreVoltage > 0 ? `${coreVoltage.toFixed(3)} V` : '—'}</dd></div>
           <div><dt>Kernel</dt><dd class="mono">{hw.kernel_version || '—'}</dd></div>
           <div><dt>OS</dt><dd>{hw.operating_system || '—'}</dd></div>
           <div><dt>GPU temperature</dt><dd>{gpuTemp > 0 ? `${gpuTemp.toFixed(0)}°C` : '—'}</dd></div>
@@ -178,8 +198,9 @@
     </article>
 
     <p class="footnote">
-      Per-core frequency, CPU throttling counters and per-thermal-zone labels are not collected by the
-      agent yet, so those rows are omitted rather than fabricated.
+      Per-core frequency (the clock above is the average across logical CPUs), CPU throttling counters
+      and per-thermal-zone labels are not collected by the agent yet, so those rows are omitted rather
+      than fabricated.
     </p>
   {/if}
 </section>

@@ -108,7 +108,8 @@ Ordered. Each is independent enough to be its own commit or PR.
    - endpoints: `GET /smart`
      (`GET /updates`, `PATCH /devices/{id}` and `POST /devices/{id}/actions`
      shipped later; alert acknowledgements are covered by `/api/alerts`)
-   - agent fields: CPU clock (MHz) and core voltage (V)
+   - agent fields: CPU clock (MHz) and core voltage (V) — shipped
+     2026-10-17 (`sessions/261017-cpu-clock.md`)
    - new collector: `agent/collectors/gpu_nvidia.go` (nvidia-smi: load, power,
      hotspot, memory junction, fan RPM, core clock, VRAM)
 

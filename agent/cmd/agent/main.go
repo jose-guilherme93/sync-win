@@ -372,6 +372,8 @@ type telemetryStats struct {
 	MemoryUsedBytes    uint64            `json:"memory_used_bytes"`
 	MemoryTotalBytes   uint64            `json:"memory_total_bytes"`
 	CPUTemperature     float64           `json:"cpu_temperature"`
+	CPUClockMHz        float64           `json:"cpu_clock_mhz,omitempty"`
+	CoreVoltageV       float64           `json:"core_voltage_v,omitempty"`
 	GPUTemperature     float64           `json:"gpu_temperature_celsius,omitempty"`
 	PowerWatts         float64           `json:"power_watts"`
 	BatteryPercent     float64           `json:"battery_percent,omitempty"`
@@ -1428,6 +1430,22 @@ func collectHardwareStats(prev *hardwareSample, now time.Time) (telemetryStats, 
 		gpuTemp = collectors.CollectGPUTemperature()
 	}()
 
+	// Current CPU clock (average across logical CPUs)
+	var clockMHz float64
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		clockMHz = collectors.CollectCPUClockMHz()
+	}()
+
+	// CPU core voltage from hwmon; 0 when the host exposes no CPU rail
+	var coreVoltage float64
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		coreVoltage = collectors.CollectCoreVoltageV()
+	}()
+
 	// Battery (percent + status)
 	var batteryPercent float64
 	var batteryStatus string
@@ -1587,6 +1605,8 @@ func collectHardwareStats(prev *hardwareSample, now time.Time) (telemetryStats, 
 
 	// Merge results
 	stats.CPUTemperature = temp
+	stats.CPUClockMHz = clockMHz
+	stats.CoreVoltageV = coreVoltage
 	stats.GPUTemperature = gpuTemp
 	stats.PowerWatts = powerWatts
 	stats.BatteryPercent = batteryPercent

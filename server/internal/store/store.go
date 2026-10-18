@@ -140,6 +140,8 @@ type HardwareSummary struct {
 	MemoryUsedBytes    uint64          `json:"memory_used_bytes"`
 	MemoryTotalBytes   uint64          `json:"memory_total_bytes"`
 	CPUTemperature     float64         `json:"cpu_temperature"`
+	CPUClockMHz        float64         `json:"cpu_clock_mhz,omitempty"`
+	CoreVoltageV       float64         `json:"core_voltage_v,omitempty"`
 	PowerWatts         float64         `json:"power_watts"`
 	BatteryPercent     float64         `json:"battery_percent"`
 	BatteryStatus      string          `json:"battery_status"`
@@ -178,6 +180,8 @@ type HardwareStats struct {
 	MemoryUsedBytes    uint64            `json:"memory_used_bytes"`
 	MemoryTotalBytes   uint64            `json:"memory_total_bytes"`
 	CPUTemperature     float64           `json:"cpu_temperature"`
+	CPUClockMHz        float64           `json:"cpu_clock_mhz,omitempty"`
+	CoreVoltageV       float64           `json:"core_voltage_v,omitempty"`
 	GPUTemperature     float64           `json:"gpu_temperature_celsius"`
 	PowerWatts         float64           `json:"power_watts"`
 	BatteryPercent     float64           `json:"battery_percent"`

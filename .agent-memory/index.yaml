@@ -96,3 +96,6 @@ entries:
   - id: sessions/261017-log-scope
     path: sessions/261017-log-scope.md
     type: session
+  - id: sessions/261017-cpu-clock
+    path: sessions/261017-cpu-clock.md
+    type: session

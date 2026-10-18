@@ -108,7 +108,14 @@ O agent valida tamanho, encoding e paths relativos, rejeita traversal/symlinks, 
 
 Campos enviados (todos opcionais no display, mas parte do contrato):
 
-`cpu_usage_percent, memory_used_bytes, memory_total_bytes, disk_read_bytes, disk_write_bytes, disk_read_rate, disk_write_rate, net_rx_rate, net_tx_rate, uptime_seconds, load_average, cpu_model, kernel_version, operating_system, power_watts, architecture, desktop_environment, locale, timezone, agent_version`
+`cpu_usage_percent, memory_used_bytes, memory_total_bytes, disk_read_bytes, disk_write_bytes, disk_read_rate, disk_write_rate, net_rx_rate, net_tx_rate, uptime_seconds, load_average, cpu_model, cpu_clock_mhz, core_voltage_v, kernel_version, operating_system, power_watts, architecture, desktop_environment, locale, timezone, agent_version`
+
+`cpu_clock_mhz` é a frequência média atual entre as CPUs lógicas, lida de
+`cpufreq/scaling_cur_freq` (kHz) com fallback para a linha `cpu MHz` de
+`/proc/cpuinfo`; `0` significa que a fonte não existe. `core_voltage_v` só é
+reportado quando um canal `hwmon` tem label de rail de CPU (`Vcore`, `CPU`,
+`VDDCR`, `SVI`) e leitura na faixa plausível de 0,4–2,5 V; caso contrário é
+omitido em vez de exibir um rail de 12 V como se fosse tensão de core.
 
 Campos adicionais coletados: `battery_percent`, `battery_status`, `network_ifaces[]` (inclui `rx_errors`/`tx_errors`), `disk_partitions[]`, `swap_used_bytes`/`swap_total_bytes`, `cpu_core_usage[]`, `top_cpu_processes[]`/`top_mem_processes[]`, `docker_available`/`docker_containers[]`, `lynis_available` e `logs[]`. `power_watts` é a potência instantânea real (watts), não a porcentagem da bateria.
 

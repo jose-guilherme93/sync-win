@@ -243,6 +243,7 @@ A funcionalidade P1 está concluída. A próxima etapa é uma nova priorização
 
 ## FASE 18 — Hardware Telemetry
 - [x] Agent collectors: CPU, memory, disk I/O, network, temperatures, battery, disk partitions, swap, top processes
+- [x] clock atual da CPU (`cpu_clock_mhz`, média das CPUs lógicas) e tensão de core (`core_voltage_v`) quando o host expõe um rail de CPU no hwmon
 - [x] Agent self-impact measurement (CPU and memory usage)
 - [x] Hardware fingerprint collection for device identification
 - [x] Real-time telemetry sparklines (Sparkline.svelte, canvas, no Chart.js)
@@ -327,7 +328,6 @@ mostra estado honesto "não coletado ainda" para cada um e nomeia o endpoint que
 falta.
 
 - [ ] `GET /api/devices/{id}/smart` — saúde dos discos (SMART)
-- [ ] campos de agente: clock da CPU (MHz) e tensão de core (V)
 - [ ] `agent/collectors/gpu_nvidia.go` — nvidia-smi: carga, potência, hotspot, memória, fan, clock, VRAM
 
 Os itens `GET /api/devices/{id}/updates`, `PATCH /api/devices/{id}` (renomear e
