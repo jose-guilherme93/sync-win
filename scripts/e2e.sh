@@ -467,7 +467,7 @@ section "Every sidebar section renders"
 # section is visited and checked for two failure modes that type-checking cannot
 # catch: the screen rendering nothing at all, and a section that is reachable in
 # the sidebar but throws or blanks out at runtime.
-FLEET_SECTIONS=("Home" "Devices" "Alerts" "Findings" "Reports")
+FLEET_SECTIONS=("Home" "Devices" "Alerts" "Findings" "Reports" "Notifications")
 DEVICE_SECTIONS=("Overview" "CPU & Thermal" "Memory" "Storage" "Network" "All sensors" \
                  "Docker" "Processes" "Services" "Packages" "Logs" "Security" \
                  "Remote access" "Settings")

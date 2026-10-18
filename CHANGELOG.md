@@ -11,6 +11,35 @@ version, and a breaking change increases the major version.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-18
+
+### Added
+
+- **Notification center** under Administration: a full inbox with event and
+  device filters, unread-only, mark one or all as read, and a link to the
+  device. The bell now shows a preview and opens the center; the old settings
+  modal is gone.
+- **Per-event in-app preferences.** The in-app channel can be enabled or
+  disabled and each event type can be included or excluded from popups. Events
+  excluded from popups still appear in the inbox.
+- **Sound preferences.** Beep, chime, pulse or silent, with volume and a preview
+  button. The choice is stored on the server with the account, so it follows the
+  browser and applies to the next notification immediately.
+- **Server event catalog** (`GET /api/notifications/events`) with the label,
+  description and severity of every event, shared by the in-app, Telegram and
+  webhook preferences.
+- Mark-all-read uses a server-side flag, so it also covers notifications older
+  than the page the browser has loaded.
+
+### Fixed
+
+- Disabling in-app alerts and changing the sound previously had no effect: the
+  dispatcher recorded and broadcast every event before provider filtering, and
+  the toast read a localStorage value that the settings modal never updated.
+- The first notification could be silent because every toast created a new
+  `AudioContext` before a user gesture; the app now uses one shared context,
+  unlocked on the first interaction.
+
 ## [0.10.2] - 2026-10-18
 
 Release-process release. The runtime is the same as 0.10.1.

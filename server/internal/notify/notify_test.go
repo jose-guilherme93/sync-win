@@ -263,3 +263,51 @@ func TestInboxValidateSound(t *testing.T) {
 		t.Error("expected error for invalid sound")
 	}
 }
+
+func TestInboxProviderValidatesSoundAndVolume(t *testing.T) {
+	p := inboxProvider{}
+	valid := []string{
+		`{"sound":"beep","volume":0.5}`,
+		`{"sound":"chime","volume":0}`,
+		`{"sound":"pulse","volume":1}`,
+		`{"sound":"none"}`,
+		`{}`,
+	}
+	for _, raw := range valid {
+		if err := p.Validate(json.RawMessage(raw)); err != nil {
+			t.Errorf("valid config %s rejected: %v", raw, err)
+		}
+	}
+
+	invalid := []string{
+		`{"sound":"loud","volume":0.5}`,
+		`{"sound":"beep","volume":-0.1}`,
+		`{"sound":"beep","volume":1.1}`,
+	}
+	for _, raw := range invalid {
+		if err := p.Validate(json.RawMessage(raw)); err == nil {
+			t.Errorf("invalid config %s accepted", raw)
+		}
+	}
+}
+
+func TestEventCatalogCoversEveryType(t *testing.T) {
+	seen := map[EventType]bool{}
+	for _, entry := range EventCatalog() {
+		if entry.Type == "" || entry.Label == "" || entry.Description == "" {
+			t.Errorf("incomplete catalog entry: %+v", entry)
+		}
+		if !ValidEventType(string(entry.Type)) {
+			t.Errorf("catalog contains unknown type %q", entry.Type)
+		}
+		if seen[entry.Type] {
+			t.Errorf("duplicate catalog type %q", entry.Type)
+		}
+		seen[entry.Type] = true
+	}
+	for _, typ := range AllEventTypes {
+		if !seen[typ] {
+			t.Errorf("event %q has no catalog entry", typ)
+		}
+	}
+}

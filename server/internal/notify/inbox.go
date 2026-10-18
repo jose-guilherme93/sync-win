@@ -15,10 +15,12 @@ import (
 // preferences (enabled, sound) through the same config pipeline as external
 // providers.
 type inboxConfig struct {
-	Sound string `json:"sound"` // "beep" | "chime" | "none"
+	Sound     string   `json:"sound"`                // "beep" | "chime" | "pulse" | "none"
+	Volume    *float64 `json:"volume,omitempty"`     // 0..1, default 0.5
+	EventsSet bool     `json:"events_set,omitempty"` // the user has chosen an in-app event list
 }
 
-var inboxSounds = []string{"beep", "chime", "none"}
+var inboxSounds = []string{"beep", "chime", "pulse", "none"}
 
 type inboxProvider struct{}
 
@@ -31,7 +33,7 @@ func (inboxProvider) Description() string {
 }
 
 // PublicFields returns every field: the inbox config holds no secrets.
-func (inboxProvider) PublicFields() []string { return []string{"sound"} }
+func (inboxProvider) PublicFields() []string { return []string{"sound", "volume", "events_set"} }
 
 func (p inboxProvider) parse(raw json.RawMessage) (inboxConfig, error) {
 	cfg := inboxConfig{Sound: "beep"}
@@ -44,6 +46,10 @@ func (p inboxProvider) parse(raw json.RawMessage) (inboxConfig, error) {
 	if cfg.Sound == "" {
 		cfg.Sound = "beep"
 	}
+	if cfg.Volume == nil {
+		volume := 0.5
+		cfg.Volume = &volume
+	}
 	return cfg, nil
 }
 
@@ -53,7 +59,10 @@ func (p inboxProvider) Validate(raw json.RawMessage) error {
 		return err
 	}
 	if !slices.Contains(inboxSounds, cfg.Sound) {
-		return errors.New("sound must be one of: beep, chime, none")
+		return errors.New("sound must be one of: beep, chime, pulse, none")
+	}
+	if cfg.Volume == nil || *cfg.Volume < 0 || *cfg.Volume > 1 {
+		return errors.New("volume must be between 0 and 1")
 	}
 	return nil
 }

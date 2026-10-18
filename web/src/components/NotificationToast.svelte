@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher, onMount, onDestroy } from 'svelte'
   import { formatRelative } from '../lib/format'
+  import { playNotificationSound, type NotificationSound } from '../lib/notification-sound'
 
   export let event: {
     id: number
@@ -11,7 +12,8 @@
     created_at: string
   }
 
-  export let sound: string = 'beep'
+  export let sound: NotificationSound = 'beep'
+  export let volume = 0.5
 
   const dispatch = createEventDispatcher()
 
@@ -31,7 +33,11 @@
     }, 100)
   }
 
-  onMount(() => startTimer())
+  onMount(() => {
+    startTimer()
+    // Once per toast, not on every reactive update.
+    playNotificationSound(sound, volume)
+  })
 
   onDestroy(() => {
     if (timer) clearInterval(timer)
@@ -55,36 +61,6 @@
     dispatch('dismiss', { id: event.id })
   }
 
-  function playAlert(kind: string) {
-    if (kind === 'none') return
-    try {
-      const ctx = new AudioContext()
-      if (kind === 'chime') {
-        const osc = ctx.createOscillator()
-        const g = ctx.createGain()
-        osc.connect(g); g.connect(ctx.destination)
-        g.gain.value = 0.3
-        osc.frequency.value = 880
-        osc.start(); osc.stop(ctx.currentTime + 0.15)
-        const osc2 = ctx.createOscillator()
-        const g2 = ctx.createGain()
-        osc2.connect(g2); g2.connect(ctx.destination)
-        g2.gain.value = 0.3
-        osc2.frequency.value = 1320
-        osc2.start(ctx.currentTime + 0.15)
-        osc2.stop(ctx.currentTime + 0.3)
-      } else {
-        const osc = ctx.createOscillator()
-        const g = ctx.createGain()
-        osc.connect(g); g.connect(ctx.destination)
-        g.gain.value = 0.3
-        osc.frequency.value = 660
-        osc.start(); osc.stop(ctx.currentTime + 0.2)
-      }
-    } catch {}
-  }
-
-  $: if (event) playAlert(sound)
   $: progress = remaining / AUTO_DISMISS_MS
 </script>
 

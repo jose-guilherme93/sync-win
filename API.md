@@ -1210,6 +1210,22 @@ Update notification configuration. Requires session token.
 }
 ```
 
+The in-app provider (`web_inbox`) stores its event selection, sound and volume in
+the same row. `events_set` distinguishes a deliberate empty selection from a
+row created before event selection existed; the dashboard treats an old row as
+"all events".
+
+```json
+{
+  "provider": "web_inbox",
+  "enabled": true,
+  "events": ["device_offline", "sync_error"],
+  "config": { "sound": "pulse", "volume": 0.8, "events_set": true }
+}
+```
+
+`sound` is `beep`, `chime`, `pulse` or `none`; `volume` is between 0 and 1.
+
 **Response:** `200 OK`
 
 ### `GET /api/notifications/providers`
@@ -1223,7 +1239,7 @@ List available notification providers. Requires session token.
     "name": "web_inbox",
     "label": "Web Inbox",
     "description": "In-app notification inbox",
-    "public_fields": []
+    "public_fields": ["sound", "volume", "events_set"]
   },
   {
     "name": "telegram",
@@ -1237,6 +1253,21 @@ List available notification providers. Requires session token.
     "description": "HTTP webhook notifications",
     "public_fields": ["url"]
   }
+]
+```
+
+### `GET /api/notifications/events`
+
+Return the event catalog used by the notification center: `type`, `label`,
+`description` and `severity` for every event the server can emit. Requires
+session token.
+
+**Response:** `200 OK`
+```json
+[
+  { "type": "device_offline", "label": "Device goes offline",
+    "description": "The agent stopped reporting and the device is unreachable.",
+    "severity": "crit" }
 ]
 ```
 
@@ -1257,12 +1288,14 @@ Test a notification provider. Requires session token.
 
 **Response:** `200 OK`
 
-### `GET /api/notifications/telegram/detect-chat`
+### `POST /api/notifications/telegram/detect-chat`
 
-Detect Telegram chat ID from bot token. Requires session token.
+Detect the Telegram chat ID from a bot token. Requires session token.
 
-**Query parameters:**
-- `bot_token`: Telegram bot token
+**Request:**
+```json
+{ "bot_token": "123456:ABC-DEF..." }
+```
 
 **Response:** `200 OK`
 ```json
@@ -1278,8 +1311,9 @@ Get notification inbox events. Requires session token.
 
 **Query parameters:**
 - `since`: return events with id > since (for polling)
+- `limit`: page size, 1–100 (default 50)
 
-**Response:** `200 OK` (array of notification events)
+**Response:** `200 OK` (array of notification events, oldest first)
 
 ### `POST /api/notifications/inbox/read`
 
@@ -1292,7 +1326,9 @@ Mark notification events as read. Requires session token.
 }
 ```
 
-**Response:** `200 OK`
+Send `{"all": true}` to mark every unread notification of the owner as read.
+
+**Response:** `204 No Content`
 
 ### `POST /api/notifications/stream-token`
 

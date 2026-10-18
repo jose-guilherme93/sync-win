@@ -1788,6 +1788,22 @@ button.secondary {
   color: #e2e8f0;
 }
 
+.bell-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  margin-left: 4px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 10px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
 .bell-clear {
   background: none;
   border: none;

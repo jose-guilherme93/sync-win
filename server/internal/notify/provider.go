@@ -46,6 +46,26 @@ func ValidEventType(t string) bool {
 	return false
 }
 
+// EventInfo is the catalog entry the notification center renders. The label
+// and description live here, next to the event type, so a new event cannot ship
+// without copy and the dashboard does not keep a second, drifting list.
+type EventInfo struct {
+	Type        EventType `json:"type"`
+	Label       string    `json:"label"`
+	Description string    `json:"description"`
+	Severity    string    `json:"severity"` // crit | warn | good | info
+}
+
+// EventCatalog returns every event in the order the UI should present it.
+func EventCatalog() []EventInfo {
+	return []EventInfo{
+		{EventDeviceOffline, "Device goes offline", "The agent stopped reporting and the device is unreachable.", "crit"},
+		{EventDeviceOnline, "Device comes back online", "The agent reported again after being offline.", "good"},
+		{EventSyncError, "Sync error", "The agent reported a failure while syncing.", "warn"},
+		{EventDeviceEnrolled, "New device enrolled", "A new device registered with the server.", "info"},
+	}
+}
+
 // Event is a single notification-worthy occurrence. Message is a short,
 // human-readable, single-line summary safe for Telegram/Webhook bodies.
 type Event struct {
