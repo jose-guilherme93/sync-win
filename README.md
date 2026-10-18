@@ -270,6 +270,24 @@ DEV_HOST=dev.example.com make dev-d   # any other name
 use `localhost` or the tailnet IP; the name works from devices that have
 MagicDNS enabled.
 
+**Test devices**
+
+The dashboard is more useful with devices reporting. Two 64 MB Alpine
+containers run the real agent against the dev stack, which is enough to see
+telemetry, heartbeats and every "not collected yet" state without a VM per
+device:
+
+```bash
+make dev-agents        # enroll/refresh alpine-test-1 and alpine-test-2
+make dev-agents-down   # remove the containers (the device records stay)
+```
+
+The containers use the demo account (`make dev-account`), are capped at 64 MB
+and 0.25 CPU, and re-run adopts the same device record instead of creating a
+duplicate. Their `/proc` is the host's, so CPU, memory and kernel are the host's
+numbers, not the container's. systemd, package and journal collectors report
+empty because Alpine has none of them.
+
 **Without containers**
 
 ```bash

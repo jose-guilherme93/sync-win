@@ -70,6 +70,8 @@ help: ## Show this help
 	@printf "  $(G)%-16s$(N) %s\n" "dev-logs"   "Follow dev stack logs"
 	@printf "  $(G)%-16s$(N) %s\n" "dev-ps"     "Show dev stack status"
 	@printf "  $(G)%-16s$(N) %s\n" "dev-shell"  "Open a shell in the dev server container"
+	@printf "  $(G)%-16s$(N) %s\n" "dev-agents" "Create two Alpine test devices on the dev stack"
+	@printf "  $(G)%-16s$(N) %s\n" "dev-agents-down" "Remove the Alpine test devices"
 	@printf "  $(G)%-16s$(N) %s\n" "prod-down"  "Stop and remove the production stack"
 	@printf "  $(G)%-16s$(N) %s\n" "prod-logs"  "Follow production logs"
 	@printf "  $(G)%-16s$(N) %s\n" "prod-ps"    "Show production stack status"
@@ -145,6 +147,14 @@ dev-ps: ## Show dev stack status
 .PHONY: dev-shell
 dev-shell: ## Open a shell in the dev server container
 	$(DEV) exec server sh
+
+.PHONY: dev-agents
+dev-agents: ## Create/refresh two Alpine test devices on the dev stack
+	@./scripts/dev-test-agents.sh
+
+.PHONY: dev-agents-down
+dev-agents-down: ## Remove the Alpine test devices
+	@./scripts/dev-test-agents.sh down
 
 .PHONY: prod
 prod: ## Build and start the production stack (detached)
