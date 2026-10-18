@@ -105,3 +105,6 @@ entries:
   - id: sessions/261018-live-device-status
     path: sessions/261018-live-device-status.md
     type: session
+  - id: sessions/261018-agent-housekeeping
+    path: sessions/261018-agent-housekeeping.md
+    type: session

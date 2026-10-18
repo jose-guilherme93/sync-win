@@ -139,3 +139,77 @@ func TestEnrollAdoptionKeepsStoredFingerprint(t *testing.T) {
 		}
 	}
 }
+
+// A record created before machine IDs existed (or by an interim agent that only
+// sent a fingerprint) can still be adopted when the fingerprint matches. This is
+// what stops a reinstall from leaving an old offline duplicate behind.
+func TestEnrollAdoptsLegacyRecordByFingerprint(t *testing.T) {
+	s := newLogStore(t)
+
+	first, adopted, err := s.EnrollDevice("pc-a", "owner-1", "", "fp-legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adopted {
+		t.Fatal("the first enrollment adopted a device")
+	}
+
+	second, adopted, err := s.EnrollDevice("pc-a", "owner-1", "machine-abc", "fp-legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !adopted {
+		t.Fatal("a machine-less record with the same fingerprint was not adopted")
+	}
+	if second.ID != first.ID {
+		t.Fatalf("device id changed: %s -> %s", first.ID, second.ID)
+	}
+
+	var machineID string
+	if err := s.db.QueryRow("SELECT machine_id FROM devices WHERE id = ?", first.ID).Scan(&machineID); err != nil {
+		t.Fatal(err)
+	}
+	if machineID != "machine-abc" {
+		t.Fatalf("machine_id = %q, want it recorded on adoption", machineID)
+	}
+}
+
+// The fallback must not merge a record that is already bound to another machine:
+// cloned VMs share hardware metadata but are different devices.
+func TestEnrollFingerprintFallbackDoesNotMergeMachineBoundDevices(t *testing.T) {
+	s := newLogStore(t)
+
+	first, _, err := s.EnrollDevice("pc-a", "owner-1", "machine-old", "fp-shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, adopted, err := s.EnrollDevice("pc-a", "owner-1", "machine-new", "fp-shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adopted {
+		t.Fatal("adopted a device that belongs to a different machine id")
+	}
+	if second.ID == first.ID {
+		t.Fatal("merged two machine-bound devices that share a fingerprint")
+	}
+}
+
+func TestEnrollFingerprintFallbackDoesNotCrossOwners(t *testing.T) {
+	s := newLogStore(t)
+
+	first, _, err := s.EnrollDevice("pc-a", "owner-1", "", "fp-shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, adopted, err := s.EnrollDevice("pc-a", "owner-2", "machine-b", "fp-shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adopted {
+		t.Fatal("another owner's machine-less device was adopted")
+	}
+	if second.ID == first.ID {
+		t.Fatal("two owners share a device record")
+	}
+}
