@@ -34,6 +34,7 @@ type Queue struct {
 	pending      map[string][]*Request // deviceID → pending requests
 	results      map[string]*Response  // requestID → result
 	owners       map[string]string     // requestID → deviceID
+	types        map[string]string     // requestID → request type (list, stats, start, …)
 	ownerCreated map[string]time.Time  // requestID → enqueue time
 	ttl          time.Duration
 }
@@ -44,6 +45,7 @@ func NewQueue(ttl time.Duration) *Queue {
 		pending:      make(map[string][]*Request),
 		results:      make(map[string]*Response),
 		owners:       make(map[string]string),
+		types:        make(map[string]string),
 		ownerCreated: make(map[string]time.Time),
 		ttl:          ttl,
 	}
@@ -61,6 +63,7 @@ func (q *Queue) Enqueue(req *Request) string {
 	}
 	q.pending[req.Target] = append(q.pending[req.Target], req) // Target is deviceID for pending map
 	q.owners[req.ID] = req.Target
+	q.types[req.ID] = req.Type
 	q.ownerCreated[req.ID] = req.CreatedAt
 	return req.ID
 }
@@ -78,6 +81,7 @@ func (q *Queue) EnqueueForDevice(deviceID, reqType, target, payload string) stri
 	}
 	q.pending[deviceID] = append(q.pending[deviceID], req)
 	q.owners[req.ID] = deviceID
+	q.types[req.ID] = req.Type
 	q.ownerCreated[req.ID] = req.CreatedAt
 	return req.ID
 }
@@ -126,6 +130,7 @@ func (q *Queue) GetAndConsumeResult(deviceID, requestID string) *Response {
 	}
 	delete(q.results, requestID)
 	delete(q.owners, requestID)
+	delete(q.types, requestID)
 	delete(q.ownerCreated, requestID)
 	return resp
 }
@@ -145,6 +150,7 @@ func (q *Queue) Cleanup() {
 				alive = append(alive, req)
 			} else {
 				delete(q.owners, req.ID)
+				delete(q.types, req.ID)
 				delete(q.ownerCreated, req.ID)
 			}
 		}
@@ -160,12 +166,14 @@ func (q *Queue) Cleanup() {
 		if now.Sub(resp.CreatedAt) > 2*q.ttl {
 			delete(q.results, id)
 			delete(q.owners, id)
+			delete(q.types, id)
 			delete(q.ownerCreated, id)
 		}
 	}
 	for id, created := range q.ownerCreated {
 		if now.Sub(created) > 2*q.ttl {
 			delete(q.owners, id)
+			delete(q.types, id)
 			delete(q.ownerCreated, id)
 		}
 	}
@@ -176,6 +184,16 @@ func (q *Queue) PendingCount(deviceID string) int {
 	q.mu.RLock()
 	defer q.mu.RUnlock()
 	return len(q.pending[deviceID])
+}
+
+// RequestType returns the type of a request that is still known to the queue,
+// or "" when it was never issued, was consumed, or expired. The result handler
+// uses it to tell a completed container list (which can refresh the cache) from
+// every other operation.
+func (q *Queue) RequestType(requestID string) string {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+	return q.types[requestID]
 }
 
 func newRequestID() string {

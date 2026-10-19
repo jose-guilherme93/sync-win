@@ -360,3 +360,168 @@ func TestComposeWriteRejectsNonComposeFilename(t *testing.T) {
 		t.Fatal("non-compose filename was accepted")
 	}
 }
+
+// Docker's container list spells ports PrivatePort/PublicPort. Decoding that
+// straight into the agent's underscore-tagged DockerPort silently zeroed every
+// port, so no dashboard ever showed a published port. Exercise the real Engine
+// JSON through the conversion.
+func TestContainersFromAPIPreservesPublishedPorts(t *testing.T) {
+	var raw []dockerAPIContainer
+	const engineJSON = `[{
+		"Id": "829ddf0f932d",
+		"Names": ["/web"],
+		"Image": "nginx:alpine",
+		"State": "running",
+		"Status": "Up 2 minutes",
+		"Ports": [
+			{"IP": "0.0.0.0", "PrivatePort": 80, "PublicPort": 8080, "Type": "tcp"},
+			{"IP": "::", "PrivatePort": 443, "Type": "tcp"}
+		],
+		"Mounts": [{"Type": "bind", "Source": "/srv/web", "Destination": "/usr/share/nginx/html", "RW": true}],
+		"Created": 1700000000
+	}]`
+	if err := json.Unmarshal([]byte(engineJSON), &raw); err != nil {
+		t.Fatalf("decode Engine JSON: %v", err)
+	}
+
+	containers := containersFromAPI(raw)
+	if len(containers) != 1 {
+		t.Fatalf("containers = %d, want 1", len(containers))
+	}
+	c := containers[0]
+	if len(c.Ports) != 2 {
+		t.Fatalf("ports = %+v", c.Ports)
+	}
+	if c.Ports[0].PrivatePort != 80 || c.Ports[0].PublicPort != 8080 || c.Ports[0].Type != "tcp" {
+		t.Fatalf("published port = %+v", c.Ports[0])
+	}
+	if c.Ports[1].PrivatePort != 443 || c.Ports[1].PublicPort != 0 {
+		t.Fatalf("unpublished port = %+v", c.Ports[1])
+	}
+	if c.CreatedAt != 1700000000 {
+		t.Fatalf("created = %d", c.CreatedAt)
+	}
+	if len(c.Mounts) != 1 || c.Mounts[0].Destination != "/usr/share/nginx/html" {
+		t.Fatalf("mounts = %+v", c.Mounts)
+	}
+}
+
+func TestValidDockerActionIncludesPauseAndUnpause(t *testing.T) {
+	for _, action := range []string{"start", "stop", "restart", "kill", "pause", "unpause"} {
+		if !validDockerAction(action) {
+			t.Errorf("action %q should be allowed", action)
+		}
+	}
+	for _, action := range []string{"", "exec", "pause-now", "rm"} {
+		if validDockerAction(action) {
+			t.Errorf("action %q should be rejected", action)
+		}
+	}
+}
+
+// inspect must never forward environment variables or credential-looking
+// command arguments and labels: the dashboard only needs operational metadata.
+func TestDockerDetailFromInspectFiltersSecrets(t *testing.T) {
+	const engineJSON = `{
+		"Id": "829ddf0f932d",
+		"Name": "/web",
+		"Image": "sha256:abc",
+		"Platform": "linux",
+		"Created": "2026-10-18T10:00:00Z",
+		"State": {
+			"Status": "running", "Running": true, "Paused": false, "Restarting": false,
+			"OOMKilled": false, "Dead": false, "Pid": 42, "ExitCode": 0,
+			"StartedAt": "2026-10-18T10:00:01Z", "FinishedAt": "0001-01-01T00:00:00Z",
+			"Health": {"Status": "healthy", "FailingStreak": 0, "Log": [{"Output": "secret health output"}]}
+		},
+		"Config": {
+			"Env": ["DB_PASSWORD=super-secret-env"],
+			"Cmd": ["server", "--token=abc123", "--listen", "0.0.0.0:8080"],
+			"Entrypoint": ["/entrypoint.sh"],
+			"WorkingDir": "/app",
+			"User": "1000:1000",
+			"Labels": {
+				"com.example.app": "web",
+				"com.example.password": "super-secret-label",
+				"z.last": "kept"
+			}
+		},
+		"HostConfig": {
+			"RestartPolicy": {"Name": "unless-stopped", "MaximumRetryCount": 0},
+			"AutoRemove": false,
+			"Privileged": false,
+			"ReadonlyRootfs": true,
+			"Memory": 268435456,
+			"NanoCpus": 500000000
+		},
+		"Mounts": [{"Type": "bind", "Source": "/srv/web", "Destination": "/app", "RW": true}],
+		"NetworkSettings": {
+			"Networks": {
+				"zeta": {"IPAddress": "10.0.0.3", "Gateway": "10.0.0.1", "Aliases": ["web2"]},
+				"alpha": {"IPAddress": "10.0.0.2", "Gateway": "10.0.0.1", "Aliases": ["web"]}
+			}
+		}
+	}`
+	var raw dockerInspectResponse
+	if err := json.Unmarshal([]byte(engineJSON), &raw); err != nil {
+		t.Fatalf("decode inspect: %v", err)
+	}
+
+	detail := dockerDetailFromInspect(raw)
+	if detail.Name != "web" || detail.RestartPolicy != "unless-stopped" {
+		t.Fatalf("detail = %+v", detail)
+	}
+	if !detail.ReadOnlyRootfs || detail.MemoryLimit != 268435456 || detail.NanoCPUs != 500000000 {
+		t.Fatalf("host config = %+v", detail)
+	}
+	if detail.State.PID != 42 || !detail.State.Running {
+		t.Fatalf("state = %+v", detail.State)
+	}
+	if detail.Health == nil || detail.Health.Status != "healthy" {
+		t.Fatalf("health = %+v", detail.Health)
+	}
+	if len(detail.Command) != 4 || detail.Command[1] != "--token=***" {
+		t.Fatalf("command = %v", detail.Command)
+	}
+	if len(detail.Labels) != 2 {
+		t.Fatalf("labels = %v", detail.Labels)
+	}
+	if _, leaked := detail.Labels["com.example.password"]; leaked {
+		t.Fatal("credential-looking label was forwarded")
+	}
+	if len(detail.Networks) != 2 || detail.Networks[0].Name != "alpha" || detail.Networks[1].Name != "zeta" {
+		t.Fatalf("networks = %+v", detail.Networks)
+	}
+
+	encoded, err := json.Marshal(detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"super-secret-env", "super-secret-label", "secret health output", "abc123"} {
+		if strings.Contains(string(encoded), secret) {
+			t.Fatalf("inspect payload leaked %q: %s", secret, encoded)
+		}
+	}
+}
+
+func TestMaskSensitiveArgs(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{"empty", nil, nil},
+		{"equals form", []string{"app", "--password=hunter2"}, []string{"app", "--password=***"}},
+		{"separate value", []string{"app", "--token", "abc", "--listen=:80"}, []string{"app", "--token", "***", "--listen=:80"}},
+		{"boolean flag not masked", []string{"--api-key-env", "KEY"}, []string{"--api-key-env", "***"}},
+		{"plain args", []string{"nginx", "-g", "daemon off;"}, []string{"nginx", "-g", "daemon off;"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := maskSensitiveArgs(tt.in)
+			if strings.Join(got, "|") != strings.Join(tt.want, "|") {
+				t.Fatalf("maskSensitiveArgs(%v) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}

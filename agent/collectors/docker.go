@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -85,6 +86,64 @@ type DockerInfo struct {
 	MemoryTotal       int64  `json:"memory_total_bytes"`
 }
 
+// DockerContainerDetail is the operational subset of the Engine's inspect
+// response. It deliberately omits Config.Env: environment variables routinely
+// carry passwords and tokens, and the dashboard does not need them to manage a
+// container.
+type DockerContainerDetail struct {
+	ID             string            `json:"id"`
+	Name           string            `json:"name"`
+	Image          string            `json:"image,omitempty"`
+	Platform       string            `json:"platform,omitempty"`
+	Created        string            `json:"created,omitempty"`
+	State          DockerDetailState `json:"state"`
+	RestartPolicy  string            `json:"restart_policy,omitempty"`
+	AutoRemove     bool              `json:"auto_remove,omitempty"`
+	Privileged     bool              `json:"privileged,omitempty"`
+	ReadOnlyRootfs bool              `json:"readonly_rootfs,omitempty"`
+	MemoryLimit    int64             `json:"memory_limit_bytes,omitempty"`
+	NanoCPUs       int64             `json:"nano_cpus,omitempty"`
+	Command        []string          `json:"command,omitempty"`
+	Entrypoint     []string          `json:"entrypoint,omitempty"`
+	WorkingDir     string            `json:"working_dir,omitempty"`
+	User           string            `json:"user,omitempty"`
+	Mounts         []DockerMount     `json:"mounts,omitempty"`
+	Networks       []DockerNetwork   `json:"networks,omitempty"`
+	Health         *DockerHealth     `json:"health,omitempty"`
+	Labels         map[string]string `json:"labels,omitempty"`
+}
+
+// DockerDetailState is the runtime state from inspect, without the health log
+// (whose last outputs can contain arbitrary application data).
+type DockerDetailState struct {
+	Status     string `json:"status"`
+	Running    bool   `json:"running"`
+	Paused     bool   `json:"paused"`
+	Restarting bool   `json:"restarting"`
+	OOMKilled  bool   `json:"oom_killed"`
+	Dead       bool   `json:"dead"`
+	PID        int    `json:"pid"`
+	ExitCode   int    `json:"exit_code"`
+	Error      string `json:"error,omitempty"`
+	StartedAt  string `json:"started_at,omitempty"`
+	FinishedAt string `json:"finished_at,omitempty"`
+}
+
+// DockerNetwork is one attached network with its address on it.
+type DockerNetwork struct {
+	Name       string   `json:"name"`
+	IPAddress  string   `json:"ip_address,omitempty"`
+	Gateway    string   `json:"gateway,omitempty"`
+	MacAddress string   `json:"mac_address,omitempty"`
+	Aliases    []string `json:"aliases,omitempty"`
+}
+
+// DockerHealth is the healthcheck summary, never its log.
+type DockerHealth struct {
+	Status        string `json:"status"`
+	FailingStreak int    `json:"failing_streak"`
+}
+
 // DockerComposeFile represents a discovered compose file on the host.
 type DockerComposeFile struct {
 	Path    string `json:"path"`
@@ -99,12 +158,23 @@ type dockerAPIContainer struct {
 	Image      string            `json:"Image"`
 	State      string            `json:"State"`
 	Status     string            `json:"Status"`
-	Ports      []DockerPort      `json:"Ports"`
+	Ports      []dockerAPIPort   `json:"Ports"`
 	Mounts     []DockerMount     `json:"Mounts"`
 	Created    int64             `json:"Created"`
 	Labels     map[string]string `json:"Labels"`
 	SizeRw     int64             `json:"SizeRw"`
 	SizeRootFs int64             `json:"SizeRootFs"`
+}
+
+// dockerAPIPort is the Engine's port shape. It cannot reuse DockerPort: the
+// Engine spells the keys PrivatePort/PublicPort, and Go's case-insensitive
+// field matching does not bridge that to the underscore-tagged wire shape the
+// agent sends, so decoding straight into DockerPort produced zeroed ports.
+type dockerAPIPort struct {
+	IP          string `json:"IP"`
+	PrivatePort int    `json:"PrivatePort"`
+	PublicPort  int    `json:"PublicPort"`
+	Type        string `json:"Type"`
 }
 
 // dockerStatsResponse is the raw stats response from Docker Engine.
@@ -155,6 +225,60 @@ type dockerInfoResponse struct {
 	Architecture      string `json:"Architecture"`
 	NCPU              int    `json:"NCPU"`
 	MemTotal          int64  `json:"MemTotal"`
+}
+
+// dockerInspectResponse mirrors only the fields the dashboard uses. Env is
+// intentionally absent: unknown JSON keys are ignored by encoding/json.
+type dockerInspectResponse struct {
+	ID       string `json:"Id"`
+	Name     string `json:"Name"`
+	Image    string `json:"Image"`
+	Platform string `json:"Platform"`
+	Created  string `json:"Created"`
+	State    struct {
+		Status     string `json:"Status"`
+		Running    bool   `json:"Running"`
+		Paused     bool   `json:"Paused"`
+		Restarting bool   `json:"Restarting"`
+		OOMKilled  bool   `json:"OOMKilled"`
+		Dead       bool   `json:"Dead"`
+		Pid        int    `json:"Pid"`
+		ExitCode   int    `json:"ExitCode"`
+		Error      string `json:"Error"`
+		StartedAt  string `json:"StartedAt"`
+		FinishedAt string `json:"FinishedAt"`
+		Health     *struct {
+			Status        string `json:"Status"`
+			FailingStreak int    `json:"FailingStreak"`
+		} `json:"Health"`
+	} `json:"State"`
+	Config struct {
+		Cmd        []string          `json:"Cmd"`
+		Entrypoint []string          `json:"Entrypoint"`
+		WorkingDir string            `json:"WorkingDir"`
+		User       string            `json:"User"`
+		Labels     map[string]string `json:"Labels"`
+	} `json:"Config"`
+	HostConfig struct {
+		RestartPolicy struct {
+			Name              string `json:"Name"`
+			MaximumRetryCount int    `json:"MaximumRetryCount"`
+		} `json:"RestartPolicy"`
+		AutoRemove     bool  `json:"AutoRemove"`
+		Privileged     bool  `json:"Privileged"`
+		ReadonlyRootfs bool  `json:"ReadonlyRootfs"`
+		Memory         int64 `json:"Memory"`
+		NanoCpus       int64 `json:"NanoCpus"`
+	} `json:"HostConfig"`
+	Mounts          []DockerMount `json:"Mounts"`
+	NetworkSettings struct {
+		Networks map[string]struct {
+			IPAddress  string   `json:"IPAddress"`
+			Gateway    string   `json:"Gateway"`
+			MacAddress string   `json:"MacAddress"`
+			Aliases    []string `json:"Aliases"`
+		} `json:"Networks"`
+	} `json:"NetworkSettings"`
 }
 
 // dockerExecCreateResponse is returned by POST /containers/{id}/exec.
@@ -239,15 +363,25 @@ func DockerListContainers(all bool) ([]DockerContainer, error) {
 		return nil, fmt.Errorf("unmarshal containers: %w", err)
 	}
 
+	return containersFromAPI(raw), nil
+}
+
+// containersFromAPI converts the Engine response into the agent's wire shape.
+func containersFromAPI(raw []dockerAPIContainer) []DockerContainer {
 	containers := make([]DockerContainer, 0, len(raw))
 	for _, c := range raw {
+		ports := make([]DockerPort, 0, len(c.Ports))
+		for _, p := range c.Ports {
+			// Same fields, different JSON tags: the conversion is structural.
+			ports = append(ports, DockerPort(p))
+		}
 		containers = append(containers, DockerContainer{
 			ID:         c.ID,
 			Names:      c.Names,
 			Image:      c.Image,
 			State:      c.State,
 			Status:     c.Status,
-			Ports:      c.Ports,
+			Ports:      ports,
 			Mounts:     c.Mounts,
 			CreatedAt:  c.Created,
 			Labels:     c.Labels,
@@ -255,7 +389,7 @@ func DockerListContainers(all bool) ([]DockerContainer, error) {
 			SizeRootFs: c.SizeRootFs,
 		})
 	}
-	return containers, nil
+	return containers
 }
 
 // DockerContainerStats returns resource usage stats for a single container.
@@ -310,6 +444,159 @@ func DockerContainerStats(containerID string) (*DockerStats, error) {
 	}
 
 	return stats, nil
+}
+
+// DockerContainerInspect returns the operational detail of one container.
+func DockerContainerInspect(containerID string) (*DockerContainerDetail, error) {
+	if !validContainerID(containerID) {
+		return nil, fmt.Errorf("invalid container ID")
+	}
+	data, status, err := dockerRequest("GET", "/containers/"+containerID+"/json", nil)
+	if err != nil {
+		return nil, err
+	}
+	if status >= 400 {
+		return nil, fmt.Errorf("docker inspect returned %d: %s", status, string(data))
+	}
+	var raw dockerInspectResponse
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("unmarshal inspect: %w", err)
+	}
+	return dockerDetailFromInspect(raw), nil
+}
+
+// sensitiveName matches the field names that typically carry credentials. It is
+// deliberately broad: missing a label is harmless, leaking one is not.
+func sensitiveName(name string) bool {
+	// Flags and labels spell the same idea with dashes, dots or underscores.
+	lower := strings.ToLower(name)
+	lower = strings.ReplaceAll(lower, "-", "_")
+	lower = strings.ReplaceAll(lower, ".", "_")
+	for _, part := range []string{
+		"password", "passwd", "secret", "token", "api_key", "apikey",
+		"access_key", "private_key", "credential", "auth",
+	} {
+		if strings.Contains(lower, part) {
+			return true
+		}
+	}
+	return false
+}
+
+// maskSensitiveArgs masks the values of credential-looking command arguments.
+// Command lines are shown in the dashboard, and tools routinely accept
+// `--password=...` or `--token ...`.
+func maskSensitiveArgs(args []string) []string {
+	if len(args) == 0 {
+		return nil
+	}
+	out := make([]string, len(args))
+	copy(out, args)
+	maskNext := false
+	for i, arg := range args {
+		if maskNext && !strings.HasPrefix(arg, "-") {
+			out[i] = "***"
+			maskNext = false
+			continue
+		}
+		maskNext = false
+		if eq := strings.Index(arg, "="); eq > 0 {
+			if sensitiveName(arg[:eq]) {
+				out[i] = arg[:eq] + "=***"
+			}
+			continue
+		}
+		if strings.HasPrefix(arg, "-") && sensitiveName(arg) {
+			maskNext = true
+		}
+	}
+	return out
+}
+
+// filterDetailLabels drops credential-looking labels and caps the payload. A
+// container can carry hundreds of labels, and the result endpoint is capped.
+func filterDetailLabels(labels map[string]string) map[string]string {
+	if len(labels) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(labels))
+	for key := range labels {
+		if !sensitiveName(key) {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	if len(keys) > 40 {
+		keys = keys[:40]
+	}
+	out := make(map[string]string, len(keys))
+	for _, key := range keys {
+		value := labels[key]
+		if len(value) > 256 {
+			value = value[:256] + "…"
+		}
+		out[key] = value
+	}
+	return out
+}
+
+// dockerDetailFromInspect converts the Engine response into the filtered shape
+// the dashboard receives. Separated from the socket call so it is testable.
+func dockerDetailFromInspect(raw dockerInspectResponse) *DockerContainerDetail {
+	detail := &DockerContainerDetail{
+		ID:             raw.ID,
+		Name:           strings.TrimPrefix(raw.Name, "/"),
+		Image:          raw.Image,
+		Platform:       raw.Platform,
+		Created:        raw.Created,
+		RestartPolicy:  raw.HostConfig.RestartPolicy.Name,
+		AutoRemove:     raw.HostConfig.AutoRemove,
+		Privileged:     raw.HostConfig.Privileged,
+		ReadOnlyRootfs: raw.HostConfig.ReadonlyRootfs,
+		MemoryLimit:    raw.HostConfig.Memory,
+		NanoCPUs:       raw.HostConfig.NanoCpus,
+		Command:        maskSensitiveArgs(raw.Config.Cmd),
+		Entrypoint:     maskSensitiveArgs(raw.Config.Entrypoint),
+		WorkingDir:     raw.Config.WorkingDir,
+		User:           raw.Config.User,
+		Mounts:         raw.Mounts,
+		Labels:         filterDetailLabels(raw.Config.Labels),
+		State: DockerDetailState{
+			Status:     raw.State.Status,
+			Running:    raw.State.Running,
+			Paused:     raw.State.Paused,
+			Restarting: raw.State.Restarting,
+			OOMKilled:  raw.State.OOMKilled,
+			Dead:       raw.State.Dead,
+			PID:        raw.State.Pid,
+			ExitCode:   raw.State.ExitCode,
+			Error:      raw.State.Error,
+			StartedAt:  raw.State.StartedAt,
+			FinishedAt: raw.State.FinishedAt,
+		},
+	}
+	if raw.State.Health != nil {
+		detail.Health = &DockerHealth{
+			Status:        raw.State.Health.Status,
+			FailingStreak: raw.State.Health.FailingStreak,
+		}
+	}
+	names := make([]string, 0, len(raw.NetworkSettings.Networks))
+	for name := range raw.NetworkSettings.Networks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		network := raw.NetworkSettings.Networks[name]
+		detail.Networks = append(detail.Networks, DockerNetwork{
+			Name:       name,
+			IPAddress:  network.IPAddress,
+			Gateway:    network.Gateway,
+			MacAddress: network.MacAddress,
+			Aliases:    network.Aliases,
+		})
+	}
+	return detail
 }
 
 // DockerContainerLogs returns the last tail lines of container logs.
@@ -441,9 +728,7 @@ func DockerContainerAction(containerID, action string) error {
 	if !validContainerID(containerID) {
 		return fmt.Errorf("invalid container ID")
 	}
-	switch action {
-	case "start", "stop", "restart", "kill":
-	default:
+	if !validDockerAction(action) {
 		return fmt.Errorf("unsupported docker action: %s", action)
 	}
 	_, status, err := dockerRequest("POST", "/containers/"+containerID+"/"+action, nil)
@@ -454,6 +739,17 @@ func DockerContainerAction(containerID, action string) error {
 		return fmt.Errorf("docker %s returned status %d", action, status)
 	}
 	return nil
+}
+
+// validDockerAction is the allowlist for lifecycle endpoints, each of which
+// maps directly to /containers/{id}/{action}.
+func validDockerAction(action string) bool {
+	switch action {
+	case "start", "stop", "restart", "kill", "pause", "unpause":
+		return true
+	default:
+		return false
+	}
 }
 
 // DockerContainerRemove force-removes a container.

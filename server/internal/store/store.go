@@ -260,13 +260,14 @@ type DeviceLog struct {
 }
 
 type DockerContainer struct {
-	ID     string        `json:"id"`
-	Name   string        `json:"name"`
-	Image  string        `json:"image"`
-	State  string        `json:"state"`
-	Status string        `json:"status"`
-	Ports  []DockerPort  `json:"ports,omitempty"`
-	Mounts []DockerMount `json:"mounts,omitempty"`
+	ID        string        `json:"id"`
+	Name      string        `json:"name"`
+	Image     string        `json:"image"`
+	State     string        `json:"state"`
+	Status    string        `json:"status"`
+	CreatedAt int64         `json:"created_at,omitempty"`
+	Ports     []DockerPort  `json:"ports,omitempty"`
+	Mounts    []DockerMount `json:"mounts,omitempty"`
 }
 
 type DockerPort struct {
