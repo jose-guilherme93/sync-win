@@ -17,9 +17,10 @@ version, and a breaking change increases the major version.
 
 - **Docker screen rebuilt** to match the rest of the dashboard: tiles for
   running, stopped, paused and images, and a searchable container list with
-  state filters. Clicking a container expands a full-width panel below it with
-  live CPU, memory, network and disk metrics, configuration detail, logs and a
-  terminal. Compose and cleanup are top-level tabs instead of hidden sections.
+  state filters. Clicking a container opens a large side panel that slides in
+  from the right with live CPU, memory, network and disk metrics, configuration
+  detail, logs and a terminal. Compose and cleanup are top-level tabs instead of
+  hidden sections.
 - **The container list is live.** The screen subscribes to the server's Docker
   state stream, and Refresh asks the device for a fresh list instead of
   re-reading a snapshot that can be a minute old.

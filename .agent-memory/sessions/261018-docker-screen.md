@@ -125,3 +125,15 @@ and golangci-lint clean, e2e 68/68.
 The dev stack still runs with `SYNCWIN_ENABLE_DOCKER_MUTATIONS=false`, so
 mutations answer a clear 403 until that flag is enabled; reads, metrics, logs
 and inspect work regardless.
+
+## Second revision: large side panel
+
+The inline panel was then rejected in favour of a large panel sliding in from
+the right. Content is unchanged; only its location moved.
+
+- The panel is `min(980px, 96vw)` wide, fixed, full height, with a dimmed
+  backdrop and a 220 ms slide-in. Escape, the backdrop and the X all close it.
+- The container name was added to the panel header; the inline row no longer
+  provides it next to the content.
+- The header is sticky so actions and close stay reachable while logs scroll.
+- The panel keeps the same tabs, metrics loop, logs polling and action set.

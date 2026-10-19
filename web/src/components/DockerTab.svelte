@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte'
+  import { onMount } from 'svelte'
   import { formatRelative } from '../lib/format'
   import {
     containerCounts,
@@ -66,6 +66,7 @@
   $: engine = info || hardware?.docker_info || null
   $: engineAvailable = loaded ? available : hardware?.docker_available !== false
   $: filtered = filterContainers(containers, query, statusFilter)
+  $: expandedContainer = containers.find((container) => container.id === expandedId) || null
   $: syncedLabel = updatedAt ? formatRelative(updatedAt, now) : ''
 
   // Tiles show the live list once it exists and fall back to the engine summary
@@ -220,14 +221,8 @@
     return state.replace(/_/g, ' ')
   }
 
-  async function toggleDetails(container: DockerContainer) {
-    const opening = expandedId !== container.id
-    expandedId = opening ? container.id : ''
-    if (!opening) return
-    // Put the row at the top of the scroll container so the metrics and the
-    // tabs are visible instead of opening below the fold.
-    await tick()
-    document.getElementById(`docker-row-${container.id}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  function toggleDetails(container: DockerContainer) {
+    expandedId = expandedId === container.id ? '' : container.id
   }
 
   function confirmCopy(action: { action: DockerAction; container: DockerContainer } | null): { title: string; message: string; label: string; destructive: boolean } {
@@ -382,12 +377,12 @@
       {:else}
         <ul class="rows">
           {#each filtered as container (container.id)}
-            <li class="row" class:sel={expandedId === container.id} id={`docker-row-${container.id}`}>
+            <li class="row" class:sel={expandedId === container.id}>
               <button
                 class="row-main"
                 on:click={() => toggleDetails(container)}
-                aria-expanded={expandedId === container.id}
-                aria-label={`${expandedId === container.id ? 'Collapse' : 'Expand'} ${container.name}`}
+                aria-haspopup="dialog"
+                aria-label={`Open details for ${container.name}`}
               >
                 <StatusPill label={stateLabel(container.state)} tone={stateTone(container.state)} />
                 <span class="ident">
@@ -412,18 +407,6 @@
                 {/if}
               </div>
             </li>
-            {#if expandedId === container.id}
-              <li class="expansion">
-                <ContainerPanel
-                  {container}
-                  {deviceId}
-                  {authHeaders}
-                  busy={actionBusyId === container.id}
-                  onClose={() => (expandedId = '')}
-                  onAction={(action, target) => quickAction(action, target)}
-                />
-              </li>
-            {/if}
           {/each}
         </ul>
       {/if}
@@ -434,6 +417,20 @@
     <CleanupCard {deviceId} {authHeaders} onChanged={() => void refreshList()} />
   {/if}
 </section>
+
+{#if expandedContainer}
+  <div class="side-backdrop" role="presentation" on:click={() => (expandedId = '')}></div>
+  <div class="side-panel" role="dialog" aria-modal="true" aria-label={`Details for ${expandedContainer.name}`}>
+    <ContainerPanel
+      container={expandedContainer}
+      {deviceId}
+      {authHeaders}
+      busy={actionBusyId === expandedContainer.id}
+      onClose={() => (expandedId = '')}
+      onAction={(action, target) => quickAction(action, target)}
+    />
+  </div>
+{/if}
 
 <ConfirmDialog
   open={pendingAction != null}
@@ -638,7 +635,45 @@
   .chev.open { transform: rotate(90deg); color: var(--accent); }
 
   .row-actions { display: flex; gap: 0.35rem; padding-right: 0.8rem; }
-  .expansion { display: block; }
+
+  .side-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 49;
+    background: rgba(0, 0, 0, 0.55);
+    animation: backdrop-in 180ms ease;
+  }
+
+  .side-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    z-index: 50;
+    width: min(980px, 96vw);
+    height: 100vh;
+    overflow-y: auto;
+    background: var(--bg-elevated);
+    border-left: 1px solid var(--border);
+    box-shadow: var(--shadow-pop);
+    animation: panel-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  @keyframes backdrop-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes panel-in {
+    from { transform: translateX(100%); }
+    to { transform: translateX(0); }
+  }
+
+  :global(.side-panel .detail-panel) {
+    min-height: 100%;
+    border-top: 0;
+    border-bottom: 0;
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
 
   .btn-ghost {
     display: inline-flex;
@@ -668,5 +703,6 @@
     .row-main { grid-template-columns: auto minmax(0, 1fr) auto; padding: 0.5rem 0.6rem; }
     .row-actions { display: none; }
     .list-toolbar { padding: 0.5rem 0.6rem; }
+    .side-panel { width: 100vw; }
   }
 </style>

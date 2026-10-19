@@ -101,14 +101,25 @@
     void loadInspect()
   }
 
+  // Escape closes the side panel, unless a confirmation dialog is above it:
+  // that dialog owns Escape and dismissing both at once would lose the user's
+  // place.
+  function onKeydown(event: KeyboardEvent) {
+    if (event.key !== 'Escape') return
+    if (document.querySelector('[role="alertdialog"]')) return
+    onClose()
+  }
+
   onMount(() => {
     visible = !document.hidden
     document.addEventListener('visibilitychange', onVisibility)
+    document.addEventListener('keydown', onKeydown)
     void loadInspect()
     if (isRunning) startStats()
     return () => {
       destroyed = true
       document.removeEventListener('visibilitychange', onVisibility)
+      document.removeEventListener('keydown', onKeydown)
       // Invalidate in-flight requests before stopping their timers, so a
       // response that arrives after the panel collapsed cannot schedule more.
       statsRequest++
@@ -336,6 +347,7 @@
   <header class="detail-head">
     <div class="identity">
       <StatusPill label={container.state} tone={stateTone(container.state)} />
+      <span class="panel-name mono" title={container.name}>{container.name}</span>
       <span class="id mono" title={container.id}>{shortId(container.id)}</span>
       <span class="status">{container.status || '—'}</span>
       {#if container.created_at}<span class="status">· created {createdRelative}</span>{/if}
@@ -353,7 +365,7 @@
       {/if}
       {#if isRunning}<button class="btn-ghost danger" disabled={busy} on:click={() => onAction('kill', container)}>Kill</button>{/if}
       <button class="btn-ghost danger" disabled={busy} on:click={() => onAction('remove', container)}>Remove</button>
-      <button class="btn-icon" on:click={onClose} aria-label="Collapse container details"><Icon name="x" size={15} /></button>
+      <button class="btn-icon" on:click={onClose} aria-label="Close container details"><Icon name="x" size={15} /></button>
     </div>
   </header>
 
@@ -611,8 +623,24 @@
     justify-content: space-between;
     gap: 0.75rem;
     flex-wrap: wrap;
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    margin: -0.85rem -1rem 0;
+    padding: 0.75rem 1rem 0.65rem;
+    background: var(--card-inset);
+    border-bottom: 1px solid var(--border);
   }
   .identity { display: flex; align-items: center; gap: 0.55rem; flex-wrap: wrap; min-width: 0; }
+  .panel-name {
+    color: var(--text-bright);
+    font-size: 0.95rem;
+    font-weight: 600;
+    max-width: 26rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .id { color: var(--text-muted); }
   .status { color: var(--text-faint); font-size: 0.74rem; }
   .detail-actions { display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
