@@ -11,16 +11,16 @@ version, and a breaking change increases the major version.
 
 ## [Unreleased]
 
-## [0.12.0] - 2026-10-18
+## [0.12.0] - 2026-10-19
 
 ### Changed
 
 - **Docker screen rebuilt** to match the rest of the dashboard: tiles for
   running, stopped, paused and images, and a searchable container list with
   state filters. Clicking a container opens a large side panel that slides in
-  from the right with live CPU, memory, network and disk metrics, configuration
-  detail, logs and a terminal. Compose and cleanup are top-level tabs instead of
-  hidden sections.
+  from the right with focused tabs: Overview, Stats (live CPU, memory, network
+  and disk), Logs, Terminal and Config. Compose and cleanup are top-level tabs
+  instead of hidden sections.
 - **The container list is live.** The screen subscribes to the server's Docker
   state stream, and Refresh asks the device for a fresh list instead of
   re-reading a snapshot that can be a minute old.
@@ -29,10 +29,10 @@ version, and a breaking change increases the major version.
   telemetry cycle, and a failed command states the device's reason.
 - **Pause/unpause and kill** join the existing start/stop/restart/remove actions.
   Paused containers now show a Resume action instead of an unusable Start.
-- **Container configuration** in the expanded panel: networks and addresses,
-  healthcheck state, restart policy, entrypoint/command, mounts, labels, CPU
-  and memory limits. Environment variables are never sent, and
-  credential-looking command arguments and labels are masked.
+- **Container overview and configuration** in the side panel: live metrics,
+  health, ports, networks and mounts on Overview; platform, restart policy,
+  limits, entrypoint/command and labels on Config. Environment variables are
+  never sent, and credential-looking command arguments and labels are masked.
 - Paused containers are shown as needing attention on the device instead of
   offering start/restart buttons that Docker would reject.
 
@@ -44,7 +44,7 @@ version, and a breaking change increases the major version.
 - A compose scan now reports "no compose project found" when the device simply
   has none, instead of an error caused by a `null` reply or a duplicate empty
   state next to a real error.
-- Disabled Docker mutations now answer 403 with "Docker mutations are disabled"
+- Disabled Docker mutations now answer 403 with "docker mutations are disabled on this server"
   instead of a masked 503 "internal server error".
 - A completed container list now refreshes the cached snapshot, so the screen
   that requested it, the next screen that opens, and every live subscriber see

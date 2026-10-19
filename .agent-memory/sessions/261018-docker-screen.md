@@ -137,3 +137,27 @@ the right. Content is unchanged; only its location moved.
   provides it next to the content.
 - The header is sticky so actions and close stay reachable while logs scroll.
 - The panel keeps the same tabs, metrics loop, logs polling and action set.
+
+## Third revision: tabbed side panel
+
+The side panel kept all information stacked in one long Info tab. It was
+reorganised into five focused tabs so each one fits a smaller viewport without
+losing content:
+
+- `Overview`: status, created, image, id, health/flags and published ports.
+- `Stats`: CPU, memory, network and disk cards with larger sparklines and PIDs.
+  Metrics now poll only while this tab is open; the previous sample window is
+  reset if the tab was closed for more than ten seconds.
+- `Logs`: unchanged full-width viewer with wrap, timestamps, filter, tail,
+  follow and copy.
+- `Terminal`: unchanged one-shot exec.
+- `Config`: platform, restart policy, limits, user/workdir, command, mounts,
+  networks and labels. Labels are collapsed by default and exclude
+  credential-looking keys.
+
+The header keeps only the name, state, id and actions; the panel is still
+`min(980px, 96vw)`, slides from the right and closes with Escape, the backdrop
+or the X.
+
+No commit was made for this revision yet, per the user's instruction: commits
+only with permission, and only to the local `develop`.

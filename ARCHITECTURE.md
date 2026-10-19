@@ -73,7 +73,7 @@ Key UI components:
 - `components/screens/Storage.svelte`, `Processes.svelte`, `Packages.svelte`, `Services.svelte`: per-device hardware and system views
 - `components/screens/RemoteAccess.svelte`, `DeviceSettings.svelte`: the SSH terminal plus the confirmed device actions with an audit trail, and device identity/removal
 - `DeviceModal.svelte`: device detail; still owns the Files / Packages / Saves / Notes / Docker / Security tabs, and can render inline via `variant="page"` rather than as a popup
-- `DockerTab.svelte`, `components/docker/`: container management (live list, large side panel with streaming metrics, start/stop/restart/pause/unpause/kill/remove, exec, compose editor, prune). `lib/docker.ts` owns the wire-shape normalisation and filters; `lib/docker-client.ts` owns the command queue, result polling and live state stream.
+- `DockerTab.svelte`, `components/docker/`: container management (live list, large tabbed side panel with streaming metrics, start/stop/restart/pause/unpause/kill/remove, exec, compose editor, prune). `lib/docker.ts` owns the wire-shape normalisation and filters; `lib/docker-client.ts` owns the command queue, result polling and live state stream.
 - `SecurityTab.svelte`: Lynis security audit runner, hardening index gauge, warnings/suggestions, history
 - `SystemMetrics.svelte`: detailed hardware telemetry display and history charts
 - `NotificationsModal.svelte`: notification provider settings and inbox
