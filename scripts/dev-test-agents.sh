@@ -9,10 +9,13 @@
 #                     and Packages stay empty by design.
 #
 #   full              One Ubuntu container booting systemd as PID 1, with
-#                     journald, apt, nginx (a listening port), Lynis and the
-#                     host's Docker socket. This is the device that exercises
-#                     Services, Logs, Packages, Security and Docker. It needs
-#                     ~100 MB of RAM and is privileged; it is development-only.
+#                     journald, apt, nginx (a listening port), Lynis, sshd and
+#                     the host's Docker socket. This is the device that exercises
+#                     Services, Logs, Packages, Security and Docker, and it is
+#                     the only one that can open real Remote access sessions:
+#                     the policy allows the `devuser` account and the helper is
+#                     installed. It needs ~100 MB of RAM and is privileged; it
+#                     is development-only.
 #
 # Both kinds enroll through the same one-time token flow and reuse a stable
 # machine_id, so re-running adopts the existing device instead of duplicating it.
@@ -175,10 +178,11 @@ wait_for_systemd() {
 start_full() {
     enroll "$FULL_HOSTNAME" "sync-win-test-agent-full" "Ubuntu 24.04 (container)"
 
-    if ! docker image inspect "$FULL_IMAGE" >/dev/null 2>&1; then
-        printf 'Building %s from %s (first run only)...\n' "$FULL_IMAGE" "$DOCKERFILE"
-        docker build -f "$DOCKERFILE" -t "$FULL_IMAGE" . >/dev/null
-    fi
+    # Rebuild on every run. The layer cache makes an unchanged image cheap, and
+    # a changed Dockerfile must not be ignored just because an image from an
+    # older build already exists (that silently kept sshd out of this image).
+    printf 'Building %s from %s (cached layers make this fast)...\n' "$FULL_IMAGE" "$DOCKERFILE"
+    docker build -f "$DOCKERFILE" -t "$FULL_IMAGE" . >/dev/null
 
     docker rm -f "$FULL_NAME" >/dev/null 2>&1 || true
     # systemd needs to be PID 1 and to own the cgroup hierarchy; journald and
@@ -226,6 +230,28 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
+    # The remote-access helper is the root half of an interactive session: it
+    # injects the ephemeral key and nothing else. The dev agent runs as root, so
+    # the helper answers root's uid; on a real device it answers the sync-win
+    # service user.
+    cat > "$WORK/sync-win-agent-helper.service" <<'EOF'
+[Unit]
+Description=SyncWin dev remote-access helper
+After=local-fs.target
+Before=sync-win-agent.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/sync-win-agent helper --user root --group root
+Restart=always
+RestartSec=5
+RuntimeDirectory=sync-win
+RuntimeDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
     # A unit that exits non-zero on purpose: the Services screen needs something
     # in the Failed tile to be worth looking at.
     cat > "$WORK/demo-failure.service" <<'EOF'
@@ -243,8 +269,15 @@ EOF
     docker exec "$FULL_NAME" sh -c \
         "curl -fsSL '$AGENT_SERVER_URL/api/agent/download' -o /usr/local/bin/sync-win-agent && chmod +x /usr/local/bin/sync-win-agent"
     docker cp "$WORK/sync-win-agent.service" "$FULL_NAME:/etc/systemd/system/sync-win-agent.service"
+    docker cp "$WORK/sync-win-agent-helper.service" "$FULL_NAME:/etc/systemd/system/sync-win-agent-helper.service"
     docker cp "$WORK/demo-failure.service" "$FULL_NAME:/etc/systemd/system/demo-failure.service"
     docker exec "$FULL_NAME" systemctl daemon-reload
+    docker exec "$FULL_NAME" systemctl enable --now sync-win-agent-helper
+    # Local consent, exactly as the owner would grant it on a real machine.
+    # `set` writes the full fail-closed policy with only remote access enabled.
+    docker exec "$FULL_NAME" /usr/local/bin/sync-win-agent set ssh on
+    docker exec "$FULL_NAME" /usr/local/bin/sync-win-agent set ssh-user devuser
+    docker exec "$FULL_NAME" systemctl enable --now ssh
     docker exec "$FULL_NAME" systemctl enable --now sync-win-agent
     docker exec "$FULL_NAME" systemctl enable --now nginx
     # This one is expected to fail; do not let `set -e` abort the setup.
@@ -252,6 +285,7 @@ EOF
 
     printf 'Enrolled %s (device %s) and started container %s\n' "$FULL_HOSTNAME" "$DEVICE_ID" "$FULL_NAME"
     printf '  systemd units: nginx running, demo-failure failed, sync-win-agent running\n'
+    printf '  remote access: sshd running, helper running, policy allows devuser\n'
 }
 
 remove_agents() {
@@ -296,8 +330,8 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 JAR="$WORK/cookies.txt"
 
-# Sign in. There is no default login in the product; the dev account is created
-# by `make dev-account`.
+# Sign in. The dev stack bootstraps this fixed account and injects
+# SYNCWIN_DEV_TOKEN; the same password still works through the normal form.
 login_body="$(jq -n --arg email "$EMAIL" --arg password "$PASSWORD" \
     '{email: $email, password: $password}')"
 login_code="$(curl -sS -c "$JAR" -o /dev/null -w '%{http_code}' \

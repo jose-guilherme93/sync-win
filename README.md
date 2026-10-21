@@ -297,10 +297,13 @@ and the honest "not collected yet" states: it has no systemd, journald or apt.
 The **full** device is a privileged Ubuntu container booting systemd as PID 1,
 with journald, apt, nginx (a listening port), Lynis and the host's Docker
 socket. That is the device to use for Services, Logs, Packages, Security and
-Docker; it needs about 100 MB of RAM and is development-only. Its `/proc` is
-still the host's, so CPU, memory and kernel are host numbers, and it has no
-sshd, block devices or GPU, so remote access, SMART and GPU collection cannot be
-tested there. Those need real hardware.
+Docker; it needs about 100 MB of RAM and is development-only. It also runs sshd
+with a normal `devuser` account and the remote-access helper, so the Remote
+access screen opens real SSH sessions against it (the agent injects an
+ephemeral key for `devuser` and dials its own loopback). Its `/proc` is still
+the host's, so CPU, memory and kernel are host numbers, and it has no block
+devices or GPU, so SMART and GPU collection cannot be tested there. Those need
+real hardware.
 
 **Without containers**
 

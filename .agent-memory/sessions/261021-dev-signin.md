@@ -47,6 +47,21 @@ status: active
 - **`make dev-account`** is idempotent (login first, register if missing) and
   is only needed after a wiped database.
 
+## Real SSH on the full dev device
+
+`make dev-agents-full` now exercises Remote access for real:
+
+- `docker/Dockerfile.test-device` installs `openssh-server`, creates
+  `devuser`, generates host keys and enables `ssh.service`.
+- `scripts/dev-test-agents.sh full` installs and starts
+  `sync-win-agent-helper.service` (agent runs as root there, so
+  `--user root --group root`), grants consent the way an owner would
+  (`sync-win-agent set ssh on`, then `set ssh-user devuser`), and starts sshd.
+- The image is rebuilt on every run. The script used to build only when the
+  image was missing, and `docker rmi` had failed because the container still
+  used it, so the new Dockerfile was silently ignored and the container had no
+  sshd at all.
+
 ## To test a worktree against the real dev data
 
 The compose bind is relative to the compose file, so point `data-dev` at the
@@ -76,3 +91,7 @@ that must not touch the real dev data.
 - E2E: 73/73 checks, with the login-screen assertion inverted to "dev stack
   signs in without the login screen"; the fleet was back to exactly the three
   test devices after the run, proving the cleanup ran.
+- Live SSH: the browser opened a `devuser` session on `ubuntu-full-1`, `whoami`
+  answered `devuser`, a second tab ran its own command, and a third brought the
+  card to `3 of 3 open · 3 connected`. Tab 1's scrollback stayed free of tab 2's
+  output.

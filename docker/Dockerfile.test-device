@@ -8,6 +8,10 @@
 #
 # It is a development image and is started privileged by the script; never use
 # it in production or expose it to untrusted networks.
+#
+# It also carries sshd and one normal login account (`devuser`) so the Remote
+# access screen can open real sessions against it: the agent injects an
+# ephemeral key for that account and dials its own loopback.
 FROM ubuntu:24.04
 
 ENV container=docker \
@@ -24,7 +28,13 @@ RUN apt-get update \
         ca-certificates \
         nginx \
         lynis \
-    && rm -rf /var/lib/apt/lists/*
+        openssh-server \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --shell /bin/bash devuser \
+    && usermod -p '*' devuser \
+    && ssh-keygen -A \
+    && mkdir -p /run/sshd \
+    && ln -sf /lib/systemd/system/ssh.service /etc/systemd/system/multi-user.target.wants/ssh.service
 
 STOPSIGNAL SIGRTMIN+3
 

@@ -28,6 +28,11 @@ version, and a breaking change increases the major version.
 
 ### Changed
 
+- **The full test device supports real Remote access sessions.** The Ubuntu
+  container now ships sshd, a `devuser` account and the remote-access helper,
+  and its local policy allows that account, so `make dev-agents-full` is enough
+  to open live terminals. The image is rebuilt on every run; a stale image had
+  silently skipped a Dockerfile change.
 - **The browser suite no longer creates an account per run.** It signs in as
   the fixed development account, reuses one device record, and deletes it on
   exit, so running `make test-e2e` leaves the dev fleet unchanged.
