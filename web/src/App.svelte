@@ -1656,7 +1656,7 @@
           {:else if navState.section === 'notifications'}
             <Notifications {devices} authHeaders={ownerHeaders} unread={notifEvents} onSelect={selectDevice} onMarkedRead={handleNotifMarkedRead} />
           {:else}
-            <Home {devices} onSelect={selectDevice} onAdd={openAddDevice} />
+            <Home {devices} onSelect={selectDevice} onAdd={openAddDevice} onAlerts={() => nav.setSection('alerts')} />
           {/if}
         </div>
       </main>

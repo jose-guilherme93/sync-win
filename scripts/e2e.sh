@@ -364,7 +364,7 @@ section "Device selection enables the scoped sidebar"
 
 # The fleet row is a clickable element, not a button with a stable label. Its
 # aria name includes the status text, so it is matched on hostname only.
-ROW=$(eval_js "(()=>{const r=[...document.querySelectorAll('tr,[role=row]')].find(x=>x.textContent.includes(${HOSTNAME@Q}));if(!r)return 'MISSING';r.click();return 'CLICKED';})()")
+ROW=$(eval_js "(()=>{const r=[...document.querySelectorAll('.devices li')].find(x=>x.textContent.includes(${HOSTNAME@Q}));if(!r)return 'MISSING';const b=r.querySelector('button');if(!b)return 'NO-BUTTON';b.click();return 'CLICKED';})()")
 check "fleet row clicked" "${ROW}" "CLICKED"
 sleep 3
 
@@ -471,7 +471,7 @@ check "error is not reported as an empty inventory" "$(eval_js "[...document.que
 # Recovery: after a clean reload the screen must show the data again.
 timeout "${AB_CMD_TIMEOUT}" agent-browser reload >/dev/null
 sleep 4
-ROW=$(eval_js "(()=>{const r=[...document.querySelectorAll('tr,[role=row]')].find(x=>x.textContent.includes(${HOSTNAME@Q}));if(!r)return 'MISSING';r.click();return 'CLICKED';})()")
+ROW=$(eval_js "(()=>{const r=[...document.querySelectorAll('.devices li')].find(x=>x.textContent.includes(${HOSTNAME@Q}));if(!r)return 'MISSING';const b=r.querySelector('button');if(!b)return 'NO-BUTTON';b.click();return 'CLICKED';})()")
 sleep 3
 click_text 'Services' >/dev/null
 sleep 3
@@ -686,56 +686,31 @@ section "Fleet overview"
 click_text 'Home' >/dev/null
 sleep 3
 
-# The fleet stat cards sit in one grid row. If any card overflows its row the
-# grid becomes taller than the viewport area it was allotted and the device
-# table drops below the fold, which is a visible layout fault that no static
-# check catches.
+# The fleet screen is a dense host list: each row carries the device identity
+# and three inline usage meters. Time-series charts belong to the device
+# Overview, so the list must not contain an SVG sparkline.
 ALIGN=$(eval_js "(()=>{const t=document.body.innerText;return t.includes('Fleet')?'Fleet':'missing';})()")
 check "fleet view rendered" "${ALIGN}" "Fleet"
 
-# The fleet stat cards share one grid row, so their boxes must line up. A card
-# whose sub-label wraps to more lines than its neighbours grows taller and drops
-# the device table below the fold. This was visibly broken — the "Without Lynis"
-# card overflowed its row — while vite build and svelte-check were both clean,
-# which is the whole reason this suite exists.
-KPI=$(eval_js "(()=>{const c=[...document.querySelectorAll('.kpi')];
- if(c.length<2) return JSON.stringify({error:'found '+c.length+' cards'});
- const boxes=c.map(x=>{const r=x.getBoundingClientRect();return {top:Math.round(r.top),bottom:Math.round(r.bottom),h:Math.round(r.height)};});
- const tops=new Set(boxes.map(b=>b.top));
- return JSON.stringify({count:c.length,tops:[...tops],bottoms:boxes.map(b=>b.bottom),heights:boxes.map(b=>b.h)});})()")
-
-# agent-browser prints the return value as a JSON string, so the payload is
-# encoded twice. Decoding once yields a quoted string, so it has to be unwrapped
-# twice before the keys are readable.
-kpi_field() {
-  printf '%s' "${KPI}" | python3 -c "
-import json, sys
-raw = sys.stdin.read().strip()
-try:
-    data = json.loads(json.loads(raw))
-except Exception:
-    print('unparsed'); raise SystemExit
-print($1)
-" 2>/dev/null || echo "unparsed"
-}
-
-KPI_COUNT=$(kpi_field "data.get('count', 0)")
-KPI_TOPS=$(kpi_field "len(data.get('tops', []))")
-KPI_BOTTOMS=$(kpi_field "'ALIGNED' if data.get('bottoms') and len(set(data['bottoms'])) == 1 else 'MISALIGNED:' + str(data.get('bottoms'))")
-
-if [ "${KPI_COUNT}" -ge 2 ]; then
-  ok "fleet KPI cards rendered (${KPI_COUNT})"
+FLEET_ROWS=$(unquote "$(eval_js "String(document.querySelectorAll('.devices li').length)")")
+if [ "${FLEET_ROWS:-0}" -ge 1 ]; then
+  ok "fleet list rendered (${FLEET_ROWS} devices)"
 else
-  fail "fleet KPI cards rendered" "${KPI}"
+  fail "fleet list rendered" "found ${FLEET_ROWS:-0} rows"
 fi
 
-if [ "${KPI_TOPS}" -le 1 ]; then
-  ok "KPI cards sit on one row"
-else
-  fail "KPI cards must share a single row" "distinct top edges: ${KPI_TOPS}"
-fi
+FLEET_METERS=$(unquote "$(eval_js "String(document.querySelectorAll('.devices li')[0]?.querySelectorAll('.usage-item').length ?? 0)")")
+check "fleet rows show three inline meters" "${FLEET_METERS}" "3"
 
-check "KPI cards share a bottom edge" "${KPI_BOTTOMS}" "ALIGNED"
+FLEET_CHARTS=$(unquote "$(eval_js "String(document.querySelectorAll('.devices svg').length)")")
+check "fleet rows carry no time-series chart" "${FLEET_CHARTS}" "0"
+
+FLEET_PCT=$(unquote "$(eval_js "document.querySelector('.devices li .usage-top b')?.textContent.trim() || ''")")
+if [[ "${FLEET_PCT}" == *"%"* ]]; then
+  ok "fleet meters read as percentages (${FLEET_PCT})"
+else
+  fail "fleet meters read as percentages" "${FLEET_PCT}"
+fi
 
 # ---------------------------------------------------------------------------
 section "Live device status"
@@ -747,7 +722,7 @@ section "Live device status"
 # five minutes, which made a healthy device look stale after 30s.
 click_text 'Home' >/dev/null
 sleep 2
-ROW=$(eval_js "(()=>{const r=[...document.querySelectorAll('tr,[role=row]')].find(x=>x.textContent.includes(${HOSTNAME@Q}));if(!r)return 'MISSING';r.click();return 'CLICKED';})()")
+ROW=$(eval_js "(()=>{const r=[...document.querySelectorAll('.devices li')].find(x=>x.textContent.includes(${HOSTNAME@Q}));if(!r)return 'MISSING';const b=r.querySelector('button');if(!b)return 'NO-BUTTON';b.click();return 'CLICKED';})()")
 check "device reselected for the live check" "${ROW}" "CLICKED"
 sleep 2
 
@@ -789,7 +764,7 @@ fi
 # The fleet view and the device view must agree: this was the reported symptom.
 click_text 'Home' >/dev/null
 sleep 2
-HOME_STATUS=$(unquote "$(eval_js "(()=>{const r=[...document.querySelectorAll('tbody tr')].find(x=>x.textContent.includes(${HOSTNAME@Q}));if(!r)return 'MISSING';const d=r.querySelector('.status-dot');return d?(d.className.includes('ok')?'ok':d.className):'NO-DOT';})()")")
+HOME_STATUS=$(unquote "$(eval_js "(()=>{const r=[...document.querySelectorAll('.devices li')].find(x=>x.textContent.includes(${HOSTNAME@Q}));if(!r)return 'MISSING';const d=r.querySelector('.status-dot');return d?(d.className.includes('ok')?'ok':d.className):'NO-DOT';})()")")
 check "fleet row agrees the device is online" "${HOME_STATUS}" "ok"
 
 # ---------------------------------------------------------------------------

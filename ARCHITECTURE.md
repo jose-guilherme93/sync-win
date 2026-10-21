@@ -67,7 +67,7 @@ Key UI components:
 - `lib/insights.ts`: alert thresholds and `generateInsights`, the single definition of what needs attention
 - `components/shell/Sidebar.svelte`, `Topbar.svelte`, `DeviceList.svelte`: the app chrome
 - `components/ui/`: reusable primitives (Icon, StatusDot, SeverityBadge, GaugeCard, StatCard, MiniSparkline, EmptyState, Skeleton, ConfirmDialog)
-- `components/screens/Home.svelte`: fleet KPI row, device table with sparklines, recent-alerts feed
+- `components/screens/Home.svelte`: dense fleet list with a summary bar and inline CPU/RAM/disk percentage meters; no time-series charts, and the alert count links to the Alerts screen
 - `components/screens/DeviceOverview.svelte`: gauges, per-core load, storage/network cards, history chart
 - `components/screens/Alerts.svelte`, `Reports.svelte`: fleet-wide findings and inventory reports
 - `components/screens/Storage.svelte`, `Processes.svelte`, `Packages.svelte`, `Services.svelte`: per-device hardware and system views
@@ -245,8 +245,8 @@ The current project intentionally does not include:
 - Web dashboard uses lazy loading and 60-second cache TTL for large datasets.
 - `GET /api/devices` returns a lightweight summary projection (no app inventory,
   no device token, trimmed hardware) and JSON API responses are gzip-compressed.
-- Device cards use canvas sparklines; Chart.js is only loaded in the detail and
-  history modals.
+- The fleet list renders no time-series charts; sparklines and the history
+  chart load only on device screens.
 - Agent samples system logs every 6th telemetry cycle and only rewrites its
   state file when it changes.
 - Device log lines are persisted to their own `device_logs` table rather than

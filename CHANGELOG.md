@@ -42,6 +42,11 @@ version, and a breaking change increases the major version.
 
 ### Changed
 
+- **The fleet landing is a Termix-style host list.** Each device row shows CPU,
+  RAM and disk as inline percentage bars, with status, OS, last-seen and the
+  alert chip on the same line. The KPI wall, the per-row sparklines and the
+  recent-alerts column are gone; the alert count in the summary links to
+  Alerts, and detailed charts remain on the device Overview.
 - **The Remote access screen is organized around the terminal.** The session
   audit moved into a scrollable side panel that matches the terminal's height,
   so it can no longer grow the page, and the fixed device actions (restart

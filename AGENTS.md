@@ -37,7 +37,7 @@ The project is built around three main components:
 3. Web dashboard
    - Svelte 5 + TypeScript 6 + Vite 8 + Chart.js 4
    - account-first: sign in / create account entry screen
-   - shows online devices, last sync time, live hardware telemetry charts
+   - shows a dense fleet list with online state, last-seen time and inline CPU/RAM/disk percentage meters; detailed telemetry charts live on the device Overview
    - device screens rendered inline by the shell: Overview, CPU & Thermal, Memory, Storage, Network, All sensors, Services (services and ports side by side with a detail drawer), Docker, Security (audit history plus host posture), Processes, Packages, Logs, Remote access, Settings
    - Docker container management (list, start/stop/restart/kill/remove, exec, compose, prune)
    - Remote access screen: tabbed SSH terminal (xterm.js, up to six concurrent sessions, tabs named by the running program) and a scrollable recent-session audit; device actions live in Settings → Maintenance
