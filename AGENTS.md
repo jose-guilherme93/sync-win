@@ -135,9 +135,13 @@ sync-win/
 ## Commit and release convention
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
-The `Release` workflow derives the version automatically on every push to `main`
-(`feat` = minor, `fix`/anything else = patch, `feat!`/`BREAKING CHANGE` = major).
-Never bump versions or create tags by hand — use the right commit type instead.
+The `Release` workflow derives the version automatically from a **successful CI
+run on `main`** (`feat` = minor, `fix`/anything else = patch,
+`feat!`/`BREAKING CHANGE` = major). It triggers on CI completion, not on the
+push, so a red build cannot publish an image or a tag. `main` is protected:
+every change arrives through a pull request with all CI checks required,
+administrators included. Never bump versions or create tags by hand — use the
+right commit type instead.
 
 Every release also needs a written section in `CHANGELOG.md` for the version the
 workflow will compute (last tag + the Conventional Commits bump). The Release

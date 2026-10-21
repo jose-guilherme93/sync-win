@@ -1,7 +1,9 @@
 # =============================================================================
 # Release — version, publish image, then tag
 # =============================================================================
-# Every push to main creates the next version from Conventional Commits:
+# A successful CI run on main creates the next version from Conventional
+# Commits. The workflow triggers on the CI completion, not on the push, so a
+# red main can never publish an image or a tag:
 #
 #   feat: ...                      -> minor  (0.1.0 -> 0.2.0)
 #   fix: ... / chore: ... / etc.   -> patch  (0.2.0 -> 0.2.1)
@@ -32,7 +34,9 @@
 name: Release
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
     inputs:
@@ -65,10 +69,15 @@ env:
 jobs:
   release:
     name: Version, publish image and tag
+    # workflow_run fires for failed runs too; only a green CI may release.
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
+          # workflow_run runs in the default-branch context; release the exact
+          # commit CI tested, not whatever main points at now.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 0
 
       - name: Compute next version
