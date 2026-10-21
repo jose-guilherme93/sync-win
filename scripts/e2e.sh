@@ -624,7 +624,7 @@ fi
 click_text 'Remote access' >/dev/null
 sleep 2
 REMOTE_TEXT=$(unquote "$(eval_js "(()=>{const m=document.querySelector('main')||document.body;return m.innerText.replace(/\s+/g,' ');})()")")
-if [[ "${REMOTE_TEXT}" == *"SSH terminal"* && "${REMOTE_TEXT}" == *"Open terminal"* ]]; then
+if [[ "${REMOTE_TEXT}" == *"SSH terminal"* && "${REMOTE_TEXT}" == *"New terminal"* ]]; then
   ok "remote access screen renders the SSH terminal"
 else
   fail "remote access screen renders the SSH terminal" "${REMOTE_TEXT:0:200}"
@@ -634,6 +634,25 @@ if [[ "${REMOTE_TEXT}" == *"Restart agent"* && "${REMOTE_TEXT}" == *"Apply packa
 else
   fail "remote access screen lists the actions and their policy conditions" "${REMOTE_TEXT:0:200}"
 fi
+
+# Terminal tabs. Opening a terminal must create its own tab, and a refused
+# session must be reported there rather than swallowed. This seeded device has
+# no tunnel, so the server refuses the ticket — exactly the failure the tab has
+# to show. The live SSH path needs a real agent, covered elsewhere.
+OPENED=$(unquote "$(click_text 'New terminal')")
+if [[ "${OPENED}" == "CLICKED" ]]; then
+  ok "remote access opens a terminal tab"
+else
+  fail "remote access opens a terminal tab" "${OPENED}"
+fi
+TABS=$(wait_for "1" "document.querySelectorAll('[role=tab]').length" 6)
+check "remote access shows the session as a tab" "${TABS}" "1"
+TAB_ERROR=$(wait_for_like "not connected to the tunnel" "(document.querySelector('[role=alert]')?.textContent||'').trim()" 10)
+check "a refused session is reported inside its own tab" "${TAB_ERROR}" "not connected to the tunnel"
+CLOSED=$(unquote "$(eval_js "(()=>{const b=[...document.querySelectorAll('button')].find(x=>(x.getAttribute('aria-label')||'').endsWith(' terminal'));if(!b)return 'MISSING';b.click();return 'CLOSED';})()")")
+check "remote access closes a terminal tab" "${CLOSED}" "CLOSED"
+TABS_LEFT=$(wait_for "0" "document.querySelectorAll('[role=tab]').length" 6)
+check "closing the last terminal restores the empty state" "${TABS_LEFT}" "0"
 
 # ---------------------------------------------------------------------------
 section "Fleet overview"

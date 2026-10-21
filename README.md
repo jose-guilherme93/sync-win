@@ -46,9 +46,10 @@ small text files and nothing else.
 
 - start, stop, restart, kill and remove containers; exec, compose, prune
 - restart the agent, run package updates, reboot a device
-- open an **SSH terminal** to a device from the dashboard — no port is opened on
-  the device; enable it on the device with `sudo sync-win-agent set ssh on` and
-  on the server with `SYNCWIN_ENABLE_REMOTE_ACCESS=true`
+- open up to three **SSH terminals** in tabs to a device from the dashboard — no
+  port is opened on the device; enable it on the device with
+  `sudo sync-win-agent set ssh on` and on the server with
+  `SYNCWIN_ENABLE_REMOTE_ACCESS=true`
 
 ---
 

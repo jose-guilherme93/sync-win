@@ -71,7 +71,7 @@ Key UI components:
 - `components/screens/DeviceOverview.svelte`: gauges, per-core load, storage/network cards, history chart
 - `components/screens/Alerts.svelte`, `Reports.svelte`: fleet-wide findings and inventory reports
 - `components/screens/Storage.svelte`, `Processes.svelte`, `Packages.svelte`, `Services.svelte`: per-device hardware and system views
-- `components/screens/RemoteAccess.svelte`, `DeviceSettings.svelte`: the SSH terminal plus the confirmed device actions with an audit trail, and device identity/removal
+- `components/screens/RemoteAccess.svelte`, `DeviceSettings.svelte`: the tabbed SSH terminal (one session per tab, at most three) plus the confirmed device actions with an audit trail, and device identity/removal
 - `DeviceModal.svelte`: device detail; still owns the Files / Packages / Saves / Notes / Docker / Security tabs, and can render inline via `variant="page"` rather than as a popup
 - `DockerTab.svelte`, `components/docker/`: container management (live list, large tabbed side panel with streaming metrics, start/stop/restart/pause/unpause/kill/remove, exec, compose editor, prune). `lib/docker.ts` owns the wire-shape normalisation and filters; `lib/docker-client.ts` owns the command queue, result polling and live state stream.
 - `SecurityTab.svelte`: Lynis security audit runner, hardening index gauge, warnings/suggestions, history
@@ -79,7 +79,7 @@ Key UI components:
 - `NotificationsModal.svelte`: notification provider settings and inbox
 - `NotificationToast.svelte`: real-time toast notifications via SSE
 
-**Status:** the shell and every fleet and device screen are implemented. A few screens render honest "not collected yet" states for the parts whose API does not exist: `Services` (systemd units, open ports), the pending-updates half of `Packages`, and the SMART half of `Storage`. `RemoteAccess` hosts the SSH terminal (over the remote-access tunnel) and the confirmed device actions (reboot / update-packages / restart-agent). Those are marked in the UI with the missing endpoint, and `lib/flags.ts` (`VITE_MOCK_*`) can swap in labelled sample data for layout review. `cpu`, `memory`, `network` and `sensors` currently all resolve to the same `DeviceOverview`; `containers` resolves to the dedicated Docker screen and `security` to the dedicated Security screen. `logs` is a dedicated screen (`DeviceLogs`) that the sidebar section and the modal tab both render.
+**Status:** the shell and every fleet and device screen are implemented. A few screens render honest "not collected yet" states for the parts whose API does not exist: `Services` (systemd units, open ports), the pending-updates half of `Packages`, and the SMART half of `Storage`. `RemoteAccess` hosts the tabbed SSH terminal (up to three concurrent sessions over the remote-access tunnel, one per tab) and the confirmed device actions (reboot / update-packages / restart-agent). Those are marked in the UI with the missing endpoint, and `lib/flags.ts` (`VITE_MOCK_*`) can swap in labelled sample data for layout review. `cpu`, `memory`, `network` and `sensors` currently all resolve to the same `DeviceOverview`; `containers` resolves to the dedicated Docker screen and `security` to the dedicated Security screen. `logs` is a dedicated screen (`DeviceLogs`) that the sidebar section and the modal tab both render.
 
 Note that `svelte-check` does not reliably catch malformed Svelte block structure in this repo; `vite build` is the trustworthy gate for template changes.
 
@@ -126,7 +126,7 @@ Note that `svelte-check` does not reliably catch malformed Svelte block structur
 - device notes and attachments
 - notification provider configuration and inbox
 - real-time notification push via SSE
-- the **Remote access** screen: an SSH terminal (xterm.js) plus the device action commands and the recent-session audit list
+- the **Remote access** screen: an SSH terminal (xterm.js) with up to three tabbed sessions plus the device action commands and the recent-session audit list
 
 ## Communication
 

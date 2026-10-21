@@ -11,6 +11,16 @@ version, and a breaking change increases the major version.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-20
+
+### Added
+
+- **A tab per terminal session in Remote access.** Up to three SSH sessions can
+  be open at once — the server's documented limit per device — each in its own
+  tab with its own account, ticket and connection. Switching tabs keeps every
+  session alive, closing one tab ends only that session, and a refused ticket
+  is reported inside its own tab instead of replacing the screen.
+
 ## [0.12.0] - 2026-10-19
 
 ### Changed
