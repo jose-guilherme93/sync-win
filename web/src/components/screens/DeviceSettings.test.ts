@@ -41,6 +41,9 @@ describe('DeviceSettings screen', () => {
 
     render(DeviceSettings, { props: { device, authHeaders: { Authorization: 'Bearer session' }, onRemove: vi.fn() } })
 
+    expect(screen.getByRole('heading', { name: 'Maintenance' })).toBeTruthy()
+    expect(screen.getAllByRole('button', { name: 'Run…' })).toHaveLength(3)
+
     const name = await screen.findByLabelText('Display name') as HTMLInputElement
     const tags = screen.getByLabelText('Tags comma separated') as HTMLInputElement
     const interval = screen.getByLabelText('Collection interval') as HTMLSelectElement

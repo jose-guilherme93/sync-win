@@ -39,6 +39,10 @@ version, and a breaking change increases the major version.
 
 ### Changed
 
+- **The Remote access screen is organized around the terminal.** The session
+  audit moved into a scrollable side panel that matches the terminal's height,
+  so it can no longer grow the page, and the fixed device actions (restart
+  agent, package updates, reboot) moved to Device settings → Maintenance.
 - **The full test device supports real Remote access sessions.** The Ubuntu
   container now ships sshd, a `devuser` account and the remote-access helper,
   and its local policy allows that account, so `make dev-agents-full` is enough

@@ -70,6 +70,22 @@ Scrolling does not change it because the offset is taken inside the scroll
 content. Measured 640px at 879×854 and 363px at 1280×577, both ending above the
 scroll area's bottom.
 
+## Follow-up: screen organized around the terminal
+
+The audit list moved out of the scrolling page into a fixed side panel. The
+layout reserves 272px on the right and absolutely positions the aside to the
+row, because a long audit list as a normal grid item stretched the row (the
+terminal card reached ~2,000px tall). The terminal card owns the height and the
+side panel fills it; the list scrolls internally. Below 760px the panel stacks
+under the terminal with a 220px cap.
+
+The fixed device actions (restart agent, package updates, reboot) and their
+result log were removed from Remote access and extracted into
+`components/device/DeviceActions.svelte`, rendered by Device Settings →
+Maintenance. The old cards stretched the page and the actions are gated by
+server and device policy, which the Settings note states. Tests moved with the
+component; the e2e now asserts the actions in Settings.
+
 ## Verification
 
 - `web`: 25 files / 239 tests, including 10 new pure tab tests and 21

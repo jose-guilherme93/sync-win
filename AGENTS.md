@@ -40,7 +40,7 @@ The project is built around three main components:
    - shows online devices, last sync time, live hardware telemetry charts
    - device screens rendered inline by the shell: Overview, CPU & Thermal, Memory, Storage, Network, All sensors, Services (services and ports side by side with a detail drawer), Docker, Security (audit history plus host posture), Processes, Packages, Logs, Remote access, Settings
    - Docker container management (list, start/stop/restart/kill/remove, exec, compose, prune)
-   - Remote access screen: tabbed SSH terminal (xterm.js, up to six concurrent sessions, tabs named by the running program) plus device actions and a recent-session audit list
+   - Remote access screen: tabbed SSH terminal (xterm.js, up to six concurrent sessions, tabs named by the running program) and a scrollable recent-session audit; device actions live in Settings → Maintenance
    - Lynis security audit: run audit, read the stored report (hardening index, warnings/suggestions/categories) and history; host posture (public listeners, pending updates, failed units)
    - fleet-wide Administration → Settings screen: the application log viewer (filter by level, category, device, time window; live tail; metadata detail) plus the log level and retention controls
    - notification settings and inbox with real-time SSE push

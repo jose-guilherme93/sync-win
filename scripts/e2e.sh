@@ -634,11 +634,10 @@ else
   fail "storage screen names the missing SMART data" "no SMART reference in: ${STORAGE_TEXT:0:120}"
 fi
 
-# Remote access: the screen hosts both the SSH terminal and the device actions.
-# The actions must be listed with their policy conditions (server flag + local
-# policy), and the terminal controls must render. The live session itself needs
-# a real agent on a real machine, so it is exercised by the remote-access e2e,
-# not here.
+# Remote access: the terminal and its session audit live here; the confirmed
+# device actions moved to Device settings. The live session itself needs a real
+# agent on a real machine, so it is exercised by the remote-access e2e, not
+# here.
 click_text 'Remote access' >/dev/null
 sleep 2
 REMOTE_TEXT=$(unquote "$(eval_js "(()=>{const m=document.querySelector('main')||document.body;return m.innerText.replace(/\s+/g,' ');})()")")
@@ -646,11 +645,6 @@ if [[ "${REMOTE_TEXT}" == *"SSH terminal"* && "${REMOTE_TEXT}" == *"/6"* ]]; the
   ok "remote access screen renders the SSH terminal"
 else
   fail "remote access screen renders the SSH terminal" "${REMOTE_TEXT:0:200}"
-fi
-if [[ "${REMOTE_TEXT}" == *"Restart agent"* && "${REMOTE_TEXT}" == *"Apply package updates"* && "${REMOTE_TEXT}" == *"Reboot device"* && "${REMOTE_TEXT}" == *"local policy"* ]]; then
-  ok "remote access screen lists the actions and their policy conditions"
-else
-  fail "remote access screen lists the actions and their policy conditions" "${REMOTE_TEXT:0:200}"
 fi
 
 # Terminal tabs. Opening a terminal must create its own tab, and a refused
@@ -673,6 +667,17 @@ CLOSED=$(unquote "$(eval_js "(()=>{const b=[...document.querySelectorAll('button
 check "remote access closes a terminal tab" "${CLOSED}" "CLOSED"
 TABS_LEFT=$(wait_for "0" "document.querySelectorAll('[role=tab]').length" 6)
 check "closing the last terminal restores the empty state" "${TABS_LEFT}" "0"
+
+# Device maintenance belongs in Settings, not under the terminal. The fixed
+# actions must be listed there with their policy conditions.
+click_text 'Settings' >/dev/null
+sleep 2
+SETTINGS_TEXT=$(unquote "$(eval_js "(()=>{const m=document.querySelector('main')||document.body;return m.innerText.replace(/\s+/g,' ');})()")")
+if [[ "${SETTINGS_TEXT}" == *"Restart agent"* && "${SETTINGS_TEXT}" == *"Apply package updates"* && "${SETTINGS_TEXT}" == *"Reboot device"* && "${SETTINGS_TEXT}" == *"local policy"* ]]; then
+  ok "device maintenance lives in Settings with its policy conditions"
+else
+  fail "device maintenance lives in Settings with its policy conditions" "${SETTINGS_TEXT:0:200}"
+fi
 
 # ---------------------------------------------------------------------------
 section "Fleet overview"
