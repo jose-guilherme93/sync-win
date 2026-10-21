@@ -118,6 +118,10 @@ not need CORS.
 
 - The production dashboard is served from the same origin as the API (no CORS issues).
 - For development, CORS headers are configured for the Vite dev server.
+- The browser-terminal WebSocket checks Origin against the request Host and the
+  configured CORS origins. In development it also accepts the Origin the
+  browser reports, because the Vite proxy rewrites Host; a dashboard opened by
+  LAN IP or Tailscale name would otherwise be refused. Production does not.
 
 ### Rate limiting
 

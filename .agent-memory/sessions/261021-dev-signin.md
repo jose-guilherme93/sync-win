@@ -62,6 +62,13 @@ status: active
   used it, so the new Dockerfile was silently ignored and the container had no
   sshd at all.
 
+One more gate appeared after that: a dashboard opened at
+`http://100.115.101.127:5273` got `403` on `/terminal`. The Vite proxy rewrites
+Host to the compose service, and the WebSocket allowlist held only that host
+plus the localhost CORS origins. In development the browser's own Origin host is
+now appended to the allowlist; production keeps the explicit check. Verified
+from the Tailscale IP: the session connected and printed the Ubuntu MOTD.
+
 ## To test a worktree against the real dev data
 
 The compose bind is relative to the compose file, so point `data-dev` at the

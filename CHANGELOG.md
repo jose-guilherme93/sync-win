@@ -26,6 +26,14 @@ version, and a breaking change increases the major version.
   session alive, closing one tab ends only that session, and a refused ticket
   is reported inside its own tab instead of replacing the screen.
 
+### Fixed
+
+- **Remote access works when the dev dashboard is opened by IP or a Tailscale
+  name.** The terminal WebSocket only accepted the Vite proxy's rewritten Host
+  and the localhost CORS origins, so a LAN browser got "The session connection
+  failed". Development now also accepts the Origin the browser reports;
+  production keeps the explicit Host/CORS check.
+
 ### Changed
 
 - **The full test device supports real Remote access sessions.** The Ubuntu
