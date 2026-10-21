@@ -86,6 +86,18 @@ Maintenance. The old cards stretched the page and the actions are gated by
 server and device policy, which the Settings note states. Tests moved with the
 component; the e2e now asserts the actions in Settings.
 
+## Follow-up: global dark scrollbars
+
+`lib/theme.css` now declares `color-scheme: dark` and one scrollbar treatment
+for every element: thin, transparent track, a 10px rounded thumb tinted
+`--scrollbar-thumb`, brighter on hover, with the Firefox `scrollbar-color` path
+alongside the WebKit pseudo-elements. The xterm terminal receives matching
+`scrollbarSlider*` theme colours because it draws its own slider.
+
+Checked in the browser: computed pseudo styles report a 10px bar and
+`rgb(43, 43, 49)` thumb; headless Chrome uses overlay scrollbars, so the bar is
+not visible in screenshots even though the rule is applied.
+
 ## Verification
 
 - `web`: 25 files / 239 tests, including 10 new pure tab tests and 21

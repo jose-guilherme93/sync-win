@@ -31,6 +31,9 @@ version, and a breaking change increases the major version.
 
 ### Fixed
 
+- **Scrollbars match the dark theme.** Every scroll container — pages, panels,
+  drawers, log viewers — uses a thin, rounded, low-contrast thumb instead of the
+  browser's light bar. The terminal's own xterm slider uses the same muted range.
 - **Remote access works when the dev dashboard is opened by IP or a Tailscale
   name.** The terminal WebSocket only accepted the Vite proxy's rewritten Host
   and the localhost CORS origins, so a LAN browser got "The session connection

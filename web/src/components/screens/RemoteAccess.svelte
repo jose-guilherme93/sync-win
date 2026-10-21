@@ -168,7 +168,19 @@
   // One xterm instance per pane. The pane element is keyed by tab, so a tab
   // keeps its renderer (and its scrollback) for as long as it exists.
   function mountTerminal(el: HTMLDivElement, tabId: string) {
-    const term = new Terminal({ cursorBlink: true, fontFamily: 'monospace', fontSize: 13, theme: { background: '#0b0f12' } })
+    const term = new Terminal({
+      cursorBlink: true,
+      fontFamily: 'monospace',
+      fontSize: 13,
+      theme: {
+        background: '#0b0f12',
+        // xterm draws its own scrollbar; keep it in the same muted range as
+        // the native bars styled in lib/theme.css.
+        scrollbarSliderBackground: 'rgba(148, 163, 184, 0.22)',
+        scrollbarSliderHoverBackground: 'rgba(148, 163, 184, 0.38)',
+        scrollbarSliderActiveBackground: 'rgba(148, 163, 184, 0.5)'
+      }
+    })
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
     term.open(el)
