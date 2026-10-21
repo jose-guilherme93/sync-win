@@ -2,12 +2,11 @@
   import { onDestroy } from 'svelte'
   import { deviceHistoryStore, type ChartPoint } from '../../lib/telemetry-store'
   import { apiFetch, apiURL } from '../../lib/api'
-  import { memoryPercent, swapPercent, type Device, type DiskPartition } from '../../lib/types'
+  import { swapPercent, type Device } from '../../lib/types'
   import { formatBytes, formatDuration, formatRate, formatRelative, severityFor } from '../../lib/format'
   import { selectedRange, rangeById, DEFAULT_RANGE, type RangeId } from '../../lib/timerange'
-  import { normalizeHistory, pointValues, seriesStats, seriesValues } from '../../lib/telemetry-history'
+  import { normalizeHistory, pointValues } from '../../lib/telemetry-history'
   import { generateInsights } from '../../lib/insights'
-  import StatCard from '../ui/StatCard.svelte'
   import TimeSeriesChart, { type ChartSeries } from '../ui/TimeSeriesChart.svelte'
   import SeverityBadge from '../ui/SeverityBadge.svelte'
   import Skeleton from '../ui/Skeleton.svelte'
@@ -111,16 +110,6 @@
   $: readGap = pointValues(points, 'diskRead')
   $: writeGap = pointValues(points, 'diskWrite')
 
-  $: cpuSeries = seriesValues(points, 'cpu')
-  $: memSeries = seriesValues(points, 'memory')
-  $: tempSeries = seriesValues(points, 'temp')
-  $: diskSeries = seriesValues(points, 'disk')
-
-  $: cpuStats = seriesStats(cpuSeries)
-  $: memStats = seriesStats(memSeries)
-  $: tempStats = seriesStats(tempSeries)
-  $: diskStats = seriesStats(diskSeries)
-
   let showCpu = true
   let showMem = true
   let showTemp = true
@@ -163,10 +152,6 @@
   $: disks = (hw?.disk_partitions ?? [])
     .filter((part) => part.total_bytes > 0)
     .sort((a, b) => b.used_percent - a.used_percent)
-  $: primary = disks.find((part) => part.mount === '/')
-    ?? disks.reduce<DiskPartition | null>((largest, part) =>
-      !largest || part.total_bytes > largest.total_bytes ? part : largest, null)
-
   $: ifaces = (hw?.network_ifaces ?? [])
     .filter((iface) => (iface.rx_rate || 0) > 0 || (iface.tx_rate || 0) > 0 || iface.rx_errors > 0 || iface.tx_errors > 0)
     .slice(0, 4)
@@ -176,7 +161,6 @@
   $: insights = generateInsights(hw)
   $: critical = insights.filter((insight) => insight.type === 'crit').length
   $: warnings = insights.filter((insight) => insight.type === 'warn').length
-  $: temp = hw?.cpu_temperature != null && hw.cpu_temperature > 0 ? hw.cpu_temperature : null
   $: clockMhz = hw?.cpu_clock_mhz ?? 0
   $: clock = clockMhz >= 1000 ? `${(clockMhz / 1000).toFixed(2)} GHz` : clockMhz > 0 ? `${clockMhz.toFixed(0)} MHz` : '—'
   $: swapTotal = hw?.swap_total_bytes ?? 0
@@ -205,63 +189,6 @@
           {critical} critical · {warnings} warning{warnings === 1 ? '' : 's'}
         </span>
       {/if}
-    </div>
-
-    <div class="vitals">
-      <div data-vital="cpu">
-        <StatCard
-          label="CPU"
-          value={hw.cpu_usage_percent.toFixed(0)}
-          unit="%"
-          sub={load1 != null ? `load ${load1.toFixed(2)} · ${cores.length} cores` : `${cores.length} cores`}
-          avg={cpuStats?.avg ?? null}
-          min={cpuStats?.min ?? null}
-          max={cpuStats?.max ?? null}
-          series={cpuSeries}
-          seriesColor="var(--accent)"
-        />
-      </div>
-      <div data-vital="memory">
-        <StatCard
-          label="Memory"
-          value={memoryPercent(hw).toFixed(0)}
-          unit="%"
-          sub={`${formatBytes(hw.memory_used_bytes)} / ${formatBytes(hw.memory_total_bytes)}`}
-          avg={memStats?.avg ?? null}
-          min={memStats?.min ?? null}
-          max={memStats?.max ?? null}
-          series={memSeries}
-          seriesColor="var(--series-1)"
-        />
-      </div>
-      <div data-vital="disk">
-        <StatCard
-          label="Disk"
-          value={primary ? primary.used_percent.toFixed(0) : null}
-          unit="%"
-          present={primary != null}
-          sub={primary ? `${formatBytes(primary.used_bytes)} / ${formatBytes(primary.total_bytes)}` : 'no partition reported'}
-          avg={diskStats?.avg ?? null}
-          min={diskStats?.min ?? null}
-          max={diskStats?.max ?? null}
-          series={diskSeries}
-          seriesColor="var(--series-2)"
-        />
-      </div>
-      <div data-vital="temperature">
-        <StatCard
-          label="Temperature"
-          value={temp != null ? temp.toFixed(0) : null}
-          unit="°C"
-          present={temp != null}
-          sub={hw.gpu_temperature_celsius != null && hw.gpu_temperature_celsius > 0 ? `GPU ${hw.gpu_temperature_celsius.toFixed(0)}°C` : hw.cpu_clock_mhz ? clock : 'no sensor'}
-          avg={tempStats?.avg ?? null}
-          min={tempStats?.min ?? null}
-          max={tempStats?.max ?? null}
-          series={tempSeries}
-          seriesColor="var(--series-3)"
-        />
-      </div>
     </div>
 
     <article class="card chart-card">
@@ -472,12 +399,6 @@
   }
   .strip-alert { display: inline-flex; align-items: center; gap: 0.35rem; color: var(--text-muted); }
 
-  .vitals {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 0.75rem;
-  }
-
   .card {
     background: var(--card);
     border: 1px solid var(--border);
@@ -625,11 +546,4 @@
   .text-warn { color: var(--warn) !important; }
   .text-crit { color: var(--crit) !important; }
 
-  @media (max-width: 1100px) {
-    .vitals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  }
-
-  @media (max-width: 560px) {
-    .vitals { grid-template-columns: 1fr; }
-  }
 </style>

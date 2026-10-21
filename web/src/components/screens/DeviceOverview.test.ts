@@ -2,7 +2,7 @@ import { cleanup, render, screen } from '@testing-library/svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Chart.js needs a real canvas, and the assertions below are about the numbers
-// around the chart (vitals, legend statistics).
+// around the chart (legend statistics, section order).
 vi.mock('chart.js', () => ({
   Chart: class {
     static register() {}
@@ -76,31 +76,19 @@ describe('DeviceOverview', () => {
     vi.unstubAllGlobals()
   })
 
-  it('shows a vital card per headline metric with average, min and max', async () => {
+  it('starts at the Performance chart without repeating the headline metrics', async () => {
     render(DeviceOverview, { props: { device: device as any } })
 
-    // The period statistics depend on the history fetch; the legend appearing
-    // means those samples have landed.
+    expect(await screen.findByRole('heading', { name: 'Performance' })).toBeTruthy()
     expect(await screen.findByText(/ø 20%/)).toBeTruthy()
-
-    const cpu = document.querySelector('[data-vital="cpu"]')
-    expect(cpu?.textContent).toContain('21')
-    expect(cpu?.textContent).toContain('ø 20')
-    expect(cpu?.textContent).toContain('↓ 10')
-    expect(cpu?.textContent).toContain('↑ 30')
-
-    const memory = document.querySelector('[data-vital="memory"]')
-    expect(memory?.textContent).toContain('25')
-
-    const disk = document.querySelector('[data-vital="disk"]')
-    expect(disk?.textContent).toContain('55')
+    // CPU, memory and disk live in the chart and its legend, not in a second
+    // row of cards above it.
+    expect(document.querySelector('[data-vital]')).toBeNull()
   })
 
   it('treats a missing temperature sensor as absent, not as 0°C', async () => {
     render(DeviceOverview, { props: { device: device as any } })
 
-    const temperature = document.querySelector('[data-vital="temperature"]')
-    expect(temperature?.textContent).toContain('—')
     const toggle = screen.getByRole('button', { name: 'Temp' }) as HTMLButtonElement
     expect(toggle.disabled).toBe(true)
   })

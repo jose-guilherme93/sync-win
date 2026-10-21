@@ -15,8 +15,7 @@ version, and a breaking change increases the major version.
 
 ### Added
 
-- **The device Overview is a full dashboard.** Four vital cards (CPU, memory,
-  disk, temperature) show current plus average/min/max. A Performance chart
+- **The device Overview is a full dashboard.** The Performance chart
   plots CPU, memory and temperature with toggles, a percentage axis, a right
   temperature axis, time ticks, hover values, and a legend with each series'
   last/average/min/max; Network and Disk I/O get their own charts with the same
