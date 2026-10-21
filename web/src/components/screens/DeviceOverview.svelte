@@ -284,7 +284,7 @@
         rightUnit="°C"
         leftMax={100}
         rightMax={100}
-        height={260}
+        height={360}
         emptyMessage={isLive
           ? 'The chart appears once at least two live samples have been collected.'
           : 'No server-side samples exist for this window yet.'}
@@ -301,7 +301,7 @@
           series={networkSeries}
           leftUnit=""
           leftFormat={formatRate}
-          height={170}
+          height={240}
           emptyMessage="No network samples in this window."
         />
       </article>
@@ -315,7 +315,7 @@
           series={diskIoSeries}
           leftUnit=""
           leftFormat={formatRate}
-          height={170}
+          height={240}
           emptyMessage={isLive
             ? 'Disk I/O appears once two live samples have been collected.'
             : 'Disk I/O history is only kept in the live window; longer ranges aggregate CPU, memory, network and temperature.'}
