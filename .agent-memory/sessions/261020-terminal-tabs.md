@@ -60,6 +60,16 @@ and the active tab scrolled into view. The `Connecting…` line written into the
 terminal was removed — status lives in the tab dot and the header count, so no
 stale line survives a successful connection.
 
+## Follow-up: height follows the available space
+
+The terminal no longer guesses with `100dvh - N`: that guess ignored the topbar,
+screen header, alerts and tab strip and left the pane below the fold. On mount,
+resize and tab changes the screen measures the active pane's position inside
+`main.content` and sets the height to the remaining space (minimum 240px).
+Scrolling does not change it because the offset is taken inside the scroll
+content. Measured 640px at 879×854 and 363px at 1280×577, both ending above the
+scroll area's bottom.
+
 ## Verification
 
 - `web`: 25 files / 239 tests, including 10 new pure tab tests and 21

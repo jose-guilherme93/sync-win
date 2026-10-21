@@ -124,16 +124,54 @@
       remoteInfoError = e instanceof Error ? e.message : 'Unable to load remote access state'
     }
     await loadSessions()
+    remeasureAfterRender()
+  }
+
+  // The terminal fills the part of the scroll area below its own top instead of
+  // using a viewport guess: a topbar, a screen header, alerts and the tab strip
+  // all change that offset. Measured against the scroll container so scrolling
+  // does not resize it.
+  let termHeight = 0
+  let measureObserver: ResizeObserver | null = null
+
+  function measureTerminal() {
+    const main = document.querySelector<HTMLElement>('main.content')
+    const pane = (activeTabId ? live.get(activeTabId)?.el : null)
+      ?? document.querySelector<HTMLElement>('.terminal-card .terminal')
+    if (!main || !pane) return
+    const mainRect = main.getBoundingClientRect()
+    const paneRect = pane.getBoundingClientRect()
+    const topInContent = paneRect.top - mainRect.top + main.scrollTop
+    termHeight = Math.max(240, Math.floor(main.clientHeight - topInContent - 24))
+  }
+
+  function remeasureAfterRender() {
+    void tick().then(measureTerminal)
   }
 
   // Poll the reported state so a device that has just been enabled locally stops
   // reading as "off". The agent re-reports within a few seconds of the change.
   onMount(() => {
     void loadRemoteInfo()
+    remeasureAfterRender()
     const timer = setInterval(() => {
       if (connectedCount === 0) void loadRemoteInfo()
     }, 10000)
-    return () => clearInterval(timer)
+    const onResize = () => measureTerminal()
+    window.addEventListener('resize', onResize)
+    if (typeof ResizeObserver !== 'undefined') {
+      // Notices and alerts change the terminal's top without resizing the pane.
+      const main = document.querySelector('main.content')
+      if (main) {
+        measureObserver = new ResizeObserver(() => measureTerminal())
+        measureObserver.observe(main)
+      }
+    }
+    return () => {
+      clearInterval(timer)
+      window.removeEventListener('resize', onResize)
+      measureObserver?.disconnect()
+    }
   })
 
   function findTab(id: string): TerminalTab | null {
@@ -253,6 +291,7 @@
     activeTabId = id
     // Let the new pane mount before the session starts so it gets the real size.
     await tick()
+    remeasureAfterRender()
     void revealTab(id)
     await connectTab(id)
   }
@@ -283,6 +322,7 @@
     } catch (e) {
       if (!live.has(id)) return
       updateTab(id, { status: 'error', error: e instanceof Error ? e.message : 'Unable to start the session' })
+      remeasureAfterRender()
     }
   }
 
@@ -309,6 +349,7 @@
     ws.onerror = () => {
       if (session.socket !== ws) return
       updateTab(id, { status: 'error', error: 'The session connection failed' })
+      remeasureAfterRender()
     }
     ws.onclose = (event) => {
       if (session.socket === ws) session.socket = null
@@ -333,6 +374,7 @@
     fitSession(id)
     sendResize(id)
     live.get(id)?.term.focus()
+    remeasureAfterRender()
     void revealTab(id)
   }
 
@@ -350,6 +392,7 @@
       fitSession(activeTabId)
       sendResize(activeTabId)
       live.get(activeTabId)?.term.focus()
+      remeasureAfterRender()
       void revealTab(activeTabId)
     }
   }
@@ -557,7 +600,7 @@
       <div class="error" role="alert">{activeTab.error}</div>
     {/if}
     {#if tabs.length === 0}
-      <div class="terminal empty-terminal">
+      <div class="terminal empty-terminal" style:height={termHeight ? `${termHeight}px` : null}>
         No terminal open. Press + to start one.
       </div>
     {:else}
@@ -568,6 +611,7 @@
           id={`term-panel-${tab.id}`}
           role="tabpanel"
           aria-labelledby={`term-tab-${tab.id}`}
+          style:height={termHeight ? `${termHeight}px` : null}
           use:mountTerminal={tab.id}
         ></div>
       {/each}
@@ -703,19 +747,14 @@
     color: var(--text);
   }
   .terminal {
-    /* Fill most of the viewport height (minus the topbar, screen header and
-       the tab strip) and stay drag-resizable. The ResizeObserver refits the
-       active terminal on resize. */
-    /* The vh line is the fallback; dvh overrides it on browsers that support
-       it. If dvh were the only rule, an older browser would drop the whole
-       declaration and the terminal would collapse to its content height. */
-    height: calc(100vh - 175px);
-    height: calc(100dvh - 175px);
-    min-height: 520px;
+    /* termHeight (measured against the scroll area) sets the real height; this
+       is only the pre-measurement fallback. */
+    height: calc(100vh - 260px);
+    height: calc(100dvh - 260px);
+    min-height: 240px;
     margin-top: 0;
     padding: 0.4rem;
     overflow: hidden;
-    resize: vertical;
     border: 1px solid var(--border);
     border-style: none solid solid;
     border-radius: 0 0 var(--radius-sm) var(--radius-sm);
