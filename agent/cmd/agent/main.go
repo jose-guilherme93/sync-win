@@ -514,6 +514,9 @@ type telemetryStats struct {
 	CPUCoreUsage       []float64         `json:"cpu_core_usage,omitempty"`
 	TopCPUProcesses    []processInfo     `json:"top_cpu_processes,omitempty"`
 	TopMemProcesses    []processInfo     `json:"top_mem_processes,omitempty"`
+	StoppedProcesses   []processInfo     `json:"stopped_processes,omitempty"`
+	ZombieProcesses    []processInfo     `json:"zombie_processes,omitempty"`
+	ProcessSummary     *processSummary   `json:"process_summary,omitempty"`
 	DockerAvailable    bool              `json:"docker_available"`
 	DockerContainers   []dockerContainer `json:"docker_containers,omitempty"`
 	// True only on the cycles that actually listed containers. Without it the
@@ -542,10 +545,28 @@ type diskPartition struct {
 }
 
 type processInfo struct {
-	PID         int     `json:"pid"`
-	Name        string  `json:"name"`
-	CPUPercent  float64 `json:"cpu_percent"`
-	MemRSSBytes uint64  `json:"mem_rss_bytes"`
+	PID            int     `json:"pid"`
+	PPID           int     `json:"ppid,omitempty"`
+	Name           string  `json:"name"`
+	User           string  `json:"user,omitempty"`
+	State          string  `json:"state,omitempty"`
+	CPUPercent     float64 `json:"cpu_percent"`
+	MemRSSBytes    uint64  `json:"mem_rss_bytes"`
+	MemVirtBytes   uint64  `json:"mem_virt_bytes,omitempty"`
+	Threads        int     `json:"threads,omitempty"`
+	ElapsedSeconds int64   `json:"elapsed_seconds,omitempty"`
+	Command        string  `json:"command,omitempty"`
+}
+
+type processSummary struct {
+	Total     int `json:"total"`
+	Running   int `json:"running"`
+	Sleeping  int `json:"sleeping"`
+	DiskSleep int `json:"disk_sleep"`
+	Stopped   int `json:"stopped"`
+	Zombie    int `json:"zombie"`
+	Other     int `json:"other"`
+	Threads   int `json:"threads"`
 }
 
 type deviceLog struct {
@@ -1670,18 +1691,21 @@ func collectHardwareStats(prev *hardwareSample, now time.Time, sampleDocker bool
 		memExpanded = collectors.CollectMemoryExpanded()
 	}()
 
-	// Top processes. CPU percentages are deltas against the previous sample, so
-	// the previous jiffies and the elapsed wall time are required.
-	var topCPU, topMem []collectors.ProcessInfo
+	// Processes. CPU percentages are deltas against the previous sample, so the
+	// previous jiffies and the elapsed wall time are required. The collector
+	// reads one /proc/<pid>/stat per process and enriches only the reported
+	// rows, so the richer snapshot is not a heavier cycle.
+	var procSnapshot collectors.ProcessSnapshot
 	var newProcSample collectors.ProcessCPUSample
 	procElapsed := now.Sub(prev.At)
 	if prev.At.IsZero() {
 		procElapsed = 0
 	}
+	topLimit, problemLimit, cmdlineChars := syncwinContract.ProcessLimits()
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		topCPU, topMem, newProcSample = collectors.CollectTopProcesses(10, runtime.NumCPU(), prev.Processes, procElapsed)
+		procSnapshot, newProcSample = collectors.CollectProcesses(topLimit, problemLimit, cmdlineChars, runtime.NumCPU(), prev.Processes, procElapsed)
 	}()
 
 	// System info (file reads)
@@ -1846,22 +1870,44 @@ func collectHardwareStats(prev *hardwareSample, now time.Time, sampleDocker bool
 		})
 	}
 
-	// Top processes
-	for _, p := range topCPU {
-		stats.TopCPUProcesses = append(stats.TopCPUProcesses, processInfo{
-			PID:         p.PID,
-			Name:        p.Name,
-			CPUPercent:  p.CPUPercent,
-			MemRSSBytes: p.MemRSS,
-		})
+	// Processes: top consumers plus the problem states, with the full state
+	// tally so the tab never presents a sample as the whole machine.
+	toProcessInfo := func(p collectors.ProcessInfo) processInfo {
+		return processInfo{
+			PID:            p.PID,
+			PPID:           p.PPID,
+			Name:           p.Name,
+			User:           p.User,
+			State:          p.State,
+			CPUPercent:     p.CPUPercent,
+			MemRSSBytes:    p.MemRSS,
+			MemVirtBytes:   p.MemVirt,
+			Threads:        p.Threads,
+			ElapsedSeconds: p.ElapsedSeconds,
+			Command:        p.Command,
+		}
 	}
-	for _, p := range topMem {
-		stats.TopMemProcesses = append(stats.TopMemProcesses, processInfo{
-			PID:         p.PID,
-			Name:        p.Name,
-			CPUPercent:  p.CPUPercent,
-			MemRSSBytes: p.MemRSS,
-		})
+	for _, p := range procSnapshot.ByCPU {
+		stats.TopCPUProcesses = append(stats.TopCPUProcesses, toProcessInfo(p))
+	}
+	for _, p := range procSnapshot.ByMem {
+		stats.TopMemProcesses = append(stats.TopMemProcesses, toProcessInfo(p))
+	}
+	for _, p := range procSnapshot.Stopped {
+		stats.StoppedProcesses = append(stats.StoppedProcesses, toProcessInfo(p))
+	}
+	for _, p := range procSnapshot.Zombies {
+		stats.ZombieProcesses = append(stats.ZombieProcesses, toProcessInfo(p))
+	}
+	stats.ProcessSummary = &processSummary{
+		Total:     procSnapshot.Summary.Total,
+		Running:   procSnapshot.Summary.Running,
+		Sleeping:  procSnapshot.Summary.Sleeping,
+		DiskSleep: procSnapshot.Summary.DiskSleep,
+		Stopped:   procSnapshot.Summary.Stopped,
+		Zombie:    procSnapshot.Summary.Zombie,
+		Other:     procSnapshot.Summary.Other,
+		Threads:   procSnapshot.Summary.Threads,
 	}
 
 	// Compute network rates (needs previous state) and the totals the dashboard

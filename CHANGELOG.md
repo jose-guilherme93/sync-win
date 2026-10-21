@@ -239,6 +239,14 @@ request publishes the image and creates the tag.
 
 ### Added
 
+- **The Processes tab can diagnose the machine, not just rank it.** A full
+  state tally (total, running, sleeping, disk-sleep, stopped, zombie, threads)
+  sits above a sortable, searchable table of the reported top consumers plus
+  every stopped and zombie row. Rows carry PID/PPID, user, command, state,
+  CPU share, RSS and virtual memory, threads and age; selecting one opens the
+  full command and an explanation of its state. The agent now reads one
+  `/proc/<pid>/stat` per process (cheaper than the old comm+status+stat pass)
+  and enriches only the rows it sends, with caps declared in the contract.
 - **The device Overview is a full dashboard.** The Performance chart
   plots CPU, memory and temperature with toggles, a percentage axis, a right
   temperature axis, time ticks, hover values, and a legend with each series'
