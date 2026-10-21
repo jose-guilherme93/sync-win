@@ -274,19 +274,21 @@
   .usage-track {
     display: block;
     height: 0.7rem;
-    border-radius: var(--radius-pill);
-    background: var(--bg-elev);
+    border-radius: 0;
+    background: var(--card-inset);
     overflow: hidden;
   }
   .usage-track i {
     display: block;
     height: 100%;
-    border-radius: inherit;
-    background: var(--accent);
+    border-radius: 0;
+    /* Solid, muted fill: mixed with the surface instead of the saturated
+       accent, so the bars read as matte rather than neon. */
+    background: color-mix(in srgb, var(--accent) 65%, var(--card));
   }
-  .usage-item.warn .usage-track i { background: var(--warn); }
+  .usage-item.warn .usage-track i { background: color-mix(in srgb, var(--warn) 65%, var(--card)); }
   .usage-item.warn .usage-top b { color: var(--warn); }
-  .usage-item.crit .usage-track i { background: var(--crit); }
+  .usage-item.crit .usage-track i { background: color-mix(in srgb, var(--crit) 65%, var(--card)); }
   .usage-item.crit .usage-top b { color: var(--crit); }
 
   .health {

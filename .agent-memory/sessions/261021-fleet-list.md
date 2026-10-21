@@ -50,3 +50,5 @@ class name is used deliberately.
 - Browser: checked at 879×854 and 400×800; no horizontal overflow, the meters
   render with labels and values inside the row; the bar itself is 0.7rem tall
   (≈11px), matching the value font size rather than a hairline 4px track.
+  The bars are square (no radius) and their fill is mixed 65% with the card
+  surface, so healthy/warn/crit read as matte instead of neon.
