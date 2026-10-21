@@ -11,6 +11,15 @@ version, and a breaking change increases the major version.
 
 ## [Unreleased]
 
+## [0.13.2] - 2026-10-21
+
+### Fixed
+
+- **Main cannot be released with a red CI.** The Release workflow now starts
+  from a successful CI run on the merge commit instead of the push itself, so a
+  failing test blocks the image and the tag. `main` is protected: changes go
+  through a pull request with every CI check required, administrators included.
+
 ## [0.13.1] - 2026-10-21
 
 ### Fixed
