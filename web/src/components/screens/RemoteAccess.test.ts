@@ -14,6 +14,7 @@ vi.mock('@xterm/xterm', () => ({
     rows = 32
     writes: string[] = []
     dataHandler: ((data: string) => void) | null = null
+    titleHandler: ((title: string) => void) | null = null
     focused = false
     disposed = false
     constructor() {
@@ -23,6 +24,9 @@ vi.mock('@xterm/xterm', () => ({
     open() {}
     onData(handler: (data: string) => void) {
       this.dataHandler = handler
+    }
+    onTitleChange(handler: (title: string) => void) {
+      this.titleHandler = handler
     }
     write(data: string | Uint8Array) {
       this.writes.push(typeof data === 'string' ? data : '<bytes>')
@@ -109,7 +113,7 @@ class FakeSocket {
   sent: any[] = []
   closed = false
   onopen: (() => void) | null = null
-  onclose: (() => void) | null = null
+  onclose: ((event?: { reason?: string }) => void) | null = null
   onerror: (() => void) | null = null
   onmessage: ((event: { data: string | ArrayBuffer }) => void) | null = null
 
@@ -135,6 +139,12 @@ class FakeSocket {
     this.readyState = 3
     this.onclose?.()
   }
+  closeWith(reason: string) {
+    if (this.closed) return
+    this.closed = true
+    this.readyState = 3
+    this.onclose?.({ reason })
+  }
 }
 
 async function renderScreen(overrides: Record<string, unknown> = {}, props: Record<string, unknown> = {}) {
@@ -150,7 +160,7 @@ async function openTerminal(count: number) {
 
 async function openAnotherTerminal() {
   const before = FakeSocket.instances.length
-  await fireEvent.click(screen.getByRole('button', { name: 'New terminal' }))
+  await fireEvent.click(screen.getByRole('button', { name: 'New terminal tab' }))
   await vi.waitFor(() => expect(FakeSocket.instances).toHaveLength(before + 1))
   FakeSocket.instances[before].open()
 }
@@ -272,13 +282,18 @@ describe('RemoteAccess screen', () => {
     expect(FakeSocket.instances[0].closed).toBe(false)
   })
 
-  it('labels repeated accounts so the tabs stay distinguishable', async () => {
+  it('shows the account on repeated tabs until a program sets a title', async () => {
     ticketFetch()
     await renderScreen()
     await openTerminal(2)
 
-    expect(screen.getByRole('tab', { name: 'alice' })).toBeTruthy()
-    expect(screen.getByRole('tab', { name: 'alice (2)' })).toBeTruthy()
+    expect(screen.getAllByRole('tab', { name: 'alice' })).toHaveLength(2)
+
+    xterm.terminals[1].titleHandler?.('btop')
+
+    expect(await screen.findByRole('tab', { name: 'btop' })).toBeTruthy()
+    expect(screen.getAllByRole('tab', { name: 'alice' })).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Close btop terminal' })).toBeTruthy()
   })
 
   it('keeps every session alive while switching between tabs', async () => {
@@ -319,27 +334,27 @@ describe('RemoteAccess screen', () => {
     await renderScreen()
     await openTerminal(2)
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Close alice terminal' }))
+    await fireEvent.click(screen.getAllByRole('button', { name: 'Close alice terminal' })[0])
 
     expect(FakeSocket.instances[0].closed).toBe(true)
     expect(FakeSocket.instances[1].closed).toBe(false)
     expect(screen.getAllByRole('tab')).toHaveLength(1)
-    expect(screen.getByRole('tab', { name: 'alice (2)' }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getAllByRole('tab')[0].getAttribute('aria-selected')).toBe('true')
     // Closing a tab must not ask the server for another session.
     expect(calls.filter((call) => call.method === 'POST')).toHaveLength(2)
   })
 
-  it('stops offering a fourth terminal at the concurrent-session limit', async () => {
+  it('stops offering a seventh terminal at the concurrent-session limit', async () => {
     const calls = ticketFetch()
     await renderScreen()
-    await openTerminal(3)
+    await openTerminal(6)
 
-    const button = screen.getByRole('button', { name: 'New terminal' }) as HTMLButtonElement
+    const button = screen.getByRole('button', { name: 'New terminal tab' }) as HTMLButtonElement
     expect(button.disabled).toBe(true)
-    expect(screen.getByText(/3 of 3 terminals open\. Close a tab to open another\./)).toBeTruthy()
+    expect(screen.getByText(/6 of 6 terminals open\. Close a tab to open another\./)).toBeTruthy()
 
     await fireEvent.click(button)
-    expect(calls.filter((call) => call.method === 'POST')).toHaveLength(3)
+    expect(calls.filter((call) => call.method === 'POST')).toHaveLength(6)
   })
 
   it('reports a failed ticket in its own tab without disturbing the others', async () => {
@@ -353,13 +368,13 @@ describe('RemoteAccess screen', () => {
     })
     await renderScreen()
     await openTerminal(1)
-    await fireEvent.click(screen.getByRole('button', { name: 'New terminal' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'New terminal tab' }))
     await vi.waitFor(() => expect(screen.getAllByRole('tab')).toHaveLength(2))
 
     expect((await screen.findByRole('alert')).textContent).toContain('device is not connected to the tunnel')
     expect(FakeSocket.instances).toHaveLength(1)
     expect(FakeSocket.instances[0].closed).toBe(false)
-    expect(screen.getByRole('tab', { name: 'alice' }).getAttribute('aria-selected')).toBe('false')
+    expect(screen.getAllByRole('tab')[0].getAttribute('aria-selected')).toBe('false')
   })
 
   it('does not open a socket when the tab closes while its ticket is in flight', async () => {
@@ -367,7 +382,7 @@ describe('RemoteAccess screen', () => {
     ticketFetch({ session: () => new Promise<Response>((resolve) => { pending.resolve = resolve }) })
     await renderScreen()
 
-    await fireEvent.click(screen.getByRole('button', { name: 'New terminal' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'New terminal tab' }))
     await vi.waitFor(() => expect(screen.getAllByRole('tab')).toHaveLength(1))
     await fireEvent.click(screen.getByRole('button', { name: 'Close alice terminal' }))
     pending.resolve?.(json({ ticket: 'late-ticket' }))
@@ -410,8 +425,8 @@ describe('RemoteAccess screen', () => {
     ticketFetch({ session: () => new Promise<Response>((resolve) => { pending.push(resolve) }) })
     await renderScreen()
 
-    await fireEvent.click(screen.getByRole('button', { name: 'New terminal' }))
-    await fireEvent.click(screen.getByRole('button', { name: 'New terminal' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'New terminal tab' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'New terminal tab' }))
     await vi.waitFor(() => expect(pending).toHaveLength(2))
 
     // The second request answers first; each tab must still redeem its own ticket.
@@ -424,8 +439,23 @@ describe('RemoteAccess screen', () => {
     expect(FakeSocket.instances[1].url).toContain('ticket=tkt-first')
   })
 
-  it('marks only the tab whose socket failed', async () => {
+  it('says why a session the device refused never connected', async () => {
     ticketFetch()
+    await renderScreen()
+    await fireEvent.click(screen.getByRole('button', { name: 'New terminal tab' }))
+    await vi.waitFor(() => expect(FakeSocket.instances).toHaveLength(1))
+
+    // The server closes with this reason when the agent never attaches, which
+    // is what happens at the device's six-session cap.
+    FakeSocket.instances[0].closeWith('session unavailable')
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('refused the session')
+    expect(alert.textContent).toContain('six terminals')
+    expect(screen.getByRole('tab')).toBeTruthy()
+  })
+
+  it('marks only the tab whose socket failed', async () => {    ticketFetch()
     await renderScreen()
     await openTerminal(2)
 
@@ -444,7 +474,7 @@ describe('RemoteAccess screen', () => {
 
     const [, middle] = screen.getAllByRole('tab')
     await fireEvent.click(middle)
-    await fireEvent.click(screen.getByRole('button', { name: 'Close alice (2) terminal' }))
+    await fireEvent.click(screen.getAllByRole('button', { name: /^Close .* terminal$/ })[1])
 
     const remaining = screen.getAllByRole('tab')
     expect(remaining).toHaveLength(2)
@@ -461,7 +491,7 @@ describe('RemoteAccess screen', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Close alice terminal' }))
     expect(screen.getByText(/No terminal open/)).toBeTruthy()
-    expect((screen.getByRole('button', { name: 'New terminal' }) as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByRole('button', { name: 'New terminal tab' }) as HTMLButtonElement).disabled).toBe(false)
     expect(xterm.terminals[0].disposed).toBe(true)
 
     await openTerminal(1)
@@ -482,7 +512,7 @@ describe('RemoteAccess screen', () => {
     expect(await screen.findByText(/last reported remote access as off/)).toBeTruthy()
     // The reported flag can lag a local `set ssh on`, so the button stays usable
     // and the agent is the authority that refuses a disabled session.
-    expect((screen.getByRole('button', { name: 'New terminal' }) as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByRole('button', { name: 'New terminal tab' }) as HTMLButtonElement).disabled).toBe(false)
     expect(screen.getByRole('combobox')).toBeTruthy()
   })
 })

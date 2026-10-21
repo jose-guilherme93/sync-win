@@ -1,18 +1,20 @@
 // Tab bookkeeping for the remote-access terminal.
 //
-// The dashboard keeps one SSH session per tab. The server documents a ceiling
-// of three concurrent sessions per device (`.agent-memory/decisions/remote-access.md`),
-// so the tab strip stops offering a fourth; the server remains the authority if
-// the limit ever changes.
+// The dashboard keeps one SSH session per tab. Six is the ceiling the agent's
+// contract enforces (`max_sessions` in agent/internal/contract/contract.json),
+// so the tab strip stops offering a seventh; the agent remains the authority.
 
-export const MAX_TERMINAL_TABS = 3
+export const MAX_TERMINAL_TABS = 6
 
 export type TerminalTabStatus = 'connecting' | 'connected' | 'closed' | 'error'
 
 export type TerminalTab = {
   id: string
   user: string
+  // label is the account fallback; title is the program's current window title
+  // (OSC 0/2), so a tab running btop reads "btop".
   label: string
+  title: string
   status: TerminalTabStatus
   error: string
 }
@@ -42,16 +44,9 @@ export function nextActiveTerminal(tabs: readonly TerminalTab[], closingId: stri
   return remaining[Math.min(index, remaining.length - 1)].id
 }
 
-// nextTerminalLabel names a new tab after its account, adding a counter when
-// the same account is already open so the tabs stay distinguishable. The label
-// is fixed at creation: closing a neighbouring tab must not rename a running
-// session under the user.
-export function nextTerminalLabel(tabs: readonly TerminalTab[], user: string): string {
-  const account = user.trim() || 'default'
-  const taken = new Set(tabs.map((tab) => tab.label))
-  if (!taken.has(account)) return account
-  for (let count = 2; ; count++) {
-    const candidate = `${account} (${count})`
-    if (!taken.has(candidate)) return candidate
-  }
+// terminalAccountLabel is the fallback shown until the shell or a program sets
+// a window title. It is deliberately unnumbered: the live title, not a counter,
+// is what tells two sessions apart.
+export function terminalAccountLabel(user: string): string {
+  return user.trim() || 'default'
 }

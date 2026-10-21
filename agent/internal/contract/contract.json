@@ -189,7 +189,7 @@
     "ssh_host": "127.0.0.1",
     "ssh_port": 22,
     "idle_timeout_seconds": 900,
-    "max_sessions": 3,
+    "max_sessions": 6,
     "helper_socket_path": "/run/sync-win/helper.sock",
     "key_type": "ssh-ed25519",
     "authorized_keys_options": "restrict,pty,from=\"127.0.0.1\"",

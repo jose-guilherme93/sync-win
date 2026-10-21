@@ -14,7 +14,7 @@
     canOpenTerminal,
     closeTerminalTab,
     nextActiveTerminal,
-    nextTerminalLabel,
+    terminalAccountLabel,
     type TerminalTab
   } from '../../lib/terminal-tabs'
 
@@ -140,6 +140,26 @@
     return tabs.find((tab) => tab.id === id) ?? null
   }
 
+  function tabName(tab: TerminalTab): string {
+    return tab.title || tab.label
+  }
+
+  // OSC titles are arbitrary terminal output: strip control characters and cap
+  // the length so one program cannot wreck the strip.
+  function cleanTitle(title: string): string {
+    return title.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 48)
+  }
+
+  // The server closes the browser socket with a reason when the device never
+  // attaches. "session unavailable" is the generic one; name the likely cause.
+  function closeMessage(reason?: string): string {
+    const text = (reason || '').trim()
+    if (text === 'session unavailable') {
+      return 'The device refused the session. It may already have all six terminals open.'
+    }
+    return text || 'The session ended before it connected.'
+  }
+
   function updateTab(id: string, patch: Partial<TerminalTab>) {
     if (!tabs.some((tab) => tab.id === id)) return
     tabs = tabs.map((tab) => tab.id === id ? { ...tab, ...patch } : tab)
@@ -159,6 +179,10 @@
       if (session.socket && session.socket.readyState === WebSocket.OPEN) {
         session.socket.send(new TextEncoder().encode(data))
       }
+    })
+    // A program that sets the window title (btop, vim, less...) names its tab.
+    term.onTitleChange((title) => {
+      updateTab(tabId, { title: cleanTitle(title) })
     })
     if (typeof ResizeObserver !== 'undefined') {
       session.observer = new ResizeObserver(() => {
@@ -220,7 +244,8 @@
     const tab: TerminalTab = {
       id,
       user,
-      label: nextTerminalLabel(tabs, user),
+      label: terminalAccountLabel(user),
+      title: '',
       status: 'connecting',
       error: ''
     }
@@ -228,6 +253,7 @@
     activeTabId = id
     // Let the new pane mount before the session starts so it gets the real size.
     await tick()
+    void revealTab(id)
     await connectTab(id)
   }
 
@@ -285,10 +311,17 @@
       if (session.socket !== ws) return
       updateTab(id, { status: 'error', error: 'The session connection failed' })
     }
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       if (session.socket === ws) session.socket = null
       if (session.disposed) return
-      updateTab(id, { status: 'closed' })
+      const tab = findTab(id)
+      // A socket that never opened was refused by the device (usually its
+      // session cap); say so instead of silently printing [disconnected].
+      if (tab && tab.status === 'connecting') {
+        updateTab(id, { status: 'error', error: closeMessage(event?.reason) })
+      } else {
+        updateTab(id, { status: 'closed' })
+      }
       session.term.writeln('\r\n\x1b[2m[disconnected]\x1b[0m')
       void loadSessions()
     }
@@ -301,6 +334,7 @@
     fitSession(id)
     sendResize(id)
     live.get(id)?.term.focus()
+    void revealTab(id)
   }
 
   async function closeTab(id: string) {
@@ -317,7 +351,16 @@
       fitSession(activeTabId)
       sendResize(activeTabId)
       live.get(activeTabId)?.term.focus()
+      void revealTab(activeTabId)
     }
+  }
+
+  // Keep the active tab visible when the strip is wider than the card.
+  async function revealTab(id: string) {
+    await tick()
+    const element = document.getElementById(`term-tab-${id}`)
+    // jsdom has no scrollIntoView; the guard also covers older browsers.
+    element?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
   }
 
   function disconnectTab(id: string) {
@@ -479,23 +522,18 @@
           aria-label="account for new terminal"
         />
       {/if}
-      <button on:click={openTerminal} disabled={!canAddTab}>New terminal</button>
       {#if activeTab && activeTab.status === 'connected'}
-        <button on:click={() => disconnectTab(activeTab.id)}>Disconnect</button>
+        <button class="ghost" on:click={() => disconnectTab(activeTab.id)}>Disconnect</button>
       {/if}
     </div>
-    {#if !canAddTab}
-      <p class="limit">{tabs.length} of {MAX_TERMINAL_TABS} terminals open. Close a tab to open another.</p>
-    {/if}
     {#if termError}<div class="error" role="alert">{termError}</div>{/if}
     {#if activeTab?.error}
       <div class="error" role="alert">{activeTab.error}</div>
     {/if}
-    {#if tabs.length === 0}
-      <div class="terminal empty-terminal">
-        No terminal open. Choose an account and press “New terminal”.
-      </div>
-    {:else}
+    {#if !canAddTab}
+      <p class="limit">{tabs.length} of {MAX_TERMINAL_TABS} terminals open. Close a tab to open another.</p>
+    {/if}
+    <div class="tabrow">
       <div class="tabstrip" role="tablist" aria-label="Terminal sessions">
         {#each tabs as tab (tab.id)}
           <div class="tab" class:active={tab.id === activeTabId}>
@@ -513,17 +551,31 @@
                 class:err={tab.status === 'error'}
                 aria-hidden="true"
               ></span>
-              <span class="tab-label">{tab.label}</span>
+              <span class="tab-label">{tabName(tab)}</span>
             </button>
             <button
               type="button"
               class="tab-close"
-              aria-label={`Close ${tab.label} terminal`}
+              aria-label={`Close ${tabName(tab)} terminal`}
               on:click={() => closeTab(tab.id)}
             >×</button>
           </div>
         {/each}
       </div>
+      <button
+        type="button"
+        class="tab-add"
+        aria-label="New terminal tab"
+        title={canAddTab ? 'New terminal' : `Close a tab to open another (max ${MAX_TERMINAL_TABS})`}
+        on:click={openTerminal}
+        disabled={!canAddTab}
+      >+</button>
+    </div>
+    {#if tabs.length === 0}
+      <div class="terminal empty-terminal">
+        No terminal open. Press + to start one.
+      </div>
+    {:else}
       {#each tabs as tab (tab.id)}
         <div
           class="terminal"
@@ -679,11 +731,13 @@
   .term-controls { flex-wrap: wrap; }
   .limit { margin: 0.15rem 0 0.35rem; color: var(--warn); font-size: 0.74rem; }
 
+  .tabrow { display: flex; align-items: flex-end; gap: 0.25rem; margin-top: 0.5rem; }
   .tabstrip {
     display: flex;
     align-items: flex-end;
     gap: 0.25rem;
-    margin-top: 0.5rem;
+    flex: 1;
+    min-width: 0;
     overflow-x: auto;
   }
   .tab {
@@ -725,6 +779,41 @@
     border-radius: var(--radius-sm);
   }
   .tab-close:hover { background: var(--crit-dim); color: var(--crit); }
+  .tab-add {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 1.7rem;
+    height: 1.7rem;
+    margin: 0 0 0.05rem 0;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 1.05rem;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .tab-add:hover:not(:disabled) {
+    border-color: var(--accent-border);
+    background: var(--accent-dim);
+    color: var(--accent);
+  }
+  .tab-add:disabled { opacity: 0.4; cursor: default; }
+  .tab-label { max-width: 11rem; overflow: hidden; text-overflow: ellipsis; }
+
+  .term-controls button.ghost {
+    margin: 0;
+    border: 1px solid var(--border);
+    background: var(--bg-elev);
+    color: var(--text-muted);
+  }
+  .term-controls button.ghost:hover {
+    border-color: var(--accent-border);
+    background: var(--bg-elev);
+    color: var(--text);
+  }
 
   .sessions { list-style: none; margin: 0; padding: 0; }
   .sessions li {

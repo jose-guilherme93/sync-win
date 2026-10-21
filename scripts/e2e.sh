@@ -642,7 +642,7 @@ fi
 click_text 'Remote access' >/dev/null
 sleep 2
 REMOTE_TEXT=$(unquote "$(eval_js "(()=>{const m=document.querySelector('main')||document.body;return m.innerText.replace(/\s+/g,' ');})()")")
-if [[ "${REMOTE_TEXT}" == *"SSH terminal"* && "${REMOTE_TEXT}" == *"New terminal"* ]]; then
+if [[ "${REMOTE_TEXT}" == *"SSH terminal"* && "${REMOTE_TEXT}" == *"up to 6"* ]]; then
   ok "remote access screen renders the SSH terminal"
 else
   fail "remote access screen renders the SSH terminal" "${REMOTE_TEXT:0:200}"
@@ -657,7 +657,9 @@ fi
 # session must be reported there rather than swallowed. This seeded device has
 # no tunnel, so the server refuses the ticket — exactly the failure the tab has
 # to show. The live SSH path needs a real agent, covered elsewhere.
-OPENED=$(unquote "$(click_text 'New terminal')")
+PLUS=$(unquote "$(eval_js "document.querySelector('button[aria-label=\"New terminal tab\"]') ? 'PRESENT' : 'MISSING'")")
+check "remote access offers an add-tab control" "${PLUS}" "PRESENT"
+OPENED=$(unquote "$(eval_js "(()=>{const b=document.querySelector('button[aria-label=\"New terminal tab\"]');if(!b)return 'MISSING';if(b.disabled)return 'DISABLED';b.click();return 'CLICKED';})()")")
 if [[ "${OPENED}" == "CLICKED" ]]; then
   ok "remote access opens a terminal tab"
 else

@@ -57,8 +57,10 @@ below.
 
 ## Limits
 
-- Idle timeout 15 min on keyboard inactivity; max 3 concurrent sessions per
-  device. No detach/resume (tmux-like) in this phase.
+- Idle timeout 15 min on keyboard inactivity; max 6 concurrent sessions per
+  device (`max_sessions` in the agent contract; raised from 3 on 2026-10-21 at
+  the operator's request, so six terminal tabs can run at once). No
+  detach/resume (tmux-like) in this phase.
 - The server **never** names a host or port. The agent always dials its own
   loopback, so a compromised server cannot pivot into the device LAN.
 - Every session is audited (owner, device, target user, start, end, reason).

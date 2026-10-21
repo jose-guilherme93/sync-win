@@ -34,6 +34,23 @@ status: active
   `.agent-memory/decisions/remote-access.md`. The tunnel hub itself does not
   enforce it, so this is a UI ceiling, not a server guarantee.
 
+## Follow-up: six tabs, a `+` control and program titles
+
+The tab strip now always renders, with a `+` button (`aria-label="New terminal
+tab"`) at its end; the green "New terminal" button is gone and Disconnect is a
+neutral ghost button. `MAX_TERMINAL_TABS` and the agent contract's
+`max_sessions` both moved from 3 to 6. Account labels are no longer numbered:
+the tab shows the program's OSC window title (`onTitleChange`) and falls back to
+the account. The strip is visible with zero tabs, so the first session starts
+from `+` too.
+
+Verified with six live sessions on `ubuntu-full-1`: all six connected, the strip
+scrolled to the active tab with `+` still pinned in the card, and a foreground
+command that set the title to `btop` renamed its tab. Unit tests: 9 tab-list and
+22 RemoteAccess tests (243 web total); e2e 74/74, including the add-tab control.
+A session the device refuses before attaching now reports why in its tab instead
+of showing a bare `[disconnected]`.
+
 ## Verification
 
 - `web`: 25 files / 239 tests, including 10 new pure tab tests and 21

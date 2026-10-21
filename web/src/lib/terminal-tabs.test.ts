@@ -5,28 +5,28 @@ import {
   canOpenTerminal,
   closeTerminalTab,
   nextActiveTerminal,
-  nextTerminalLabel,
+  terminalAccountLabel,
   type TerminalTab
 } from './terminal-tabs'
 
-function tab(id: string, label = '', user = '', status: TerminalTab['status'] = 'connecting'): TerminalTab {
-  return { id, user: user || label, label, status, error: '' }
+function tab(id: string, label = '', status: TerminalTab['status'] = 'connecting'): TerminalTab {
+  return { id, user: label, label, title: '', status, error: '' }
 }
 
 describe('terminal tabs', () => {
-  it('allows new terminals until the per-device limit is reached', () => {
+  it('allows new terminals until the six-session limit is reached', () => {
     expect(canOpenTerminal([])).toBe(true)
-    expect(canOpenTerminal([tab('a'), tab('b')])).toBe(true)
-    expect(canOpenTerminal([tab('a'), tab('b'), tab('c')])).toBe(false)
-    expect(MAX_TERMINAL_TABS).toBe(3)
+    expect(canOpenTerminal([tab('a'), tab('b'), tab('c'), tab('d'), tab('e')])).toBe(true)
+    expect(canOpenTerminal([tab('a'), tab('b'), tab('c'), tab('d'), tab('e'), tab('f')])).toBe(false)
+    expect(MAX_TERMINAL_TABS).toBe(6)
   })
 
   it('refuses a terminal beyond the limit without dropping the existing ones', () => {
-    const tabs = [tab('a'), tab('b'), tab('c')]
-    const added = addTerminalTab(tabs, tab('d'))
+    const tabs = [tab('a'), tab('b'), tab('c'), tab('d'), tab('e'), tab('f')]
+    const added = addTerminalTab(tabs, tab('g'))
 
-    expect(added).toHaveLength(3)
-    expect(added.map((entry) => entry.id)).toEqual(['a', 'b', 'c'])
+    expect(added).toHaveLength(6)
+    expect(added.map((entry) => entry.id)).toEqual(['a', 'b', 'c', 'd', 'e', 'f'])
   })
 
   it('appends a terminal while there is room', () => {
@@ -36,23 +36,19 @@ describe('terminal tabs', () => {
     expect(added[1].label).toBe('alice')
   })
 
-  it('labels tabs by account and counts repeated accounts', () => {
-    expect(nextTerminalLabel([], 'alice')).toBe('alice')
-    expect(nextTerminalLabel([tab('a', 'alice')], 'alice')).toBe('alice (2)')
-    expect(nextTerminalLabel([tab('a', 'alice'), tab('b', 'alice (2)')], 'alice')).toBe('alice (3)')
-    expect(nextTerminalLabel([tab('a', 'alice')], 'bob')).toBe('bob')
+  it('uses the account as the fallback label without numbering', () => {
+    expect(terminalAccountLabel('')).toBe('default')
+    expect(terminalAccountLabel('  ')).toBe('default')
+    expect(terminalAccountLabel(' alice ')).toBe('alice')
+    // Two shells for the same account share the fallback; the live program
+    // title is what tells the tabs apart.
+    expect(terminalAccountLabel('alice')).toBe('alice')
   })
 
   it('keeps a label stable when a sibling closes', () => {
-    const tabs = [tab('a', 'alice', 'alice'), tab('b', 'alice (2)', 'alice')]
-    const remaining = closeTerminalTab(tabs, 'a')
+    const remaining = closeTerminalTab([tab('a', 'alice'), tab('b', 'alice')], 'a')
 
-    expect(remaining[0].label).toBe('alice (2)')
-  })
-
-  it('falls back to the device default account label and trims whitespace', () => {
-    expect(nextTerminalLabel([], '  ')).toBe('default')
-    expect(nextTerminalLabel([], ' alice ')).toBe('alice')
+    expect(remaining[0].label).toBe('alice')
   })
 
   it('removes only the closed terminal', () => {

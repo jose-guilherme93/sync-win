@@ -20,11 +20,14 @@ version, and a breaking change increases the major version.
   `SYNCWIN_DEV_TOKEN`; the dashboard trades the token for a normal session
   cookie, so the sign-in form is skipped. The server ignores the token unless
   `SYNCWIN_ENV=development` and it never creates an account.
-- **A tab per terminal session in Remote access.** Up to three SSH sessions can
-  be open at once — the server's documented limit per device — each in its own
-  tab with its own account, ticket and connection. Switching tabs keeps every
-  session alive, closing one tab ends only that session, and a refused ticket
-  is reported inside its own tab instead of replacing the screen.
+- **A tab per terminal session in Remote access.** Up to six SSH sessions can
+  be open at once, each in its own tab with its own account, ticket and
+  connection. The tab strip has a `+` control, each tab is named after the
+  program running in it (btop, vim, ...) and falls back to the account name, and
+  closing one tab ends only that session. Switching tabs keeps every session
+  alive, and a refused session reports why it never connected — including the
+  device already serving its six — inside its own tab instead of replacing the
+  screen.
 
 ### Fixed
 
