@@ -7,9 +7,25 @@ export type ChartPoint = {
   netRx: number
   netTx: number
   temp: number | null
+  // Present in raw payloads (live points and short windows); the downsampled
+  // aggregates only carry CPU/memory/network/temperature/power.
+  disk?: number
+  diskRead?: number
+  diskWrite?: number
+  power?: number
 }
 
 const MAX_POINTS = 120
+
+// The root partition, or the largest one when a container reports the host disk
+// under a bind mount instead of "/".
+export function primaryDiskPercent(hw: Record<string, any>): number | undefined {
+  const parts = (hw.disk_partitions ?? []).filter((part: any) => (part.total_bytes || 0) > 0)
+  const root = parts.find((part: any) => part.mount === '/')
+  const chosen = root ?? parts.reduce((largest: any, part: any) =>
+    !largest || part.total_bytes > largest.total_bytes ? part : largest, null)
+  return chosen ? chosen.used_percent : undefined
+}
 
 // Single shared map of device id -> recent telemetry points. Components
 // subscribe to `deviceHistoryStore(id)` instead of polling `get()` inside
@@ -28,7 +44,11 @@ function pointFromHardware(hw: Record<string, any>, timestamp: string): ChartPoi
     // reintroduce the container double counting the agent already filters out.
     netRx: hw.net_rx_rate || 0,
     netTx: hw.net_tx_rate || 0,
-    temp: hw.cpu_temperature || null
+    temp: hw.cpu_temperature || null,
+    disk: primaryDiskPercent(hw),
+    diskRead: hw.disk_read_rate || undefined,
+    diskWrite: hw.disk_write_rate || undefined,
+    power: hw.power_watts || undefined
   }
 }
 

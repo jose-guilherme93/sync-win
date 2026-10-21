@@ -4,6 +4,7 @@
   import { deviceLabel, deviceTags } from '../../lib/types'
   import { apiFetch, apiURL } from '../../lib/api'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
+  import DeviceActions from '../device/DeviceActions.svelte'
 
   export let device: Device
   export let authHeaders: Record<string, string> = {}
@@ -153,6 +154,15 @@
         <div><dt>Architecture</dt><dd class="mono">{device.hardware.architecture}</dd></div>
       {/if}
     </dl>
+  </article>
+
+  <article class="card">
+    <header class="card-head"><h2>Maintenance</h2></header>
+    <p class="hint">
+      Fixed operations, gated by the server's remote-mutations flag and the device's local
+      policy. Package updates and reboot always require confirmation.
+    </p>
+    <DeviceActions {device} {authHeaders} />
   </article>
 
   <article class="card danger-zone">

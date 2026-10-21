@@ -11,6 +11,62 @@ version, and a breaking change increases the major version.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-20
+
+### Added
+
+- **The device Overview is a full dashboard.** The Performance chart
+  plots CPU, memory and temperature with toggles, a percentage axis, a right
+  temperature axis, time ticks, hover values, and a legend with each series'
+  last/average/min/max; Network and Disk I/O get their own charts with the same
+  numbers. Load and cores, storage, interfaces, top processes and system facts
+  close the page. Disk I/O history is honest about being live-only: the
+  downsampled ranges do not aggregate it.
+- **Development sign-in without the login screen.** `make dev` bootstraps
+  `demo@sync-win.local` / `sync-win-demo-password` and a fixed
+  `SYNCWIN_DEV_TOKEN`; the dashboard trades the token for a normal session
+  cookie, so the sign-in form is skipped. The server ignores the token unless
+  `SYNCWIN_ENV=development` and it never creates an account.
+- **A tab per terminal session in Remote access.** Up to six SSH sessions can
+  be open at once, each in its own tab with its own account, ticket and
+  connection. The tab strip has a `+` control, each tab is named after the
+  program running in it (btop, vim, ...) and falls back to the account name, and
+  closing one tab ends only that session. Switching tabs keeps every session
+  alive, and a refused session reports why it never connected — including the
+  device already serving its six — inside its own tab instead of replacing the
+  screen.
+
+### Fixed
+
+- **Scrollbars match the dark theme.** Every scroll container — pages, panels,
+  drawers, log viewers — uses a thin, rounded, low-contrast thumb instead of the
+  browser's light bar. The terminal's own xterm slider uses the same muted range.
+- **Remote access works when the dev dashboard is opened by IP or a Tailscale
+  name.** The terminal WebSocket only accepted the Vite proxy's rewritten Host
+  and the localhost CORS origins, so a LAN browser got "The session connection
+  failed". Development now also accepts the Origin the browser reports;
+  production keeps the explicit Host/CORS check.
+
+### Changed
+
+- **The fleet landing is a Termix-style host list.** Each device row shows CPU,
+  RAM and disk as inline percentage bars, with status, OS, last-seen and the
+  alert chip on the same line. The KPI wall, the per-row sparklines and the
+  recent-alerts column are gone; the alert count in the summary links to
+  Alerts, and detailed charts remain on the device Overview.
+- **The Remote access screen is organized around the terminal.** The session
+  audit moved into a scrollable side panel that matches the terminal's height,
+  so it can no longer grow the page, and the fixed device actions (restart
+  agent, package updates, reboot) moved to Device settings → Maintenance.
+- **The full test device supports real Remote access sessions.** The Ubuntu
+  container now ships sshd, a `devuser` account and the remote-access helper,
+  and its local policy allows that account, so `make dev-agents-full` is enough
+  to open live terminals. The image is rebuilt on every run; a stale image had
+  silently skipped a Dockerfile change.
+- **The browser suite no longer creates an account per run.** It signs in as
+  the fixed development account, reuses one device record, and deletes it on
+  exit, so running `make test-e2e` leaves the dev fleet unchanged.
+
 ## [0.12.0] - 2026-10-19
 
 ### Changed

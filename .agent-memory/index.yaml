@@ -33,6 +33,9 @@ entries:
   - id: decisions/device-log-storage
     path: decisions/device-log-storage.md
     type: decision
+  - id: decisions/on-demand-dev
+    path: decisions/on-demand-dev.md
+    type: decision
   - id: decisions/installer-unit-templates
     path: decisions/installer-unit-templates.md
     type: decision
@@ -113,4 +116,16 @@ entries:
     type: session
   - id: sessions/261018-docker-screen
     path: sessions/261018-docker-screen.md
+    type: session
+  - id: sessions/261020-terminal-tabs
+    path: sessions/261020-terminal-tabs.md
+    type: session
+  - id: sessions/261021-dev-signin
+    path: sessions/261021-dev-signin.md
+    type: session
+  - id: sessions/261021-fleet-list
+    path: sessions/261021-fleet-list.md
+    type: session
+  - id: sessions/261021-overview-dashboard
+    path: sessions/261021-overview-dashboard.md
     type: session

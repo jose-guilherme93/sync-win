@@ -37,10 +37,11 @@ The project is built around three main components:
 3. Web dashboard
    - Svelte 5 + TypeScript 6 + Vite 8 + Chart.js 4
    - account-first: sign in / create account entry screen
-   - shows online devices, last sync time, live hardware telemetry charts
+   - shows a dense fleet list with online state, last-seen time and inline CPU/RAM/disk percentage meters; detailed telemetry charts live on the device Overview
+   - device Overview: axis-labelled Performance/Network/Disk I/O charts whose legends show last/average/min/max for every series, plus load and cores, storage, interfaces, top processes and system facts
    - device screens rendered inline by the shell: Overview, CPU & Thermal, Memory, Storage, Network, All sensors, Services (services and ports side by side with a detail drawer), Docker, Security (audit history plus host posture), Processes, Packages, Logs, Remote access, Settings
    - Docker container management (list, start/stop/restart/kill/remove, exec, compose, prune)
-   - Remote access screen: SSH terminal (xterm.js) plus device actions and a recent-session audit list
+   - Remote access screen: tabbed SSH terminal (xterm.js, up to six concurrent sessions, tabs named by the running program) and a scrollable recent-session audit; device actions live in Settings → Maintenance
    - Lynis security audit: run audit, read the stored report (hardening index, warnings/suggestions/categories) and history; host posture (public listeners, pending updates, failed units)
    - fleet-wide Administration → Settings screen: the application log viewer (filter by level, category, device, time window; live tail; metadata detail) plus the log level and retention controls
    - notification settings and inbox with real-time SSE push
@@ -179,7 +180,8 @@ needs a trigger, which is the update timer plus the path unit.
 - Keep the agent focused on explicit file collection and sync operations.
 - The contract (`COLLECTION-CONTRACT.md` + `agent/internal/contract/contract.json`) is the single source of truth for what the agent collects and sends.
 - Use the Makefile for environment work: `make dev` (containers, server hot-reload + web HMR, data in `data-dev/`), `make prod` (containers, built image, data in `data/`), `make help` for the rest.
-- `make dev-agents` starts two 64 MB Alpine containers running the real agent against the dev stack, so the dashboard has devices reporting telemetry without a VM per device. `make dev-agents-full` adds one privileged Ubuntu systemd container with journald, apt, nginx, Lynis and the host Docker socket, which is what exercises Services, Logs, Packages, Security and Docker. `make dev-agents-down` removes them; the device records stay.
+- The dev stack signs itself in: `compose.dev.yaml` bootstraps `demo@sync-win.local` / `sync-win-demo-password` and injects `SYNCWIN_DEV_TOKEN` and `VITE_DEV_TOKEN`, which the dashboard exchanges for a normal session cookie. The server ignores the token unless `SYNCWIN_ENV=development` and it never creates an account. Never run a reachable instance with `SYNCWIN_ENV=development`.
+- `make dev-agents` starts two 64 MB Alpine containers running the real agent against the dev stack, so the dashboard has devices reporting telemetry without a VM per device. `make dev-agents-full` adds one privileged Ubuntu systemd container with journald, apt, nginx, Lynis, the host Docker socket, sshd and a `devuser` account with the remote-access helper, which is what exercises Services, Logs, Packages, Security, Docker and real Remote access sessions. `make dev-agents-down` removes them; the device records stay.
 - `compose.yaml` is the stack a new user copies from the README: it pulls the published image and needs only `SYNCWIN_SECRET_KEY`. Keep it dependency-free — no checkout, no build, no other required variable.
 - `compose.prod.yaml` is for deploying from a checkout; `compose.dev.yaml` is for working on the code.
 

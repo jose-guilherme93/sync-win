@@ -207,6 +207,7 @@ func Run() error {
 	mux.HandleFunc("/health", server.handleHealth)
 	mux.HandleFunc("/api/auth/register", server.handleAuthRegister)
 	mux.HandleFunc("/api/auth/login", server.handleAuthLogin)
+	mux.HandleFunc("/api/auth/dev", server.handleAuthDev)
 	mux.HandleFunc("/api/auth/config", server.handleAuthConfig)
 	mux.HandleFunc("/api/auth/me", server.handleAuthMe)
 	mux.HandleFunc("/api/auth/update-email", server.handleAuthUpdateEmail)

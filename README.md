@@ -46,9 +46,10 @@ small text files and nothing else.
 
 - start, stop, restart, kill and remove containers; exec, compose, prune
 - restart the agent, run package updates, reboot a device
-- open an **SSH terminal** to a device from the dashboard — no port is opened on
-  the device; enable it on the device with `sudo sync-win-agent set ssh on` and
-  on the server with `SYNCWIN_ENABLE_REMOTE_ACCESS=true`
+- open up to six **SSH terminals** in tabs to a device from the dashboard — no
+  port is opened on the device; enable it on the device with
+  `sudo sync-win-agent set ssh on` and on the server with
+  `SYNCWIN_ENABLE_REMOTE_ACCESS=true`
 
 ---
 
@@ -251,6 +252,14 @@ Development data lives in `./data-dev`, separate from production. Run it
 alongside a production stack by changing ports:
 `DEV_HTTP_PORT=8081 WEB_PORT=5199 make dev`.
 
+The dev stack signs itself in: it bootstraps
+`demo@sync-win.local` / `sync-win-demo-password` and injects
+`SYNCWIN_DEV_TOKEN`, which the dashboard exchanges for a normal session cookie,
+so the sign-in screen does not appear. `SYNCWIN_DEV_TOKEN` is ignored unless
+`SYNCWIN_ENV=development`; production compose sets neither. Override the
+account with `SYNCWIN_ADMIN_EMAIL`/`SYNCWIN_ADMIN_PASSWORD` and the token with
+`SYNCWIN_DEV_TOKEN` if you need different ones.
+
 **Reaching the dashboard from another machine**
 
 The dashboard talks to the API same-origin through the Vite proxy, so no CORS
@@ -288,10 +297,13 @@ and the honest "not collected yet" states: it has no systemd, journald or apt.
 The **full** device is a privileged Ubuntu container booting systemd as PID 1,
 with journald, apt, nginx (a listening port), Lynis and the host's Docker
 socket. That is the device to use for Services, Logs, Packages, Security and
-Docker; it needs about 100 MB of RAM and is development-only. Its `/proc` is
-still the host's, so CPU, memory and kernel are host numbers, and it has no
-sshd, block devices or GPU, so remote access, SMART and GPU collection cannot be
-tested there. Those need real hardware.
+Docker; it needs about 100 MB of RAM and is development-only. It also runs sshd
+with a normal `devuser` account and the remote-access helper, so the Remote
+access screen opens real SSH sessions against it (the agent injects an
+ephemeral key for `devuser` and dials its own loopback). Its `/proc` is still
+the host's, so CPU, memory and kernel are host numbers, and it has no block
+devices or GPU, so SMART and GPU collection cannot be tested there. Those need
+real hardware.
 
 **Without containers**
 

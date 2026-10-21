@@ -18,9 +18,11 @@ import (
 // terminal. The default same-host check breaks under the dev Vite proxy, which
 // rewrites the Host header (changeOrigin) so the browser's Origin no longer
 // matches. The configured CORS origins are allowed explicitly, alongside the
-// request host for same-origin deployments.
+// request host for same-origin deployments. In development the browser's own
+// Origin is accepted too, because the proxy leaves no way to derive it: a
+// dashboard opened over the LAN or Tailscale would otherwise be refused.
 func (s *Server) terminalAcceptOptions(r *http.Request) *websocket.AcceptOptions {
-	patterns := make([]string, 0, 4)
+	patterns := make([]string, 0, 5)
 	for _, origin := range strings.Split(os.Getenv("SYNCWIN_CORS_ALLOWED_ORIGIN"), ",") {
 		origin = strings.TrimSpace(origin)
 		if origin == "" {
@@ -32,6 +34,11 @@ func (s *Server) terminalAcceptOptions(r *http.Request) *websocket.AcceptOptions
 	}
 	if r.Host != "" {
 		patterns = append(patterns, r.Host)
+	}
+	if strings.TrimSpace(os.Getenv("SYNCWIN_ENV")) == "development" {
+		if u, err := url.Parse(strings.TrimSpace(r.Header.Get("Origin"))); err == nil && u.Host != "" {
+			patterns = append(patterns, u.Host)
+		}
 	}
 	return &websocket.AcceptOptions{OriginPatterns: patterns}
 }

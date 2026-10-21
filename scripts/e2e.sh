@@ -8,11 +8,11 @@
 # assembled request/response path, so the dashboard claims are checked here.
 #
 # What it covers:
-#   - registration, enrollment, and the agent upload endpoint
+#   - development sign-in, enrollment, and the agent upload endpoint
 #   - device selection from the fleet table enabling the scoped sidebar
 #   - the Services screen rendering seeded services and ports
 #   - both filters, "problems only", and the error state with retry
-#   - a device kept online on the widest chart window, with the gauge following
+#   - a device kept online on the widest chart window, with the vital card following
 #     new telemetry (the frozen-detail / range-owned-poll regression)
 #
 # What it does not cover: the nine other screens, responsive breakpoints, and
@@ -32,9 +32,12 @@ API_PORT="${DEV_HTTP_PORT:-8088}"
 BASE="http://localhost:${WEB_PORT}"
 API="http://localhost:${API_PORT}"
 
-EMAIL="e2e-$$@example.com"
-PASSWORD="supersecret1"
-HOSTNAME="e2e-laptop-$$"
+EMAIL="${SYNCWIN_EMAIL:-demo@sync-win.local}"
+PASSWORD="${SYNCWIN_PASSWORD:-sync-win-demo-password}"
+# A stable hostname and machine id make re-runs adopt the device record instead
+# of adding another e2e-laptop row to the dev database on every run.
+HOSTNAME="${E2E_HOSTNAME:-e2e-laptop}"
+MACHINE_ID="e2e-suite"
 
 WORK="$(mktemp -d)"
 COOKIES="${WORK}/cookies.txt"
@@ -81,6 +84,13 @@ stop_heartbeat() {
 cleanup() {
   stop_heartbeat
   timeout "${AB_CMD_TIMEOUT:-45}" agent-browser close --all >/dev/null 2>&1 || true
+  # Leave the development fleet as it was: the suite runs against the shared
+  # dev database, so the device it enrolled is removed with the same account
+  # that created it. The account itself is the fixed dev account, not a new one.
+  if [ -n "${DEVICE_ID:-}" ] && [ -f "${COOKIES}" ]; then
+    CSRF="$(csrf_from_jar || true)"
+    curl -fsS -b "${COOKIES}" -H "X-SYNCWIN-CSRF: ${CSRF}" -X DELETE "${BASE}/api/devices/${DEVICE_ID}" >/dev/null 2>&1 || true
+  fi
   rm -rf "${WORK}"
 }
 trap cleanup EXIT
@@ -96,6 +106,19 @@ check() {
 section() { printf '\n== %s\n' "$1"; }
 
 json_get() { python3 -c "import json,sys;d=json.load(sys.stdin);print(d${1})"; }
+
+# csrf_from_jar — cookie-authenticated writes need the syncwin_csrf cookie
+# echoed in X-SYNCWIN-CSRF. Agent endpoints are exempt; device endpoints are not.
+csrf_from_jar() {
+  python3 - "$COOKIES" <<'PY'
+import sys
+for line in open(sys.argv[1]):
+    parts = line.rstrip("\n").split("\t")
+    if len(parts) >= 7 and parts[5] == "syncwin_csrf":
+        print(parts[6])
+        break
+PY
+}
 
 # eval_js <js> — run in the page and print the result. Agent-browser's own click
 # and fill are unreliable here because element refs go stale on every re-render,
@@ -175,10 +198,15 @@ curl -fsS -o /dev/null "${BASE}/" || { echo "dashboard not reachable at ${BASE};
 # The dev Vite server proxies /api, so the browser and the seed talk to the same
 # origin the dashboard uses. Seeding against ${API} directly would exercise a
 # different path than the one under test.
-REGISTER=$(curl -fsS -c "${COOKIES}" -X POST "${BASE}/api/auth/register" \
+# Sign in as the fixed development account. The suite used to register a new
+# e2e-<pid> account on every run, which left dozens of accounts and devices in
+# the dev database and made the fleet unreadable. Signing in with the same
+# account the dev stack bootstraps tests the real login path without writing
+# anything new.
+LOGIN=$(curl -fsS -c "${COOKIES}" -X POST "${BASE}/api/auth/login" \
   -H 'Content-Type: application/json' \
   -d "{\"email\":\"${EMAIL}\",\"password\":\"${PASSWORD}\"}")
-check "account created" "${REGISTER}" "owner_id"
+check "signed in as the development account" "${LOGIN}" "owner_id"
 
 # enroll-token and enroll take the token in the "token" field, not
 # "enroll_token" — a first attempt with the wrong name fails with a bare SQL
@@ -188,7 +216,7 @@ ENROLL=$(curl -fsS -b "${COOKIES}" -X POST "${BASE}/api/agent/enroll-token" \
 
 ENROLLED=$(curl -fsS -b "${COOKIES}" -X POST "${BASE}/api/agent/enroll" \
   -H 'Content-Type: application/json' \
-  -d "{\"token\":\"${ENROLL}\",\"hostname\":\"${HOSTNAME}\",\"user_id\":\"alice\",\"fingerprint\":\"e2e-$$-$(date +%s)\"}")
+  -d "{\"token\":\"${ENROLL}\",\"hostname\":\"${HOSTNAME}\",\"user_id\":\"alice\",\"machine_id\":\"${MACHINE_ID}\",\"fingerprint\":\"${MACHINE_ID}\"}")
 DEVICE_ID=$(printf '%s' "${ENROLLED}" | json_get "['device_id']")
 DEVICE_TOKEN=$(printf '%s' "${ENROLLED}" | json_get "['device_token']")
 
@@ -322,23 +350,13 @@ sleep 1
 timeout 60 agent-browser open "${BASE}/" --args "--no-sandbox" >/dev/null
 sleep 3
 
-if eval_js "!!document.querySelector('input[type=email]')" | grep -q true; then
-  ok "login screen rendered"
-else
-  fail "login screen rendered" "no email field found"
-fi
-
-eval_js "(()=>{const s=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
- s.call(document.querySelector('input[type=email]'),${EMAIL@Q});
- document.querySelector('input[type=email]').dispatchEvent(new Event('input',{bubbles:true}));
- s.call(document.querySelector('input[type=password]'),${PASSWORD@Q});
- document.querySelector('input[type=password]').dispatchEvent(new Event('input',{bubbles:true}));
- return 'filled';})()" >/dev/null
-sleep 1
-click_text "Sign in" >/dev/null
-sleep 4
-
-check "signed in" "$(eval_js "document.body.textContent.includes('Fleet') ? 'Fleet' : document.body.textContent.slice(0,60)")" "Fleet"
+# The dev stack injects SYNCWIN_DEV_TOKEN / VITE_DEV_TOKEN, so the dashboard
+# trades it for a session cookie and renders the fleet directly. Seeing the
+# sign-in form here means one of those variables is missing from the stack.
+SIGN_IN_FORM=$(unquote "$(eval_js "document.querySelector('input[type=email]') ? 'FORM' : 'SKIPPED'")")
+check "dev stack signs in without the login screen" "${SIGN_IN_FORM}" "SKIPPED"
+SIGNED=$(wait_for "Fleet" "document.body.textContent.includes('Fleet') ? 'Fleet' : document.body.textContent.slice(0,60)" 10)
+check "signed in" "${SIGNED}" "Fleet"
 
 # ---------------------------------------------------------------------------
 section "Device selection enables the scoped sidebar"
@@ -346,7 +364,7 @@ section "Device selection enables the scoped sidebar"
 
 # The fleet row is a clickable element, not a button with a stable label. Its
 # aria name includes the status text, so it is matched on hostname only.
-ROW=$(eval_js "(()=>{const r=[...document.querySelectorAll('tr,[role=row]')].find(x=>x.textContent.includes(${HOSTNAME@Q}));if(!r)return 'MISSING';r.click();return 'CLICKED';})()")
+ROW=$(eval_js "(()=>{const r=[...document.querySelectorAll('.devices li')].find(x=>x.textContent.includes(${HOSTNAME@Q}));if(!r)return 'MISSING';const b=r.querySelector('button');if(!b)return 'NO-BUTTON';b.click();return 'CLICKED';})()")
 check "fleet row clicked" "${ROW}" "CLICKED"
 sleep 3
 
@@ -453,7 +471,7 @@ check "error is not reported as an empty inventory" "$(eval_js "[...document.que
 # Recovery: after a clean reload the screen must show the data again.
 timeout "${AB_CMD_TIMEOUT}" agent-browser reload >/dev/null
 sleep 4
-ROW=$(eval_js "(()=>{const r=[...document.querySelectorAll('tr,[role=row]')].find(x=>x.textContent.includes(${HOSTNAME@Q}));if(!r)return 'MISSING';r.click();return 'CLICKED';})()")
+ROW=$(eval_js "(()=>{const r=[...document.querySelectorAll('.devices li')].find(x=>x.textContent.includes(${HOSTNAME@Q}));if(!r)return 'MISSING';const b=r.querySelector('button');if(!b)return 'NO-BUTTON';b.click();return 'CLICKED';})()")
 sleep 3
 click_text 'Services' >/dev/null
 sleep 3
@@ -616,23 +634,49 @@ else
   fail "storage screen names the missing SMART data" "no SMART reference in: ${STORAGE_TEXT:0:120}"
 fi
 
-# Remote access: the screen hosts both the SSH terminal and the device actions.
-# The actions must be listed with their policy conditions (server flag + local
-# policy), and the terminal controls must render. The live session itself needs
-# a real agent on a real machine, so it is exercised by the remote-access e2e,
-# not here.
+# Remote access: the terminal and its session audit live here; the confirmed
+# device actions moved to Device settings. The live session itself needs a real
+# agent on a real machine, so it is exercised by the remote-access e2e, not
+# here.
 click_text 'Remote access' >/dev/null
 sleep 2
 REMOTE_TEXT=$(unquote "$(eval_js "(()=>{const m=document.querySelector('main')||document.body;return m.innerText.replace(/\s+/g,' ');})()")")
-if [[ "${REMOTE_TEXT}" == *"SSH terminal"* && "${REMOTE_TEXT}" == *"Open terminal"* ]]; then
+if [[ "${REMOTE_TEXT}" == *"SSH terminal"* && "${REMOTE_TEXT}" == *"/6"* ]]; then
   ok "remote access screen renders the SSH terminal"
 else
   fail "remote access screen renders the SSH terminal" "${REMOTE_TEXT:0:200}"
 fi
-if [[ "${REMOTE_TEXT}" == *"Restart agent"* && "${REMOTE_TEXT}" == *"Apply package updates"* && "${REMOTE_TEXT}" == *"Reboot device"* && "${REMOTE_TEXT}" == *"local policy"* ]]; then
-  ok "remote access screen lists the actions and their policy conditions"
+
+# Terminal tabs. Opening a terminal must create its own tab, and a refused
+# session must be reported there rather than swallowed. This seeded device has
+# no tunnel, so the server refuses the ticket — exactly the failure the tab has
+# to show. The live SSH path needs a real agent, covered elsewhere.
+PLUS=$(unquote "$(eval_js "document.querySelector('button[aria-label=\"New terminal tab\"]') ? 'PRESENT' : 'MISSING'")")
+check "remote access offers an add-tab control" "${PLUS}" "PRESENT"
+OPENED=$(unquote "$(eval_js "(()=>{const b=document.querySelector('button[aria-label=\"New terminal tab\"]');if(!b)return 'MISSING';if(b.disabled)return 'DISABLED';b.click();return 'CLICKED';})()")")
+if [[ "${OPENED}" == "CLICKED" ]]; then
+  ok "remote access opens a terminal tab"
 else
-  fail "remote access screen lists the actions and their policy conditions" "${REMOTE_TEXT:0:200}"
+  fail "remote access opens a terminal tab" "${OPENED}"
+fi
+TABS=$(wait_for "1" "document.querySelectorAll('[role=tab]').length" 6)
+check "remote access shows the session as a tab" "${TABS}" "1"
+TAB_ERROR=$(wait_for_like "not connected to the tunnel" "(document.querySelector('[role=alert]')?.textContent||'').trim()" 10)
+check "a refused session is reported inside its own tab" "${TAB_ERROR}" "not connected to the tunnel"
+CLOSED=$(unquote "$(eval_js "(()=>{const b=[...document.querySelectorAll('button')].find(x=>(x.getAttribute('aria-label')||'').endsWith(' terminal'));if(!b)return 'MISSING';b.click();return 'CLOSED';})()")")
+check "remote access closes a terminal tab" "${CLOSED}" "CLOSED"
+TABS_LEFT=$(wait_for "0" "document.querySelectorAll('[role=tab]').length" 6)
+check "closing the last terminal restores the empty state" "${TABS_LEFT}" "0"
+
+# Device maintenance belongs in Settings, not under the terminal. The fixed
+# actions must be listed there with their policy conditions.
+click_text 'Settings' >/dev/null
+sleep 2
+SETTINGS_TEXT=$(unquote "$(eval_js "(()=>{const m=document.querySelector('main')||document.body;return m.innerText.replace(/\s+/g,' ');})()")")
+if [[ "${SETTINGS_TEXT}" == *"Restart agent"* && "${SETTINGS_TEXT}" == *"Apply package updates"* && "${SETTINGS_TEXT}" == *"Reboot device"* && "${SETTINGS_TEXT}" == *"local policy"* ]]; then
+  ok "device maintenance lives in Settings with its policy conditions"
+else
+  fail "device maintenance lives in Settings with its policy conditions" "${SETTINGS_TEXT:0:200}"
 fi
 
 # ---------------------------------------------------------------------------
@@ -642,56 +686,31 @@ section "Fleet overview"
 click_text 'Home' >/dev/null
 sleep 3
 
-# The fleet stat cards sit in one grid row. If any card overflows its row the
-# grid becomes taller than the viewport area it was allotted and the device
-# table drops below the fold, which is a visible layout fault that no static
-# check catches.
+# The fleet screen is a dense host list: each row carries the device identity
+# and three inline usage meters. Time-series charts belong to the device
+# Overview, so the list must not contain an SVG sparkline.
 ALIGN=$(eval_js "(()=>{const t=document.body.innerText;return t.includes('Fleet')?'Fleet':'missing';})()")
 check "fleet view rendered" "${ALIGN}" "Fleet"
 
-# The fleet stat cards share one grid row, so their boxes must line up. A card
-# whose sub-label wraps to more lines than its neighbours grows taller and drops
-# the device table below the fold. This was visibly broken — the "Without Lynis"
-# card overflowed its row — while vite build and svelte-check were both clean,
-# which is the whole reason this suite exists.
-KPI=$(eval_js "(()=>{const c=[...document.querySelectorAll('.kpi')];
- if(c.length<2) return JSON.stringify({error:'found '+c.length+' cards'});
- const boxes=c.map(x=>{const r=x.getBoundingClientRect();return {top:Math.round(r.top),bottom:Math.round(r.bottom),h:Math.round(r.height)};});
- const tops=new Set(boxes.map(b=>b.top));
- return JSON.stringify({count:c.length,tops:[...tops],bottoms:boxes.map(b=>b.bottom),heights:boxes.map(b=>b.h)});})()")
-
-# agent-browser prints the return value as a JSON string, so the payload is
-# encoded twice. Decoding once yields a quoted string, so it has to be unwrapped
-# twice before the keys are readable.
-kpi_field() {
-  printf '%s' "${KPI}" | python3 -c "
-import json, sys
-raw = sys.stdin.read().strip()
-try:
-    data = json.loads(json.loads(raw))
-except Exception:
-    print('unparsed'); raise SystemExit
-print($1)
-" 2>/dev/null || echo "unparsed"
-}
-
-KPI_COUNT=$(kpi_field "data.get('count', 0)")
-KPI_TOPS=$(kpi_field "len(data.get('tops', []))")
-KPI_BOTTOMS=$(kpi_field "'ALIGNED' if data.get('bottoms') and len(set(data['bottoms'])) == 1 else 'MISALIGNED:' + str(data.get('bottoms'))")
-
-if [ "${KPI_COUNT}" -ge 2 ]; then
-  ok "fleet KPI cards rendered (${KPI_COUNT})"
+FLEET_ROWS=$(unquote "$(eval_js "String(document.querySelectorAll('.devices li').length)")")
+if [ "${FLEET_ROWS:-0}" -ge 1 ]; then
+  ok "fleet list rendered (${FLEET_ROWS} devices)"
 else
-  fail "fleet KPI cards rendered" "${KPI}"
+  fail "fleet list rendered" "found ${FLEET_ROWS:-0} rows"
 fi
 
-if [ "${KPI_TOPS}" -le 1 ]; then
-  ok "KPI cards sit on one row"
-else
-  fail "KPI cards must share a single row" "distinct top edges: ${KPI_TOPS}"
-fi
+FLEET_METERS=$(unquote "$(eval_js "String(document.querySelectorAll('.devices li')[0]?.querySelectorAll('.usage-item').length ?? 0)")")
+check "fleet rows show three inline meters" "${FLEET_METERS}" "3"
 
-check "KPI cards share a bottom edge" "${KPI_BOTTOMS}" "ALIGNED"
+FLEET_CHARTS=$(unquote "$(eval_js "String(document.querySelectorAll('.devices svg').length)")")
+check "fleet rows carry no time-series chart" "${FLEET_CHARTS}" "0"
+
+FLEET_PCT=$(unquote "$(eval_js "document.querySelector('.devices li .usage-top b')?.textContent.trim() || ''")")
+if [[ "${FLEET_PCT}" == *"%"* ]]; then
+  ok "fleet meters read as percentages (${FLEET_PCT})"
+else
+  fail "fleet meters read as percentages" "${FLEET_PCT}"
+fi
 
 # ---------------------------------------------------------------------------
 section "Live device status"
@@ -703,18 +722,37 @@ section "Live device status"
 # five minutes, which made a healthy device look stale after 30s.
 click_text 'Home' >/dev/null
 sleep 2
-ROW=$(eval_js "(()=>{const r=[...document.querySelectorAll('tr,[role=row]')].find(x=>x.textContent.includes(${HOSTNAME@Q}));if(!r)return 'MISSING';r.click();return 'CLICKED';})()")
+ROW=$(eval_js "(()=>{const r=[...document.querySelectorAll('.devices li')].find(x=>x.textContent.includes(${HOSTNAME@Q}));if(!r)return 'MISSING';const b=r.querySelector('button');if(!b)return 'NO-BUTTON';b.click();return 'CLICKED';})()")
 check "device reselected for the live check" "${ROW}" "CLICKED"
 sleep 2
 
 TOPBAR_STATUS=$(unquote "$(eval_js "document.querySelector('.topbar .status-dot .text')?.textContent.trim() || ''")")
 check "topbar reports online after selection" "${TOPBAR_STATUS}" "online"
 
+CPU_BEFORE=$(unquote "$(eval_js "document.querySelector('[data-vital=cpu] .value')?.textContent.trim() || ''")")
+if [[ "${CPU_BEFORE}" == *"%"* ]]; then
+  ok "CPU vital card is rendered (${CPU_BEFORE})"
+else
+  fail "CPU vital card is rendered" "${CPU_BEFORE}"
+fi
+
+# The overview charts carry their numbers in a legend: last, average, min and
+# max for each plotted series. A missing legend means the old bare chart is
+# back. Checked on the default window, while the seeded sample exists.
+CHART_LEGENDS=0
+for _ in $(seq 1 10); do
+  CHART_LEGENDS=$(unquote "$(eval_js "String(document.querySelectorAll('.legend-item').length)")")
+  [ "${CHART_LEGENDS:-0}" -ge 2 ] && break
+  sleep 1
+done
+if [ "${CHART_LEGENDS:-0}" -ge 2 ]; then
+  ok "overview charts expose series statistics (${CHART_LEGENDS} legends)"
+else
+  fail "overview charts expose series statistics" "found ${CHART_LEGENDS:-0} legends"
+fi
+
 check "widest chart window selected" "$(unquote "$(click_text '7d')")" "CLICKED"
 sleep 1
-
-CPU_BEFORE=$(unquote "$(eval_js "document.querySelector('[role=img][aria-label^=\"CPU:\"]')?.getAttribute('aria-label') || ''")")
-check "CPU gauge is rendered" "${CPU_BEFORE}" "CPU:"
 
 # Push a sample far from the seeded 12.5% so the gauge has to change.
 python3 - "${WORK}/telemetry.json" "${WORK}/telemetry-live.json" <<'PY'
@@ -735,17 +773,17 @@ sleep 35
 TOPBAR_STATUS=$(unquote "$(eval_js "document.querySelector('.topbar .status-dot .text')?.textContent.trim() || ''")")
 check "topbar stays online after 35s on a 7d window" "${TOPBAR_STATUS}" "online"
 
-CPU_AFTER=$(unquote "$(eval_js "document.querySelector('[role=img][aria-label^=\"CPU:\"]')?.getAttribute('aria-label') || ''")")
+CPU_AFTER=$(unquote "$(eval_js "document.querySelector('[data-vital=cpu] .value')?.textContent.trim() || ''")")
 if [ "${CPU_AFTER}" != "${CPU_BEFORE}" ]; then
-  ok "CPU gauge follows the new telemetry (${CPU_BEFORE} -> ${CPU_AFTER})"
+  ok "CPU vital card follows the new telemetry (${CPU_BEFORE} -> ${CPU_AFTER})"
 else
-  fail "CPU gauge follows the new telemetry" "stayed at ${CPU_AFTER}"
+  fail "CPU vital card follows the new telemetry" "stayed at ${CPU_AFTER}"
 fi
 
 # The fleet view and the device view must agree: this was the reported symptom.
 click_text 'Home' >/dev/null
 sleep 2
-HOME_STATUS=$(unquote "$(eval_js "(()=>{const r=[...document.querySelectorAll('tbody tr')].find(x=>x.textContent.includes(${HOSTNAME@Q}));if(!r)return 'MISSING';const d=r.querySelector('.status-dot');return d?(d.className.includes('ok')?'ok':d.className):'NO-DOT';})()")")
+HOME_STATUS=$(unquote "$(eval_js "(()=>{const r=[...document.querySelectorAll('.devices li')].find(x=>x.textContent.includes(${HOSTNAME@Q}));if(!r)return 'MISSING';const d=r.querySelector('.status-dot');return d?(d.className.includes('ok')?'ok':d.className):'NO-DOT';})()")")
 check "fleet row agrees the device is online" "${HOME_STATUS}" "ok"
 
 # ---------------------------------------------------------------------------

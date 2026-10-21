@@ -38,8 +38,9 @@ DEV   := $(COMPOSE) -f $(DEV_FILE)
 PROD  := $(COMPOSE) -f $(PROD_FILE)
 LOCAL := $(COMPOSE) -f $(LOCAL_FILE)
 
-# Local demo account for manual testing. There is no default/seeded login in
-# the product: create one with `make dev-account` (dev stack must be running).
+# Fixed development account. The dev stack bootstraps it from
+# SYNCWIN_ADMIN_EMAIL/SYNCWIN_ADMIN_PASSWORD and signs the dashboard in with
+# SYNCWIN_DEV_TOKEN; `make dev-account` only recreates it after a wiped database.
 DEMO_EMAIL    ?= demo@sync-win.local
 DEMO_PASSWORD ?= sync-win-demo-password
 
@@ -326,13 +327,16 @@ secret: ## Print a fresh SYNCWIN_SECRET_KEY
 	@openssl rand -hex 32
 
 .PHONY: dev-account
-dev-account: ## Create a local demo account on the running dev stack (there is no default login)
-	@printf "$(C)Creating demo account $(DEMO_EMAIL) on http://localhost:%s$(N)\n" "$${DEV_HTTP_PORT:-8088}"
-	@curl -fsS -X POST "http://localhost:$${DEV_HTTP_PORT:-8088}/api/auth/register" \
+dev-account: ## Recreate the fixed dev account (the dev stack normally bootstraps it)
+	@printf "$(C)Ensuring demo account $(DEMO_EMAIL) on http://localhost:%s$(N)\n" "$${DEV_HTTP_PORT:-8088}"
+	@curl -fsS -X POST "http://localhost:$${DEV_HTTP_PORT:-8088}/api/auth/login" \
 		-H 'Content-Type: application/json' \
-		-d "{\"email\":\"$(DEMO_EMAIL)\",\"password\":\"$(DEMO_PASSWORD)\"}" > /dev/null \
-		&& printf "$(G)OK$(N) — sign in with $(G)$(DEMO_EMAIL)$(N) / $(G)$(DEMO_PASSWORD)$(N)\n" \
-		|| { printf "$(Y)Failed.$(N) Is the dev stack running ('make dev-d')? The account may already exist.\n"; exit 1; }
+		-d "{\"email\":\"$(DEMO_EMAIL)\",\"password\":\"$(DEMO_PASSWORD)\"}" > /dev/null 2>&1 \
+		|| curl -fsS -X POST "http://localhost:$${DEV_HTTP_PORT:-8088}/api/auth/register" \
+			-H 'Content-Type: application/json' \
+			-d "{\"email\":\"$(DEMO_EMAIL)\",\"password\":\"$(DEMO_PASSWORD)\"}" > /dev/null 2>&1 \
+		|| { printf "$(Y)Failed.$(N) Is the dev stack running ('make dev-d')?\n"; exit 1; }
+	@printf "$(G)OK$(N) — sign in with $(G)$(DEMO_EMAIL)$(N) / $(G)$(DEMO_PASSWORD)$(N)\n"
 
 .PHONY: clean
 clean: ## Remove build artifacts

@@ -66,12 +66,12 @@ Key UI components:
 - `lib/types.ts`: shared `Device` / `HardwareStats` shapes and status helpers
 - `lib/insights.ts`: alert thresholds and `generateInsights`, the single definition of what needs attention
 - `components/shell/Sidebar.svelte`, `Topbar.svelte`, `DeviceList.svelte`: the app chrome
-- `components/ui/`: reusable primitives (Icon, StatusDot, SeverityBadge, GaugeCard, StatCard, MiniSparkline, EmptyState, Skeleton, ConfirmDialog)
-- `components/screens/Home.svelte`: fleet KPI row, device table with sparklines, recent-alerts feed
-- `components/screens/DeviceOverview.svelte`: gauges, per-core load, storage/network cards, history chart
+- `components/ui/`: reusable primitives (Icon, StatusDot, SeverityBadge, StatCard, MiniSparkline, EmptyState, Skeleton, ConfirmDialog) and `TimeSeriesChart.svelte`, the Chart.js line chart with axis ticks, a crosshair tooltip and per-series last/average/min/max
+- `components/screens/Home.svelte`: dense fleet list with a summary bar and inline CPU/RAM/disk percentage meters; no time-series charts, and the alert count links to the Alerts screen
+- `components/screens/DeviceOverview.svelte`: Performance/Network/Disk I/O charts with per-series period statistics in their legends, load and cores, storage, interfaces, top processes and system facts
 - `components/screens/Alerts.svelte`, `Reports.svelte`: fleet-wide findings and inventory reports
 - `components/screens/Storage.svelte`, `Processes.svelte`, `Packages.svelte`, `Services.svelte`: per-device hardware and system views
-- `components/screens/RemoteAccess.svelte`, `DeviceSettings.svelte`: the SSH terminal plus the confirmed device actions with an audit trail, and device identity/removal
+- `components/screens/RemoteAccess.svelte`: the tabbed SSH terminal (one session per tab, at most six, each tab named by the program running in it) with a scrollable recent-session audit beside it. `DeviceSettings.svelte`: identity, maintenance actions (restart agent, package updates, reboot, each confirmed and audited) and removal
 - `DeviceModal.svelte`: device detail; still owns the Files / Packages / Saves / Notes / Docker / Security tabs, and can render inline via `variant="page"` rather than as a popup
 - `DockerTab.svelte`, `components/docker/`: container management (live list, large tabbed side panel with streaming metrics, start/stop/restart/pause/unpause/kill/remove, exec, compose editor, prune). `lib/docker.ts` owns the wire-shape normalisation and filters; `lib/docker-client.ts` owns the command queue, result polling and live state stream.
 - `SecurityTab.svelte`: Lynis security audit runner, hardening index gauge, warnings/suggestions, history
@@ -79,7 +79,7 @@ Key UI components:
 - `NotificationsModal.svelte`: notification provider settings and inbox
 - `NotificationToast.svelte`: real-time toast notifications via SSE
 
-**Status:** the shell and every fleet and device screen are implemented. A few screens render honest "not collected yet" states for the parts whose API does not exist: `Services` (systemd units, open ports), the pending-updates half of `Packages`, and the SMART half of `Storage`. `RemoteAccess` hosts the SSH terminal (over the remote-access tunnel) and the confirmed device actions (reboot / update-packages / restart-agent). Those are marked in the UI with the missing endpoint, and `lib/flags.ts` (`VITE_MOCK_*`) can swap in labelled sample data for layout review. `cpu`, `memory`, `network` and `sensors` currently all resolve to the same `DeviceOverview`; `containers` resolves to the dedicated Docker screen and `security` to the dedicated Security screen. `logs` is a dedicated screen (`DeviceLogs`) that the sidebar section and the modal tab both render.
+**Status:** the shell and every fleet and device screen are implemented. A few screens render honest "not collected yet" states for the parts whose API does not exist: `Services` (systemd units, open ports), the pending-updates half of `Packages`, and the SMART half of `Storage`; those are marked in the UI with the missing endpoint, and `lib/flags.ts` (`VITE_MOCK_*`) can swap in labelled sample data for layout review. `RemoteAccess` hosts the tabbed SSH terminal (up to six concurrent sessions over the remote-access tunnel, one per tab) with the session audit in a side panel; the confirmed device actions (reboot / update-packages / restart-agent) live in Device settings → Maintenance. `cpu`, `memory`, `network` and `sensors` currently all resolve to the same `DeviceOverview`; `containers` resolves to the dedicated Docker screen and `security` to the dedicated Security screen. `logs` is a dedicated screen (`DeviceLogs`) that the sidebar section and the modal tab both render.
 
 Note that `svelte-check` does not reliably catch malformed Svelte block structure in this repo; `vite build` is the trustworthy gate for template changes.
 
@@ -126,7 +126,7 @@ Note that `svelte-check` does not reliably catch malformed Svelte block structur
 - device notes and attachments
 - notification provider configuration and inbox
 - real-time notification push via SSE
-- the **Remote access** screen: an SSH terminal (xterm.js) plus the device action commands and the recent-session audit list
+- the **Remote access** screen: an SSH terminal (xterm.js) with up to six tabbed sessions and a scrollable recent-session audit; device actions live in **Settings → Maintenance**
 
 ## Communication
 
@@ -245,8 +245,9 @@ The current project intentionally does not include:
 - Web dashboard uses lazy loading and 60-second cache TTL for large datasets.
 - `GET /api/devices` returns a lightweight summary projection (no app inventory,
   no device token, trimmed hardware) and JSON API responses are gzip-compressed.
-- Device cards use canvas sparklines; Chart.js is only loaded in the detail and
-  history modals.
+- The fleet list renders no time-series charts. Chart.js powers
+  `TimeSeriesChart` on the device Overview, where each line carries a legend
+  with its last, average, minimum and maximum values.
 - Agent samples system logs every 6th telemetry cycle and only rewrites its
   state file when it changes.
 - Device log lines are persisted to their own `device_logs` table rather than
