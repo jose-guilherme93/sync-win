@@ -98,6 +98,10 @@ after their controls are deployed and tested:
 - `SYNCWIN_ENABLE_LEGACY_INSTALL=false` — deprecated `/api/agent/install.sh` flow.
 - `SYNCWIN_ENABLE_REMOTE_MUTATIONS=false` — commands that can change agent-local state.
 - `SYNCWIN_ENABLE_DOCKER_MUTATIONS=false` — Docker lifecycle, exec, compose writes/up/down and prune operations.
+- `SYNCWIN_DEV_TOKEN` — dashboard sign-in for the development account. Ignored
+  unless `SYNCWIN_ENV=development`, and it never creates an account, so a
+  production server (which sets neither) has no token entry point. Never run a
+  reachable instance with `SYNCWIN_ENV=development`.
 
 `SYNCWIN_CORS_ALLOWED_ORIGIN` is empty by default. Set one exact browser origin
 only for a split development frontend; production same-origin deployments do

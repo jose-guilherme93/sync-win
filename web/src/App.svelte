@@ -4,6 +4,7 @@
   import NotificationToast from './components/NotificationToast.svelte'
   import { addTelemetryPoint, resetTelemetry } from './lib/telemetry-store'
   import { apiFetch, apiURL, serverBase } from './lib/api'
+  import { devToken, signInWithDevToken } from './lib/dev-auth'
   import { formatRelative, formatAbsolute } from './lib/format'
   import Sidebar from './components/shell/Sidebar.svelte'
   import Topbar from './components/shell/Topbar.svelte'
@@ -295,6 +296,10 @@
       accountEmail = storedEmail
       loadCachedDevices()
     }
+    // The dev stack injects a fixed token. Exchange it for a normal session
+    // cookie before deciding whether to show the sign-in screen; a refusal
+    // falls through to the account flow rather than pretending to be signed in.
+    if (devToken) await signInWithDevToken()
     authReady = true
 
     try {

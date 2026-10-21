@@ -252,6 +252,14 @@ Development data lives in `./data-dev`, separate from production. Run it
 alongside a production stack by changing ports:
 `DEV_HTTP_PORT=8081 WEB_PORT=5199 make dev`.
 
+The dev stack signs itself in: it bootstraps
+`demo@sync-win.local` / `sync-win-demo-password` and injects
+`SYNCWIN_DEV_TOKEN`, which the dashboard exchanges for a normal session cookie,
+so the sign-in screen does not appear. `SYNCWIN_DEV_TOKEN` is ignored unless
+`SYNCWIN_ENV=development`; production compose sets neither. Override the
+account with `SYNCWIN_ADMIN_EMAIL`/`SYNCWIN_ADMIN_PASSWORD` and the token with
+`SYNCWIN_DEV_TOKEN` if you need different ones.
+
 **Reaching the dashboard from another machine**
 
 The dashboard talks to the API same-origin through the Vite proxy, so no CORS

@@ -86,11 +86,18 @@ volume (`./data-dev/sync-win.db` in development).
 
 ### Development shortcut
 
-The dev stack (`make dev`) also enables registration:
+The dev stack (`make dev`) bootstraps a fixed account and signs the dashboard
+in automatically:
 
 ```bash
-make dev-account   # creates demo@sync-win.local / sync-win-demo-password on :8088
+# Dashboard: http://localhost:5173
+# Account:   demo@sync-win.local / sync-win-demo-password
 ```
+
+The sign-in screen is skipped because `compose.dev.yaml` injects
+`SYNCWIN_DEV_TOKEN` (and `VITE_DEV_TOKEN`); the server only honors it while
+`SYNCWIN_ENV=development`. The same account also works through the normal form,
+and `make dev-account` recreates it if the database was wiped.
 
 Or register through the API directly (only works when registration is enabled):
 

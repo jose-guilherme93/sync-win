@@ -8,7 +8,7 @@
 # assembled request/response path, so the dashboard claims are checked here.
 #
 # What it covers:
-#   - registration, enrollment, and the agent upload endpoint
+#   - development sign-in, enrollment, and the agent upload endpoint
 #   - device selection from the fleet table enabling the scoped sidebar
 #   - the Services screen rendering seeded services and ports
 #   - both filters, "problems only", and the error state with retry
@@ -32,9 +32,12 @@ API_PORT="${DEV_HTTP_PORT:-8088}"
 BASE="http://localhost:${WEB_PORT}"
 API="http://localhost:${API_PORT}"
 
-EMAIL="e2e-$$@example.com"
-PASSWORD="supersecret1"
-HOSTNAME="e2e-laptop-$$"
+EMAIL="${SYNCWIN_EMAIL:-demo@sync-win.local}"
+PASSWORD="${SYNCWIN_PASSWORD:-sync-win-demo-password}"
+# A stable hostname and machine id make re-runs adopt the device record instead
+# of adding another e2e-laptop row to the dev database on every run.
+HOSTNAME="${E2E_HOSTNAME:-e2e-laptop}"
+MACHINE_ID="e2e-suite"
 
 WORK="$(mktemp -d)"
 COOKIES="${WORK}/cookies.txt"
@@ -81,6 +84,13 @@ stop_heartbeat() {
 cleanup() {
   stop_heartbeat
   timeout "${AB_CMD_TIMEOUT:-45}" agent-browser close --all >/dev/null 2>&1 || true
+  # Leave the development fleet as it was: the suite runs against the shared
+  # dev database, so the device it enrolled is removed with the same account
+  # that created it. The account itself is the fixed dev account, not a new one.
+  if [ -n "${DEVICE_ID:-}" ] && [ -f "${COOKIES}" ]; then
+    CSRF="$(csrf_from_jar || true)"
+    curl -fsS -b "${COOKIES}" -H "X-SYNCWIN-CSRF: ${CSRF}" -X DELETE "${BASE}/api/devices/${DEVICE_ID}" >/dev/null 2>&1 || true
+  fi
   rm -rf "${WORK}"
 }
 trap cleanup EXIT
@@ -96,6 +106,19 @@ check() {
 section() { printf '\n== %s\n' "$1"; }
 
 json_get() { python3 -c "import json,sys;d=json.load(sys.stdin);print(d${1})"; }
+
+# csrf_from_jar — cookie-authenticated writes need the syncwin_csrf cookie
+# echoed in X-SYNCWIN-CSRF. Agent endpoints are exempt; device endpoints are not.
+csrf_from_jar() {
+  python3 - "$COOKIES" <<'PY'
+import sys
+for line in open(sys.argv[1]):
+    parts = line.rstrip("\n").split("\t")
+    if len(parts) >= 7 and parts[5] == "syncwin_csrf":
+        print(parts[6])
+        break
+PY
+}
 
 # eval_js <js> — run in the page and print the result. Agent-browser's own click
 # and fill are unreliable here because element refs go stale on every re-render,
@@ -175,10 +198,15 @@ curl -fsS -o /dev/null "${BASE}/" || { echo "dashboard not reachable at ${BASE};
 # The dev Vite server proxies /api, so the browser and the seed talk to the same
 # origin the dashboard uses. Seeding against ${API} directly would exercise a
 # different path than the one under test.
-REGISTER=$(curl -fsS -c "${COOKIES}" -X POST "${BASE}/api/auth/register" \
+# Sign in as the fixed development account. The suite used to register a new
+# e2e-<pid> account on every run, which left dozens of accounts and devices in
+# the dev database and made the fleet unreadable. Signing in with the same
+# account the dev stack bootstraps tests the real login path without writing
+# anything new.
+LOGIN=$(curl -fsS -c "${COOKIES}" -X POST "${BASE}/api/auth/login" \
   -H 'Content-Type: application/json' \
   -d "{\"email\":\"${EMAIL}\",\"password\":\"${PASSWORD}\"}")
-check "account created" "${REGISTER}" "owner_id"
+check "signed in as the development account" "${LOGIN}" "owner_id"
 
 # enroll-token and enroll take the token in the "token" field, not
 # "enroll_token" — a first attempt with the wrong name fails with a bare SQL
@@ -188,7 +216,7 @@ ENROLL=$(curl -fsS -b "${COOKIES}" -X POST "${BASE}/api/agent/enroll-token" \
 
 ENROLLED=$(curl -fsS -b "${COOKIES}" -X POST "${BASE}/api/agent/enroll" \
   -H 'Content-Type: application/json' \
-  -d "{\"token\":\"${ENROLL}\",\"hostname\":\"${HOSTNAME}\",\"user_id\":\"alice\",\"fingerprint\":\"e2e-$$-$(date +%s)\"}")
+  -d "{\"token\":\"${ENROLL}\",\"hostname\":\"${HOSTNAME}\",\"user_id\":\"alice\",\"machine_id\":\"${MACHINE_ID}\",\"fingerprint\":\"${MACHINE_ID}\"}")
 DEVICE_ID=$(printf '%s' "${ENROLLED}" | json_get "['device_id']")
 DEVICE_TOKEN=$(printf '%s' "${ENROLLED}" | json_get "['device_token']")
 
@@ -322,23 +350,13 @@ sleep 1
 timeout 60 agent-browser open "${BASE}/" --args "--no-sandbox" >/dev/null
 sleep 3
 
-if eval_js "!!document.querySelector('input[type=email]')" | grep -q true; then
-  ok "login screen rendered"
-else
-  fail "login screen rendered" "no email field found"
-fi
-
-eval_js "(()=>{const s=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
- s.call(document.querySelector('input[type=email]'),${EMAIL@Q});
- document.querySelector('input[type=email]').dispatchEvent(new Event('input',{bubbles:true}));
- s.call(document.querySelector('input[type=password]'),${PASSWORD@Q});
- document.querySelector('input[type=password]').dispatchEvent(new Event('input',{bubbles:true}));
- return 'filled';})()" >/dev/null
-sleep 1
-click_text "Sign in" >/dev/null
-sleep 4
-
-check "signed in" "$(eval_js "document.body.textContent.includes('Fleet') ? 'Fleet' : document.body.textContent.slice(0,60)")" "Fleet"
+# The dev stack injects SYNCWIN_DEV_TOKEN / VITE_DEV_TOKEN, so the dashboard
+# trades it for a session cookie and renders the fleet directly. Seeing the
+# sign-in form here means one of those variables is missing from the stack.
+SIGN_IN_FORM=$(unquote "$(eval_js "document.querySelector('input[type=email]') ? 'FORM' : 'SKIPPED'")")
+check "dev stack signs in without the login screen" "${SIGN_IN_FORM}" "SKIPPED"
+SIGNED=$(wait_for "Fleet" "document.body.textContent.includes('Fleet') ? 'Fleet' : document.body.textContent.slice(0,60)" 10)
+check "signed in" "${SIGNED}" "Fleet"
 
 # ---------------------------------------------------------------------------
 section "Device selection enables the scoped sidebar"

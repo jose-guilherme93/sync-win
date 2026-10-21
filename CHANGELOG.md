@@ -15,11 +15,22 @@ version, and a breaking change increases the major version.
 
 ### Added
 
+- **Development sign-in without the login screen.** `make dev` bootstraps
+  `demo@sync-win.local` / `sync-win-demo-password` and a fixed
+  `SYNCWIN_DEV_TOKEN`; the dashboard trades the token for a normal session
+  cookie, so the sign-in form is skipped. The server ignores the token unless
+  `SYNCWIN_ENV=development` and it never creates an account.
 - **A tab per terminal session in Remote access.** Up to three SSH sessions can
   be open at once — the server's documented limit per device — each in its own
   tab with its own account, ticket and connection. Switching tabs keeps every
   session alive, closing one tab ends only that session, and a refused ticket
   is reported inside its own tab instead of replacing the screen.
+
+### Changed
+
+- **The browser suite no longer creates an account per run.** It signs in as
+  the fixed development account, reuses one device record, and deletes it on
+  exit, so running `make test-e2e` leaves the dev fleet unchanged.
 
 ## [0.12.0] - 2026-10-19
 

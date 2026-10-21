@@ -120,3 +120,6 @@ entries:
   - id: sessions/261020-terminal-tabs
     path: sessions/261020-terminal-tabs.md
     type: session
+  - id: sessions/261021-dev-signin
+    path: sessions/261021-dev-signin.md
+    type: session
