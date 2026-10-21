@@ -351,7 +351,7 @@ describe('RemoteAccess screen', () => {
 
     const button = screen.getByRole('button', { name: 'New terminal tab' }) as HTMLButtonElement
     expect(button.disabled).toBe(true)
-    expect(screen.getByText(/6 of 6 terminals open\. Close a tab to open another\./)).toBeTruthy()
+    expect(button.title).toContain('Close a tab')
 
     await fireEvent.click(button)
     expect(calls.filter((call) => call.method === 'POST')).toHaveLength(6)
@@ -401,7 +401,7 @@ describe('RemoteAccess screen', () => {
     expect(FakeSocket.instances[0].closed).toBe(true)
     expect(screen.getAllByRole('tab')).toHaveLength(1)
     expect(screen.queryByRole('button', { name: 'Disconnect' })).toBeNull()
-    expect(screen.getByText(/not connected/)).toBeTruthy()
+    expect(screen.getByText(/0 connected/)).toBeTruthy()
   })
 
   it('uses the account chosen before the tab was created', async () => {

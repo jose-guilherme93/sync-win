@@ -51,6 +51,15 @@ command that set the title to `btop` renamed its tab. Unit tests: 9 tab-list and
 A session the device refuses before attaching now reports why in its tab instead
 of showing a bare `[disconnected]`.
 
+## Follow-up: compact terminal chrome
+
+The full-width account picker and the explanatory paragraph are gone. The card
+header holds the session count, a 9.5rem account select and a ghost Disconnect;
+the tab strip sits directly under it, with `+` immediately after the last tab
+and the active tab scrolled into view. The `Connecting…` line written into the
+terminal was removed — status lives in the tab dot and the header count, so no
+stale line survives a successful connection.
+
 ## Verification
 
 - `web`: 25 files / 239 tests, including 10 new pure tab tests and 21

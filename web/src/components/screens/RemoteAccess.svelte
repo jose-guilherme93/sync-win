@@ -290,7 +290,6 @@
     const session = live.get(id)
     if (!session) return
     session.term.reset()
-    session.term.writeln('\x1b[2mConnecting…\x1b[0m')
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const url = `${proto}//${window.location.host}${apiURL(`/api/devices/${device.id}/terminal`)}?ticket=${encodeURIComponent(ticket)}`
     const ws = new WebSocket(url)
@@ -480,22 +479,30 @@
   </header>
 
   <article class="card terminal-card">
-    <header class="card-head">
+    <header class="card-head term-head">
       <h2>SSH terminal</h2>
-      <span class="muted">
-        {#if tabs.length === 0}
-          no terminal open
+      <div class="term-tools">
+        <span class="muted">{tabs.length}/{MAX_TERMINAL_TABS} · {connectedCount} connected</span>
+        {#if remoteInfo && remoteInfo.users.length > 0}
+          <select class="account" bind:value={selectedUser} aria-label="account for new terminal">
+            {#each remoteInfo.users as user (user)}
+              <option value={user}>{user}</option>
+            {/each}
+          </select>
         {:else}
-          {tabs.length} of {MAX_TERMINAL_TABS} open · {connectedCount === 0 ? 'not connected' : `${connectedCount} connected`}
+          <input
+            class="account"
+            type="text"
+            placeholder="user (optional)"
+            bind:value={selectedUser}
+            aria-label="account for new terminal"
+          />
         {/if}
-      </span>
+        {#if activeTab && activeTab.status === 'connected'}
+          <button class="ghost" on:click={() => disconnectTab(activeTab.id)}>Disconnect</button>
+        {/if}
+      </div>
     </header>
-    <p class="consequence">
-      Opens a shell as the chosen user through the device's own sshd. Each tab is its own
-      session, and up to {MAX_TERMINAL_TABS} can run at once. Remote access must be enabled on
-      the device first (<code>sync-win-agent set ssh on</code>). Leave the account empty to use
-      the device's configured account.
-    </p>
     {#if remoteInfo && !remoteInfo.server_enabled}
       <div class="notice">Remote access is disabled on the server (<code>SYNCWIN_ENABLE_REMOTE_ACCESS</code>).</div>
     {:else if remoteInfo && !remoteInfo.device_enabled}
@@ -507,32 +514,6 @@
       <div class="notice">The device is not connected to the remote tunnel yet.</div>
     {/if}
     {#if remoteInfoError}<div class="error">{remoteInfoError}</div>{/if}
-    <div class="term-controls">
-      {#if remoteInfo && remoteInfo.users.length > 0}
-        <select bind:value={selectedUser} aria-label="account for new terminal">
-          {#each remoteInfo.users as user (user)}
-            <option value={user}>{user}</option>
-          {/each}
-        </select>
-      {:else}
-        <input
-          type="text"
-          placeholder="user (optional)"
-          bind:value={selectedUser}
-          aria-label="account for new terminal"
-        />
-      {/if}
-      {#if activeTab && activeTab.status === 'connected'}
-        <button class="ghost" on:click={() => disconnectTab(activeTab.id)}>Disconnect</button>
-      {/if}
-    </div>
-    {#if termError}<div class="error" role="alert">{termError}</div>{/if}
-    {#if activeTab?.error}
-      <div class="error" role="alert">{activeTab.error}</div>
-    {/if}
-    {#if !canAddTab}
-      <p class="limit">{tabs.length} of {MAX_TERMINAL_TABS} terminals open. Close a tab to open another.</p>
-    {/if}
     <div class="tabrow">
       <div class="tabstrip" role="tablist" aria-label="Terminal sessions">
         {#each tabs as tab (tab.id)}
@@ -571,6 +552,10 @@
         disabled={!canAddTab}
       >+</button>
     </div>
+    {#if termError}<div class="error" role="alert">{termError}</div>{/if}
+    {#if activeTab?.error}
+      <div class="error" role="alert">{activeTab.error}</div>
+    {/if}
     {#if tabs.length === 0}
       <div class="terminal empty-terminal">
         No terminal open. Press + to start one.
@@ -692,29 +677,48 @@
   .muted { color: var(--text-faint); font-size: 0.72rem; }
 
   .terminal-card code { background: var(--bg-elev); padding: 0 0.25rem; border-radius: 3px; font-size: 0.72rem; }
-  .term-controls { display: flex; gap: 0.5rem; margin: 0.5rem 0; }
-  .term-controls input,
-  .term-controls select {
-    flex: 1; padding: 0.45rem 0.6rem; border: 1px solid var(--border);
-    border-radius: var(--radius-sm); background: var(--bg-elev); color: var(--text);
-    font-size: 0.78rem;
+  .term-head { margin-bottom: 0.25rem; }
+  .term-tools { display: flex; align-items: center; gap: 0.4rem; min-width: 0; }
+  .term-tools .account {
+    width: 9.5rem;
+    max-width: 38vw;
+    padding: 0.34rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-elev);
+    color: var(--text);
+    font-size: 0.75rem;
+  }
+  .term-tools button.ghost {
+    margin: 0;
+    padding: 0.34rem 0.6rem;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+  }
+  .term-tools button.ghost:hover {
+    border-color: var(--accent-border);
+    background: transparent;
+    color: var(--text);
   }
   .terminal {
-    /* Fill most of the viewport height (minus the topbar, screen header,
-       terminal controls and the tab strip) and stay drag-resizable. The
-       ResizeObserver refits the active terminal on resize. */
+    /* Fill most of the viewport height (minus the topbar, screen header and
+       the tab strip) and stay drag-resizable. The ResizeObserver refits the
+       active terminal on resize. */
     /* The vh line is the fallback; dvh overrides it on browsers that support
        it. If dvh were the only rule, an older browser would drop the whole
        declaration and the terminal would collapse to its content height. */
-    height: calc(100vh - 245px);
-    height: calc(100dvh - 245px);
+    height: calc(100vh - 175px);
+    height: calc(100dvh - 175px);
     min-height: 520px;
-    margin-top: 0.35rem;
+    margin-top: 0;
     padding: 0.4rem;
     overflow: hidden;
     resize: vertical;
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    border-style: none solid solid;
+    border-radius: 0 0 var(--radius-sm) var(--radius-sm);
     background: #0b0f12;
   }
   .terminal.hidden { display: none; }
@@ -728,15 +732,12 @@
     border-style: dashed;
   }
 
-  .term-controls { flex-wrap: wrap; }
-  .limit { margin: 0.15rem 0 0.35rem; color: var(--warn); font-size: 0.74rem; }
-
-  .tabrow { display: flex; align-items: flex-end; gap: 0.25rem; margin-top: 0.5rem; }
+  .tabrow { display: flex; align-items: stretch; gap: 0.25rem; margin-top: 0.1rem; }
   .tabstrip {
     display: flex;
     align-items: flex-end;
     gap: 0.25rem;
-    flex: 1;
+    flex: 0 1 auto;
     min-width: 0;
     overflow-x: auto;
   }
@@ -754,7 +755,7 @@
     align-items: center;
     gap: 0.35rem;
     margin: 0;
-    padding: 0.4rem 0.2rem 0.4rem 0.6rem;
+    padding: 0.32rem 0.2rem 0.32rem 0.55rem;
     border: 0;
     background: transparent;
     color: var(--text-muted);
@@ -801,19 +802,7 @@
     color: var(--accent);
   }
   .tab-add:disabled { opacity: 0.4; cursor: default; }
-  .tab-label { max-width: 11rem; overflow: hidden; text-overflow: ellipsis; }
-
-  .term-controls button.ghost {
-    margin: 0;
-    border: 1px solid var(--border);
-    background: var(--bg-elev);
-    color: var(--text-muted);
-  }
-  .term-controls button.ghost:hover {
-    border-color: var(--accent-border);
-    background: var(--bg-elev);
-    color: var(--text);
-  }
+  .tab-label { max-width: 9.5rem; overflow: hidden; text-overflow: ellipsis; }
 
   .sessions { list-style: none; margin: 0; padding: 0; }
   .sessions li {

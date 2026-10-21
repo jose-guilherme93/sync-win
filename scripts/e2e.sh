@@ -642,7 +642,7 @@ fi
 click_text 'Remote access' >/dev/null
 sleep 2
 REMOTE_TEXT=$(unquote "$(eval_js "(()=>{const m=document.querySelector('main')||document.body;return m.innerText.replace(/\s+/g,' ');})()")")
-if [[ "${REMOTE_TEXT}" == *"SSH terminal"* && "${REMOTE_TEXT}" == *"up to 6"* ]]; then
+if [[ "${REMOTE_TEXT}" == *"SSH terminal"* && "${REMOTE_TEXT}" == *"/6"* ]]; then
   ok "remote access screen renders the SSH terminal"
 else
   fail "remote access screen renders the SSH terminal" "${REMOTE_TEXT:0:200}"
