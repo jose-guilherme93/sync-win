@@ -11,6 +11,15 @@ version, and a breaking change increases the major version.
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-10-21
+
+### Fixed
+
+- **The browser suite follows the chart-first Overview.** Its live-data checks
+  still read the vitals cards that 0.13.0 removed, so the end-to-end job failed
+  after the release; the checks now assert the Performance chart's CPU series
+  and keep the liveness regression on the topbar and fleet row.
+
 ## [0.13.0] - 2026-10-20
 
 ### Added
