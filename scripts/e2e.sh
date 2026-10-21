@@ -12,7 +12,7 @@
 #   - device selection from the fleet table enabling the scoped sidebar
 #   - the Services screen rendering seeded services and ports
 #   - both filters, "problems only", and the error state with retry
-#   - a device kept online on the widest chart window, with the gauge following
+#   - a device kept online on the widest chart window, with the vital card following
 #     new telemetry (the frozen-detail / range-owned-poll regression)
 #
 # What it does not cover: the nine other screens, responsive breakpoints, and
@@ -729,11 +729,30 @@ sleep 2
 TOPBAR_STATUS=$(unquote "$(eval_js "document.querySelector('.topbar .status-dot .text')?.textContent.trim() || ''")")
 check "topbar reports online after selection" "${TOPBAR_STATUS}" "online"
 
+CPU_BEFORE=$(unquote "$(eval_js "document.querySelector('[data-vital=cpu] .value')?.textContent.trim() || ''")")
+if [[ "${CPU_BEFORE}" == *"%"* ]]; then
+  ok "CPU vital card is rendered (${CPU_BEFORE})"
+else
+  fail "CPU vital card is rendered" "${CPU_BEFORE}"
+fi
+
+# The overview charts carry their numbers in a legend: last, average, min and
+# max for each plotted series. A missing legend means the old bare chart is
+# back. Checked on the default window, while the seeded sample exists.
+CHART_LEGENDS=0
+for _ in $(seq 1 10); do
+  CHART_LEGENDS=$(unquote "$(eval_js "String(document.querySelectorAll('.legend-item').length)")")
+  [ "${CHART_LEGENDS:-0}" -ge 2 ] && break
+  sleep 1
+done
+if [ "${CHART_LEGENDS:-0}" -ge 2 ]; then
+  ok "overview charts expose series statistics (${CHART_LEGENDS} legends)"
+else
+  fail "overview charts expose series statistics" "found ${CHART_LEGENDS:-0} legends"
+fi
+
 check "widest chart window selected" "$(unquote "$(click_text '7d')")" "CLICKED"
 sleep 1
-
-CPU_BEFORE=$(unquote "$(eval_js "document.querySelector('[role=img][aria-label^=\"CPU:\"]')?.getAttribute('aria-label') || ''")")
-check "CPU gauge is rendered" "${CPU_BEFORE}" "CPU:"
 
 # Push a sample far from the seeded 12.5% so the gauge has to change.
 python3 - "${WORK}/telemetry.json" "${WORK}/telemetry-live.json" <<'PY'
@@ -754,11 +773,11 @@ sleep 35
 TOPBAR_STATUS=$(unquote "$(eval_js "document.querySelector('.topbar .status-dot .text')?.textContent.trim() || ''")")
 check "topbar stays online after 35s on a 7d window" "${TOPBAR_STATUS}" "online"
 
-CPU_AFTER=$(unquote "$(eval_js "document.querySelector('[role=img][aria-label^=\"CPU:\"]')?.getAttribute('aria-label') || ''")")
+CPU_AFTER=$(unquote "$(eval_js "document.querySelector('[data-vital=cpu] .value')?.textContent.trim() || ''")")
 if [ "${CPU_AFTER}" != "${CPU_BEFORE}" ]; then
-  ok "CPU gauge follows the new telemetry (${CPU_BEFORE} -> ${CPU_AFTER})"
+  ok "CPU vital card follows the new telemetry (${CPU_BEFORE} -> ${CPU_AFTER})"
 else
-  fail "CPU gauge follows the new telemetry" "stayed at ${CPU_AFTER}"
+  fail "CPU vital card follows the new telemetry" "stayed at ${CPU_AFTER}"
 fi
 
 # The fleet view and the device view must agree: this was the reported symptom.

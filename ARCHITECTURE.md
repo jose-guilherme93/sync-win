@@ -66,9 +66,9 @@ Key UI components:
 - `lib/types.ts`: shared `Device` / `HardwareStats` shapes and status helpers
 - `lib/insights.ts`: alert thresholds and `generateInsights`, the single definition of what needs attention
 - `components/shell/Sidebar.svelte`, `Topbar.svelte`, `DeviceList.svelte`: the app chrome
-- `components/ui/`: reusable primitives (Icon, StatusDot, SeverityBadge, GaugeCard, StatCard, MiniSparkline, EmptyState, Skeleton, ConfirmDialog)
+- `components/ui/`: reusable primitives (Icon, StatusDot, SeverityBadge, StatCard, MiniSparkline, EmptyState, Skeleton, ConfirmDialog) and `TimeSeriesChart.svelte`, the Chart.js line chart with axis ticks, a crosshair tooltip and per-series last/average/min/max
 - `components/screens/Home.svelte`: dense fleet list with a summary bar and inline CPU/RAM/disk percentage meters; no time-series charts, and the alert count links to the Alerts screen
-- `components/screens/DeviceOverview.svelte`: gauges, per-core load, storage/network cards, history chart
+- `components/screens/DeviceOverview.svelte`: four vital cards with period statistics, Performance/Network/Disk I/O charts, load and cores, storage, interfaces, top processes and system facts
 - `components/screens/Alerts.svelte`, `Reports.svelte`: fleet-wide findings and inventory reports
 - `components/screens/Storage.svelte`, `Processes.svelte`, `Packages.svelte`, `Services.svelte`: per-device hardware and system views
 - `components/screens/RemoteAccess.svelte`: the tabbed SSH terminal (one session per tab, at most six, each tab named by the program running in it) with a scrollable recent-session audit beside it. `DeviceSettings.svelte`: identity, maintenance actions (restart agent, package updates, reboot, each confirmed and audited) and removal
@@ -245,8 +245,9 @@ The current project intentionally does not include:
 - Web dashboard uses lazy loading and 60-second cache TTL for large datasets.
 - `GET /api/devices` returns a lightweight summary projection (no app inventory,
   no device token, trimmed hardware) and JSON API responses are gzip-compressed.
-- The fleet list renders no time-series charts; sparklines and the history
-  chart load only on device screens.
+- The fleet list renders no time-series charts. Chart.js powers
+  `TimeSeriesChart` on the device Overview, where each line carries a legend
+  with its last, average, minimum and maximum values.
 - Agent samples system logs every 6th telemetry cycle and only rewrites its
   state file when it changes.
 - Device log lines are persisted to their own `device_logs` table rather than

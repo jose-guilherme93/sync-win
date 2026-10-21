@@ -126,3 +126,6 @@ entries:
   - id: sessions/261021-fleet-list
     path: sessions/261021-fleet-list.md
     type: session
+  - id: sessions/261021-overview-dashboard
+    path: sessions/261021-overview-dashboard.md
+    type: session

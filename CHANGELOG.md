@@ -15,6 +15,14 @@ version, and a breaking change increases the major version.
 
 ### Added
 
+- **The device Overview is a full dashboard.** Four vital cards (CPU, memory,
+  disk, temperature) show current plus average/min/max. A Performance chart
+  plots CPU, memory and temperature with toggles, a percentage axis, a right
+  temperature axis, time ticks, hover values, and a legend with each series'
+  last/average/min/max; Network and Disk I/O get their own charts with the same
+  numbers. Load and cores, storage, interfaces, top processes and system facts
+  close the page. Disk I/O history is honest about being live-only: the
+  downsampled ranges do not aggregate it.
 - **Development sign-in without the login screen.** `make dev` bootstraps
   `demo@sync-win.local` / `sync-win-demo-password` and a fixed
   `SYNCWIN_DEV_TOKEN`; the dashboard trades the token for a normal session

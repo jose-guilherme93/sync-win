@@ -8,7 +8,8 @@
   export let value: string | number | null = null
   export let unit = ''
   export let sub = ''
-  // Period min/max, rendered as the ↓/↑ line under the value.
+  // Period average/min/max, rendered as the ø/↓/↑ line under the value.
+  export let avg: number | null = null
   export let min: number | null = null
   export let max: number | null = null
   export let decimals = 0
@@ -23,7 +24,7 @@
 
   $: hasValue = present && value != null && value !== ''
   $: shown = hasValue ? value : '—'
-  $: hasRange = min != null || max != null
+  $: hasRange = avg != null || min != null || max != null
   // A single point cannot draw a line, so skip the sparkline rather than show a
   // flat dot that looks like a stuck metric.
   $: canPlot = series.length >= 2
@@ -36,6 +37,7 @@
     <span class="value">{shown}{#if hasValue && unit}<small>{unit}</small>{/if}</span>
     {#if hasRange}
       <span class="range">
+        {#if avg != null}<span title="Average in period">ø {avg.toFixed(decimals)}</span>{/if}
         {#if min != null}<span title="Minimum in period">↓ {min.toFixed(decimals)}</span>{/if}
         {#if max != null}<span title="Maximum in period">↑ {max.toFixed(decimals)}</span>{/if}
       </span>
