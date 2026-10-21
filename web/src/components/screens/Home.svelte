@@ -273,7 +273,7 @@
   }
   .usage-track {
     display: block;
-    height: 4px;
+    height: 0.7rem;
     border-radius: var(--radius-pill);
     background: var(--bg-elev);
     overflow: hidden;

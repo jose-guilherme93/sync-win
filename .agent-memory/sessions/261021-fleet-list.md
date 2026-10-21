@@ -48,4 +48,5 @@ class name is used deliberately.
 - E2E: 75/75, including "fleet list rendered", "three inline meters", "no
   time-series chart" and the updated row selector.
 - Browser: checked at 879×854 and 400×800; no horizontal overflow, the meters
-  render at 20px with labels and values inside the row.
+  render with labels and values inside the row; the bar itself is 0.7rem tall
+  (≈11px), matching the value font size rather than a hairline 4px track.
