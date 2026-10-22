@@ -18,6 +18,13 @@ type inboxConfig struct {
 	Sound     string   `json:"sound"`                // "beep" | "chime" | "pulse" | "none"
 	Volume    *float64 `json:"volume,omitempty"`     // 0..1, default 0.5
 	EventsSet bool     `json:"events_set,omitempty"` // the user has chosen an in-app event list
+	// Popups is the list of events that raise a toast in the dashboard. It is
+	// narrower than the subscription list: every event is recorded in the
+	// inbox, but only the ones the person chose to be interrupted by pop up.
+	Popups []string `json:"popups,omitempty"`
+	// PopupsSet tells a deliberate empty selection from a row that predates
+	// the setting.
+	PopupsSet bool `json:"popups_set,omitempty"`
 }
 
 var inboxSounds = []string{"beep", "chime", "pulse", "none"}
@@ -33,7 +40,9 @@ func (inboxProvider) Description() string {
 }
 
 // PublicFields returns every field: the inbox config holds no secrets.
-func (inboxProvider) PublicFields() []string { return []string{"sound", "volume", "events_set"} }
+func (inboxProvider) PublicFields() []string {
+	return []string{"sound", "volume", "events_set", "popups", "popups_set"}
+}
 
 func (p inboxProvider) parse(raw json.RawMessage) (inboxConfig, error) {
 	cfg := inboxConfig{Sound: "beep"}
@@ -63,6 +72,11 @@ func (p inboxProvider) Validate(raw json.RawMessage) error {
 	}
 	if cfg.Volume == nil || *cfg.Volume < 0 || *cfg.Volume > 1 {
 		return errors.New("volume must be between 0 and 1")
+	}
+	for _, event := range cfg.Popups {
+		if !ValidEventType(event) {
+			return fmt.Errorf("unknown event type: %s", event)
+		}
 	}
 	return nil
 }
