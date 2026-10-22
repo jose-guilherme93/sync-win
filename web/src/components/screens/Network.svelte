@@ -712,7 +712,13 @@
         {:else if !portsLoaded}
           <p class="loading">Loading sockets…</p>
         {:else if topExposed.length === 0}
-          <EmptyState icon="🔌" title="Nothing reachable from outside" message="Every listening socket is bound to the loopback address." />
+          <EmptyState
+            icon="🔌"
+            title={exposure.total === 0 ? 'No listening sockets' : 'Nothing reachable from outside'}
+            message={exposure.total === 0
+              ? 'The agent reports no socket in the listening state.'
+              : 'Every listening socket is bound to the loopback address.'}
+          />
         {:else}
           <table class="socks">
             <thead>
