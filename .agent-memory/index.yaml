@@ -129,3 +129,9 @@ entries:
   - id: sessions/261021-overview-dashboard
     path: sessions/261021-overview-dashboard.md
     type: session
+  - id: sessions/261022-notification-behaviour
+    path: sessions/261022-notification-behaviour.md
+    type: session
+  - id: sessions/261022-network-screen
+    path: sessions/261022-network-screen.md
+    type: session

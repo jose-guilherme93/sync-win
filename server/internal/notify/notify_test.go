@@ -311,3 +311,52 @@ func TestEventCatalogCoversEveryType(t *testing.T) {
 		}
 	}
 }
+
+// A device that comes back online is good news: it is recorded in the inbox
+// and it must not interrupt the person looking at the dashboard. A device
+// that went away, or a sync that failed, must interrupt.
+func TestCatalogMarksWhatInterrupts(t *testing.T) {
+	interrupts := map[EventType]bool{
+		EventDeviceOffline:  true,
+		EventSyncError:      true,
+		EventDeviceOnline:   false,
+		EventDeviceEnrolled: false,
+	}
+	for typ, want := range interrupts {
+		if got := Interrupts(typ); got != want {
+			t.Errorf("Interrupts(%q) = %v, want %v", typ, got, want)
+		}
+	}
+}
+
+// The default popup list is the server's answer, so the dashboard does not
+// keep a second copy that can drift.
+func TestDefaultPopupEvents(t *testing.T) {
+	defaults := DefaultPopupEvents()
+	if len(defaults) != 2 {
+		t.Fatalf("default popups = %v, want the two events that need attention", defaults)
+	}
+	found := map[EventType]bool{}
+	for _, typ := range defaults {
+		found[typ] = true
+		if !Interrupts(typ) {
+			t.Errorf("default popup %q does not interrupt", typ)
+		}
+	}
+	if !found[EventDeviceOffline] || !found[EventSyncError] {
+		t.Errorf("default popups = %v, want device_offline and sync_error", defaults)
+	}
+}
+
+func TestInboxConfigValidatesPopups(t *testing.T) {
+	p := Lookup("web_inbox")
+	if p == nil {
+		t.Fatal("web_inbox provider is not registered")
+	}
+	if err := p.Validate(json.RawMessage(`{"sound":"beep","volume":0.5,"popups":["device_offline","sync_error"],"popups_set":true}`)); err != nil {
+		t.Errorf("valid popup list rejected: %v", err)
+	}
+	if err := p.Validate(json.RawMessage(`{"sound":"beep","volume":0.5,"popups":["not_an_event"]}`)); err == nil {
+		t.Error("an unknown popup event was accepted")
+	}
+}

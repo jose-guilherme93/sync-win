@@ -40,12 +40,39 @@ func TestIsVirtualInterface(t *testing.T) {
 }
 
 // The dashboard used to sum every interface except loopback, which counted
-// container traffic once per veth, once per bridge and again on docker0. Only
-// real interfaces may reach the network totals.
-func TestCollectNetworkExcludesVirtualInterfaces(t *testing.T) {
+// container traffic once per veth, once per bridge and again on docker0.
+//
+// The plumbing is reported now, because an operator needs to see the bridge
+// that is carrying the traffic, but it is flagged: only the counted
+// interfaces may reach the network totals.
+func TestCollectNetworkFlagsUncountedInterfaces(t *testing.T) {
 	for _, iface := range CollectNetwork() {
-		if IsVirtualInterface(iface.Name) {
-			t.Errorf("CollectNetwork returned virtual interface %q", iface.Name)
+		wantCounted := !IsVirtualInterface(iface.Name)
+		if iface.Counted != wantCounted {
+			t.Errorf("interface %q counted = %v, want %v", iface.Name, iface.Counted, wantCounted)
+		}
+	}
+}
+
+// Every interface must be classified, and the classification must agree with
+// the name based rules for the cases the kernel cannot be asked about.
+func TestInterfaceKind(t *testing.T) {
+	tests := []struct {
+		name string
+		want string
+	}{
+		{"lo", IfaceKindLoopback},
+		{"veth1234", IfaceKindVeth},
+		{"br-abcdef", IfaceKindBridge},
+		{"docker0", IfaceKindBridge},
+		{"virbr0", IfaceKindBridge},
+		{"tailscale0", IfaceKindTunnel},
+		{"wg0", IfaceKindTunnel},
+		{"tun0", IfaceKindTunnel},
+	}
+	for _, tt := range tests {
+		if got := InterfaceKind(tt.name); got != tt.want {
+			t.Errorf("InterfaceKind(%q) = %q, want %q", tt.name, got, tt.want)
 		}
 	}
 }

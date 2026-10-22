@@ -434,32 +434,36 @@ func executeDockerRequest(req dockerRequest) dockerResult {
 }
 
 type telemetryStats struct {
-	CPUUsagePercent    float64           `json:"cpu_usage_percent"`
-	MemoryUsedBytes    uint64            `json:"memory_used_bytes"`
-	MemoryTotalBytes   uint64            `json:"memory_total_bytes"`
-	CPUTemperature     float64           `json:"cpu_temperature"`
-	CPUClockMHz        float64           `json:"cpu_clock_mhz,omitempty"`
-	CoreVoltageV       float64           `json:"core_voltage_v,omitempty"`
-	GPUTemperature     float64           `json:"gpu_temperature_celsius,omitempty"`
-	PowerWatts         float64           `json:"power_watts"`
-	BatteryPercent     float64           `json:"battery_percent,omitempty"`
-	BatteryStatus      string            `json:"battery_status,omitempty"`
-	AgentCPUUsage      float64           `json:"agent_cpu_usage"`
-	AgentMemoryBytes   uint64            `json:"agent_memory_bytes,omitempty"`
-	AgentVersion       string            `json:"agent_version"`
-	OperatingSystem    string            `json:"operating_system"`
-	Architecture       string            `json:"architecture"`
-	CPUModel           string            `json:"cpu_model,omitempty"`
-	KernelVersion      string            `json:"kernel_version"`
-	DesktopEnvironment string            `json:"desktop_environment"`
-	Locale             string            `json:"locale"`
-	Timezone           string            `json:"timezone,omitempty"`
-	BootTime           string            `json:"boot_time"`
-	UptimeSeconds      int64             `json:"uptime_seconds"`
-	LoadAverage        string            `json:"load_average,omitempty"`
-	NetworkIFaces      []networkIface    `json:"network_ifaces,omitempty"`
-	NetRxRate          float64           `json:"net_rx_rate,omitempty"`
-	NetTxRate          float64           `json:"net_tx_rate,omitempty"`
+	CPUUsagePercent    float64        `json:"cpu_usage_percent"`
+	MemoryUsedBytes    uint64         `json:"memory_used_bytes"`
+	MemoryTotalBytes   uint64         `json:"memory_total_bytes"`
+	CPUTemperature     float64        `json:"cpu_temperature"`
+	CPUClockMHz        float64        `json:"cpu_clock_mhz,omitempty"`
+	CoreVoltageV       float64        `json:"core_voltage_v,omitempty"`
+	GPUTemperature     float64        `json:"gpu_temperature_celsius,omitempty"`
+	PowerWatts         float64        `json:"power_watts"`
+	BatteryPercent     float64        `json:"battery_percent,omitempty"`
+	BatteryStatus      string         `json:"battery_status,omitempty"`
+	AgentCPUUsage      float64        `json:"agent_cpu_usage"`
+	AgentMemoryBytes   uint64         `json:"agent_memory_bytes,omitempty"`
+	AgentVersion       string         `json:"agent_version"`
+	OperatingSystem    string         `json:"operating_system"`
+	Architecture       string         `json:"architecture"`
+	CPUModel           string         `json:"cpu_model,omitempty"`
+	KernelVersion      string         `json:"kernel_version"`
+	DesktopEnvironment string         `json:"desktop_environment"`
+	Locale             string         `json:"locale"`
+	Timezone           string         `json:"timezone,omitempty"`
+	BootTime           string         `json:"boot_time"`
+	UptimeSeconds      int64          `json:"uptime_seconds"`
+	LoadAverage        string         `json:"load_average,omitempty"`
+	NetworkIFaces      []networkIface `json:"network_ifaces,omitempty"`
+	NetRxRate          float64        `json:"net_rx_rate,omitempty"`
+	NetTxRate          float64        `json:"net_tx_rate,omitempty"`
+	// NetworkHealth is the packet-level health of the stack: TCP
+	// retransmissions, the socket state breakdown, conntrack usage. It is
+	// counters only, all readable from /proc without any privilege.
+	NetworkHealth      *networkHealth    `json:"network_health,omitempty"`
 	DiskReadBytes      uint64            `json:"disk_read_bytes,omitempty"`
 	DiskWriteBytes     uint64            `json:"disk_write_bytes,omitempty"`
 	DiskReadRate       float64           `json:"disk_read_rate,omitempty"`
@@ -547,6 +551,28 @@ type networkIface struct {
 	TXErrors  uint64   `json:"tx_errors"`
 	RXDropped uint64   `json:"rx_dropped"`
 	TXDropped uint64   `json:"tx_dropped"`
+	Kind      string   `json:"kind,omitempty"`
+	Counted   bool     `json:"counted"`
+	Driver    string   `json:"driver,omitempty"`
+	Duplex    string   `json:"duplex,omitempty"`
+
+	CarrierChanges uint64 `json:"carrier_changes,omitempty"`
+	RXFIFOErrors   uint64 `json:"rx_fifo_errors,omitempty"`
+	TXFIFOErrors   uint64 `json:"tx_fifo_errors,omitempty"`
+	RXCollisions   uint64 `json:"rx_collisions,omitempty"`
+	TXCarrierErrs  uint64 `json:"tx_carrier_errors,omitempty"`
+	Multicast      uint64 `json:"multicast,omitempty"`
+}
+
+// networkHealth mirrors the collector's health block. The dashboard shows
+// these numbers as they are, so the shape has to survive the trip through
+// the telemetry payload unchanged.
+type networkHealth struct {
+	TCP         collectors.TCPStats        `json:"tcp"`
+	UDP         collectors.UDPStats        `json:"udp"`
+	Sockets     collectors.SocketCounts    `json:"sockets"`
+	Conntrack   *collectors.ConntrackState `json:"conntrack,omitempty"`
+	CollectedAt string                     `json:"collected_at,omitempty"`
 }
 
 type dockerContainer struct {
@@ -1437,6 +1463,7 @@ type hardwareSample struct {
 	DiskWrite   uint64
 	NetRX       map[string]uint64
 	NetTX       map[string]uint64
+	NetRetrans  uint64
 	CPUCores    []uint64
 	Processes   collectors.ProcessCPUSample
 	AgentImpact collectors.AgentImpact
@@ -1801,28 +1828,61 @@ func collectHardwareStats(prev *hardwareSample, now time.Time, sampleDocker bool
 		}
 		next.NetRX[iface.Name] = iface.RXBytes
 		next.NetTX[iface.Name] = iface.TXBytes
-		stats.NetRxRate += rxRate
-		stats.NetTxRate += txRate
+		// The totals cover the counted interfaces only. Container and VM
+		// plumbing is reported so the dashboard can show it, but summing it
+		// would count the same bytes once per veth, once per bridge and again
+		// on docker0.
+		if iface.Counted {
+			stats.NetRxRate += rxRate
+			stats.NetTxRate += txRate
+		}
 		netIfaces = append(netIfaces, networkIface{
-			Name:      iface.Name,
-			MAC:       iface.MAC,
-			MTU:       iface.MTU,
-			OperState: iface.OperState,
-			SpeedMbps: iface.SpeedMbps,
-			Addresses: iface.Addresses,
-			RXBytes:   iface.RXBytes,
-			TXBytes:   iface.TXBytes,
-			RXRate:    rxRate,
-			TXRate:    txRate,
-			RXPackets: iface.RXPackets,
-			TXPackets: iface.TXPackets,
-			RXErrors:  iface.RXErrors,
-			TXErrors:  iface.TXErrors,
-			RXDropped: iface.RXDropped,
-			TXDropped: iface.TXDropped,
+			Name:           iface.Name,
+			MAC:            iface.MAC,
+			MTU:            iface.MTU,
+			OperState:      iface.OperState,
+			SpeedMbps:      iface.SpeedMbps,
+			Addresses:      iface.Addresses,
+			RXBytes:        iface.RXBytes,
+			TXBytes:        iface.TXBytes,
+			RXRate:         rxRate,
+			TXRate:         txRate,
+			RXPackets:      iface.RXPackets,
+			TXPackets:      iface.TXPackets,
+			RXErrors:       iface.RXErrors,
+			TXErrors:       iface.TXErrors,
+			RXDropped:      iface.RXDropped,
+			TXDropped:      iface.TXDropped,
+			Kind:           iface.Kind,
+			Counted:        iface.Counted,
+			Driver:         iface.Driver,
+			Duplex:         iface.Duplex,
+			CarrierChanges: iface.CarrierChanges,
+			RXFIFOErrors:   iface.RXFIFOErrors,
+			TXFIFOErrors:   iface.TXFIFOErrors,
+			RXCollisions:   iface.RXCollisions,
+			TXCarrierErrs:  iface.TXCarrierErrors,
+			Multicast:      iface.Multicast,
 		})
 	}
 	stats.NetworkIFaces = netIfaces
+
+	// Packet-level health. The retransmission rate is a delta against the
+	// previous cycle: the cumulative counter alone cannot tell a link that
+	// lost three packets since boot from one that loses three a second.
+	health := collectors.CollectNetworkHealth()
+	if prev.NetRetrans > 0 && health.TCP.RetransSegs > prev.NetRetrans && elapsed > 0 {
+		health.TCP.RetransPerSec = float64(health.TCP.RetransSegs-prev.NetRetrans) / elapsed
+	}
+	next.NetRetrans = health.TCP.RetransSegs
+	health.CollectedAt = now.UTC().Format(time.RFC3339)
+	stats.NetworkHealth = &networkHealth{
+		TCP:         health.TCP,
+		UDP:         health.UDP,
+		Sockets:     health.Sockets,
+		Conntrack:   health.Conntrack,
+		CollectedAt: health.CollectedAt,
+	}
 
 	next.CPU, next.Idle = cpuTotal, idle
 	next.DiskRead, next.DiskWrite = diskRead, diskWrite
@@ -2836,6 +2896,27 @@ type systemInventoryRequest struct {
 	Services    []collectors.ServiceUnit `json:"services,omitempty"`
 	Ports       []collectors.OpenPort    `json:"ports,omitempty"`
 	Users       *loginUsersSection       `json:"users,omitempty"`
+	Network     *networkSection          `json:"network,omitempty"`
+}
+
+// networkSection is the slow-changing half of the network view: how the
+// device reaches the network and who else is on the segment. The fast
+// counters travel with the telemetry instead.
+type networkSection struct {
+	Topology collectors.NetworkTopology `json:"topology"`
+	Firewall firewallState              `json:"firewall"`
+}
+
+// firewallState reports whether the host firewall is installed and running.
+//
+// The agent runs unprivileged, so the rules themselves are out of reach; the
+// state of the unit is not, and "ufw is not running" is the fact an operator
+// needs before asking why a port is exposed. A firewall that is not installed
+// says so explicitly instead of looking like one that is idle.
+type firewallState struct {
+	UFW       string `json:"ufw"`
+	Firewalld string `json:"firewalld"`
+	Nftables  string `json:"nftables"`
 }
 
 // loginUsersSection is the remote-access view: the accounts a session may target
@@ -2844,6 +2925,39 @@ type loginUsersSection struct {
 	Enabled     bool     `json:"enabled"`
 	DefaultUser string   `json:"default_user,omitempty"`
 	Logins      []string `json:"logins"`
+}
+
+// firewallFromServices reads the firewall state out of the unit list that was
+// just collected. Reading the units is enough: the rules need root, the
+// state does not, and a unit that is not in the list was never installed.
+func firewallFromServices(services []collectors.ServiceUnit) firewallState {
+	state := firewallState{UFW: "not installed", Firewalld: "not installed", Nftables: "not installed"}
+	for _, unit := range services {
+		switch unit.Name {
+		case "ufw.service":
+			state.UFW = firewallUnitState(unit)
+		case "firewalld.service":
+			state.Firewalld = firewallUnitState(unit)
+		case "nftables.service":
+			state.Nftables = firewallUnitState(unit)
+		}
+	}
+	return state
+}
+
+// firewallUnitState turns a unit's active state into the three words the
+// dashboard shows: active, inactive or failed.
+func firewallUnitState(unit collectors.ServiceUnit) string {
+	switch strings.ToLower(unit.ActiveState) {
+	case "active":
+		return "active"
+	case "failed":
+		return "failed"
+	case "inactive", "":
+		return "inactive"
+	default:
+		return strings.ToLower(unit.ActiveState)
+	}
 }
 
 // syncSystemInventory collects and uploads the systemd unit list and the
@@ -2892,7 +3006,23 @@ func syncSystemInventory(serverURL, deviceID, deviceToken string, st *agentState
 		Logins:      names,
 	}
 
-	if req.Services == nil && req.Ports == nil && req.Users == nil {
+	// The network topology: gateway, resolvers, routes, neighbors, radio
+	// quality and tunnels. It is read here, on the slow cadence, because it
+	// changes on the order of minutes.
+	ifaces := collectors.CollectNetwork()
+	topology := collectors.CollectNetworkTopology(ifaces, collectors.TopologyLimits{
+		MaxRoutes:    syncwinContract.MaxNetworkRoutes(),
+		MaxNeighbors: syncwinContract.MaxNetworkNeighbors(),
+		MaxWireless:  syncwinContract.MaxWirelessLinks(),
+		MaxTunnels:   syncwinContract.MaxTunnelLinks(),
+	})
+	topology.CollectedAt = time.Now().UTC().Format(time.RFC3339)
+	req.Network = &networkSection{
+		Topology: topology,
+		Firewall: firewallFromServices(services),
+	}
+
+	if req.Services == nil && req.Ports == nil && req.Users == nil && req.Network == nil {
 		return fmt.Errorf("no system inventory section could be collected")
 	}
 	if err := postJSON(serverURL+"/api/devices/"+deviceID+"/system-inventory", deviceToken, req); err != nil {

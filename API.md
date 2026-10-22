@@ -516,6 +516,64 @@ Last listening socket snapshot. Session auth, owner scoped.
 
 **Response:** `200 OK` (array of `OpenPort`, empty when the device never reported)
 
+#### `GET /api/devices/{id}/network`
+
+The slow half of the network view: the gateway, the resolvers, the routes, the
+neighbours, the radio quality, the tunnels and the state of the host firewall.
+Session auth, owner scoped. Refreshed by the agent on the system-inventory
+cycle, so the age of the snapshot is the age of that cycle.
+
+**Response:** `200 OK`
+```json
+{
+  "topology": {
+    "default_gateway": "192.168.2.1",
+    "gateways": ["192.168.2.1"],
+    "dns": ["127.0.0.53"],
+    "search_domains": ["lan"],
+    "routes": [
+      { "destination": "0.0.0.0", "gateway": "192.168.2.1", "interface": "enp3s0", "metric": 100, "kind": "default", "family": "inet" }
+    ],
+    "neighbors": [
+      { "ip": "192.168.2.10", "mac": "aa:bb:cc:dd:ee:ff", "interface": "enp3s0", "state": "reachable", "family": "inet" }
+    ],
+    "wireless": [{ "interface": "wlan0", "signal_dbm": -52, "quality": 68, "noise_dbm": -95 }],
+    "tunnels": [{ "interface": "wg0", "kind": "wireguard", "state": "up" }],
+    "collected_at": "2026-10-22T10:00:00Z"
+  },
+  "firewall": { "ufw": "active", "firewalld": "not installed", "nftables": "inactive" }
+}
+```
+
+A device that never reported yields an empty object, not an error.
+
+#### `GET /api/devices/{id}/network/history`
+
+The per-interface traffic history. Session auth, owner scoped.
+
+**Query:** `from` and `to` (RFC3339, optional, default the last 24 hours) and
+`resolution` (`1m` or `5m`, optional). The resolution follows the window: the
+minute buckets up to 48 hours, the five minute buckets beyond that.
+
+**Response:** `200 OK`
+```json
+{
+  "device_id": "abc123",
+  "resolution": "1m",
+  "from": "2026-10-21T10:00:00Z",
+  "to": "2026-10-22T10:00:00Z",
+  "interfaces": {
+    "enp3s0": [
+      { "timestamp": "2026-10-22T09:00:00Z", "rx_rate": 4821.5, "tx_rate": 1204.2, "rx_max": 9000.1, "tx_max": 3000.4, "samples": 6 }
+    ]
+  }
+}
+```
+
+The rates are bytes per second, averaged over the samples in the bucket. Only
+the counted interfaces are in the history: the container plumbing duplicates
+traffic that is already counted on a real link.
+
 ### Commands
 
 #### `POST /api/devices/{id}/actions`
@@ -1256,11 +1314,24 @@ row created before event selection existed; the dashboard treats an old row as
   "provider": "web_inbox",
   "enabled": true,
   "events": ["device_offline", "sync_error"],
-  "config": { "sound": "pulse", "volume": 0.8, "events_set": true }
+  "config": {
+    "sound": "pulse",
+    "volume": 0.8,
+    "events_set": true,
+    "popups": ["device_offline", "sync_error"],
+    "popups_set": true
+  }
 }
 ```
 
 `sound` is `beep`, `chime`, `pulse` or `none`; `volume` is between 0 and 1.
+
+`popups` is the list of events that raise a toast in the dashboard. It is
+narrower than `events`: every event is recorded in the inbox, but only these
+interrupt. `popups_set` distinguishes a deliberate empty selection from a row
+that predates the setting. When the stored row has no `popups` list, the
+response carries the server's default — the events the catalogue marks as
+needing attention — so the dashboard never has to keep a copy of that list.
 
 **Response:** `200 OK`
 
@@ -1275,7 +1346,7 @@ List available notification providers. Requires session token.
     "name": "web_inbox",
     "label": "Web Inbox",
     "description": "In-app notification inbox",
-    "public_fields": ["sound", "volume", "events_set"]
+    "public_fields": ["sound", "volume", "events_set", "popups", "popups_set"]
   },
   {
     "name": "telegram",
@@ -1295,15 +1366,22 @@ List available notification providers. Requires session token.
 ### `GET /api/notifications/events`
 
 Return the event catalog used by the notification center: `type`, `label`,
-`description` and `severity` for every event the server can emit. Requires
-session token.
+`description`, `severity` and `interrupt` for every event the server can emit.
+Requires session token.
+
+`interrupt` says whether the event deserves to interrupt the person looking at
+the dashboard. A device that comes back online is recorded but does not
+interrupt; a device that went away does.
 
 **Response:** `200 OK`
 ```json
 [
   { "type": "device_offline", "label": "Device goes offline",
     "description": "The agent stopped reporting and the device is unreachable.",
-    "severity": "crit" }
+    "severity": "crit", "interrupt": true },
+  { "type": "device_online", "label": "Device comes back online",
+    "description": "The agent reported again after being offline.",
+    "severity": "good", "interrupt": false }
 ]
 ```
 

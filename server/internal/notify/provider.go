@@ -54,16 +54,48 @@ type EventInfo struct {
 	Label       string    `json:"label"`
 	Description string    `json:"description"`
 	Severity    string    `json:"severity"` // crit | warn | good | info
+	// Interrupt marks the events that deserve to interrupt the person looking
+	// at the dashboard. A device coming back online is good news and belongs
+	// in the history, but it must not pop up a toast every time a laptop wakes
+	// up. An event that needs attention — a device that went away, a sync that
+	// failed — interrupts.
+	Interrupt bool `json:"interrupt"`
 }
 
 // EventCatalog returns every event in the order the UI should present it.
 func EventCatalog() []EventInfo {
 	return []EventInfo{
-		{EventDeviceOffline, "Device goes offline", "The agent stopped reporting and the device is unreachable.", "crit"},
-		{EventDeviceOnline, "Device comes back online", "The agent reported again after being offline.", "good"},
-		{EventSyncError, "Sync error", "The agent reported a failure while syncing.", "warn"},
-		{EventDeviceEnrolled, "New device enrolled", "A new device registered with the server.", "info"},
+		{EventDeviceOffline, "Device goes offline", "The agent stopped reporting and the device is unreachable.", "crit", true},
+		{EventSyncError, "Sync error", "The agent reported a failure while syncing.", "warn", true},
+		{EventDeviceOnline, "Device comes back online", "The agent reported again after being offline.", "good", false},
+		{EventDeviceEnrolled, "New device enrolled", "A new device registered with the server.", "info", false},
 	}
+}
+
+// DefaultPopupEvents returns the events that raise a popup by default: the
+// ones the catalog marks as needing attention.
+//
+// This is the server's answer, not the dashboard's. The client asks for the
+// effective list instead of keeping its own copy, so a new interrupting event
+// does not need a change in two places.
+func DefaultPopupEvents() []EventType {
+	var out []EventType
+	for _, info := range EventCatalog() {
+		if info.Interrupt {
+			out = append(out, info.Type)
+		}
+	}
+	return out
+}
+
+// Interrupts reports whether the event type deserves to interrupt.
+func Interrupts(t EventType) bool {
+	for _, info := range EventCatalog() {
+		if info.Type == t {
+			return info.Interrupt
+		}
+	}
+	return false
 }
 
 // Event is a single notification-worthy occurrence. Message is a short,

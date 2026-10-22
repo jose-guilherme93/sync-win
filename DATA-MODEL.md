@@ -98,6 +98,63 @@ Rules:
 - a new enrollment always creates a new device credential
 - fingerprint metadata must not be returned by dashboard APIs
 
+### Network topology snapshot (network_json)
+
+`network_json` holds the slow half of the network view: how the device reaches
+the network and who else is on the segment. It is a whole-value replacement,
+like the services and the ports snapshots, and it is refreshed on the
+system-inventory cycle (300 s).
+
+`NetworkSection`: `{topology, firewall}`.
+
+`NetworkTopology`: `{default_gateway?, gateways?, dns?, search_domains?, routes?,
+neighbors?, wireless?, tunnels?, collected_at?}`.
+
+`NetworkRoute`: `{destination, gateway?, interface, metric?, kind, family}` — the
+kind is `default`, `network` or `host`, and the family is `inet` or `inet6`.
+
+`NetworkNeighbor`: `{ip, mac?, interface, state?, family}`.
+
+`WirelessLink`: `{interface, signal_dbm, quality, noise_dbm}`. The SSID, the
+channel and the bitrate are absent on purpose: the agent is unprivileged and
+cannot read them.
+
+`TunnelLink`: `{interface, kind, state?}`.
+
+`FirewallState`: `{ufw, firewalld, nftables}` — the state of the unit, never the
+rules. The agent cannot read the rules without root, and a dashboard that
+showed an empty rule set would look like an open firewall.
+
+The fast half of the network view, the counters and the packet health, travels
+with the telemetry in `hardware_json` and is not stored twice.
+
+### Network history (network_history)
+
+The per-interface traffic history. The global telemetry history keeps only the
+summed rate, which cannot answer "was it the wifi or the ethernet link that was
+slow".
+
+One row per device, interface, resolution and bucket:
+
+- device_id: owning device
+- iface: interface name
+- resolution: `1m` or `5m`
+- bucket: start of the bucket, RFC3339
+- rx_sum / tx_sum: the sum of the sampled rates, so the average survives the
+  roll-up
+- rx_max / tx_max: the highest sampled rate in the bucket
+- samples: how many samples the bucket holds
+
+Rules:
+
+- only the counted interfaces are recorded. The container plumbing duplicates
+  traffic that is already counted on a real link
+- the minute buckets older than 48 h are rolled up into five minute buckets and
+  then dropped; the five minute buckets are kept for 30 days and the minute ones
+  for 7
+- a history query is bounded to 20 000 rows and to a 30 day window
+- a device that never reported yields an empty history, not an error
+
 ## PreferenceFile
 
 Represents a small text file or binary save-game file synced from a device.
@@ -489,6 +546,13 @@ Rules:
 - The frontend never receives raw secret values; `PublicFields()` controls what is safe to expose.
 - A unique constraint on `(owner_id, provider)` prevents duplicate configs per provider.
 - Supported event types: `device_offline`, `device_online`, `sync_error`, `device_enrolled`.
+- The in-app channel (`web_inbox`) carries two extra fields in its config blob:
+  - `popups`: the event types that raise a toast in the dashboard
+  - `popups_set`: whether the person chose that list, which tells a
+    deliberate empty selection from a row that predates the setting
+- The server fills the effective `popups` list when the stored row has none:
+  the events the catalog marks as needing attention. The dashboard reads the
+  list it is given instead of keeping a copy of its own.
 
 ## Notification events (`notification_events`)
 
@@ -509,6 +573,11 @@ Rules:
 - Old events are pruned by a background job after `DataRetention.NotificationsHours`.
 - The `/api/notifications/inbox` endpoint accepts an optional `since` query parameter to return only events with `id > since`.
 - Real-time push to browsers is handled via SSE (`/api/notifications/stream`).
+- Every event is recorded, including the ones that do not interrupt. A device
+  that came back online is history; it does not raise a toast unless the person
+  asked for it. The dashboard decides that from the event's age as well as
+  from the popup list, so the history it reads when it opens is never replayed
+  as a pile of popups.
 
 ## DeviceCommand
 
