@@ -98,6 +98,63 @@ Rules:
 - a new enrollment always creates a new device credential
 - fingerprint metadata must not be returned by dashboard APIs
 
+### Network topology snapshot (network_json)
+
+`network_json` holds the slow half of the network view: how the device reaches
+the network and who else is on the segment. It is a whole-value replacement,
+like the services and the ports snapshots, and it is refreshed on the
+system-inventory cycle (300 s).
+
+`NetworkSection`: `{topology, firewall}`.
+
+`NetworkTopology`: `{default_gateway?, gateways?, dns?, search_domains?, routes?,
+neighbors?, wireless?, tunnels?, collected_at?}`.
+
+`NetworkRoute`: `{destination, gateway?, interface, metric?, kind, family}` — the
+kind is `default`, `network` or `host`, and the family is `inet` or `inet6`.
+
+`NetworkNeighbor`: `{ip, mac?, interface, state?, family}`.
+
+`WirelessLink`: `{interface, signal_dbm, quality, noise_dbm}`. The SSID, the
+channel and the bitrate are absent on purpose: the agent is unprivileged and
+cannot read them.
+
+`TunnelLink`: `{interface, kind, state?}`.
+
+`FirewallState`: `{ufw, firewalld, nftables}` — the state of the unit, never the
+rules. The agent cannot read the rules without root, and a dashboard that
+showed an empty rule set would look like an open firewall.
+
+The fast half of the network view, the counters and the packet health, travels
+with the telemetry in `hardware_json` and is not stored twice.
+
+### Network history (network_history)
+
+The per-interface traffic history. The global telemetry history keeps only the
+summed rate, which cannot answer "was it the wifi or the ethernet link that was
+slow".
+
+One row per device, interface, resolution and bucket:
+
+- device_id: owning device
+- iface: interface name
+- resolution: `1m` or `5m`
+- bucket: start of the bucket, RFC3339
+- rx_sum / tx_sum: the sum of the sampled rates, so the average survives the
+  roll-up
+- rx_max / tx_max: the highest sampled rate in the bucket
+- samples: how many samples the bucket holds
+
+Rules:
+
+- only the counted interfaces are recorded. The container plumbing duplicates
+  traffic that is already counted on a real link
+- the minute buckets older than 48 h are rolled up into five minute buckets and
+  then dropped; the five minute buckets are kept for 30 days and the minute ones
+  for 7
+- a history query is bounded to 20 000 rows and to a 30 day window
+- a device that never reported yields an empty history, not an error
+
 ## PreferenceFile
 
 Represents a small text file or binary save-game file synced from a device.

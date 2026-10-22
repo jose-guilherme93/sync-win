@@ -55,7 +55,21 @@ type Contract struct {
 			ExcludedPrefixes []string `json:"excluded_prefixes"`
 			Rationale        string   `json:"rationale"`
 			KeptExamples     []string `json:"kept_examples"`
+			Metadata         string   `json:"metadata"`
+			// Reported is true when the excluded interfaces are still reported
+			// with counted=false instead of being dropped. The dashboard shows
+			// them so an operator can see the bridge that is carrying the
+			// traffic; only the counted ones feed the fleet totals.
+			Reported bool `json:"reported"`
 		} `json:"network_interface_filter"`
+		NetworkHealth struct {
+			// Enabled turns the packet-level health block on. It is always on
+			// in this version; the flag exists so an older agent can be
+			// recognised by the server.
+			Enabled bool `json:"enabled"`
+			// Sources lists the kernel files the block is read from.
+			Sources []string `json:"sources"`
+		} `json:"network_health"`
 		DiskPartitionDedup struct {
 			ByDevice          bool     `json:"by_device"`
 			ExemptFilesystems []string `json:"exempt_filesystems"`
@@ -88,6 +102,15 @@ type Contract struct {
 			MaxUsers int `json:"max_users"`
 			MinUID   int `json:"min_uid"`
 		} `json:"users"`
+		Network struct {
+			// MaxRoutes and MaxNeighbors bound the topology payload. A host
+			// with a thousand routes would otherwise push a payload the
+			// dashboard has no use for.
+			MaxRoutes    int `json:"max_routes"`
+			MaxNeighbors int `json:"max_neighbors"`
+			MaxWireless  int `json:"max_wireless"`
+			MaxTunnels   int `json:"max_tunnels"`
+		} `json:"network"`
 	} `json:"system_inventory"`
 	PreferencesSync struct {
 		IntervalSecondsDefault int    `json:"interval_seconds_default"`
@@ -324,4 +347,37 @@ func (c *Contract) MaxOpenPorts() int {
 		return c.SystemInventory.Ports.MaxPorts
 	}
 	return 200
+}
+
+// MaxNetworkRoutes caps how many routing table entries a collection reports.
+func (c *Contract) MaxNetworkRoutes() int {
+	if c.SystemInventory.Network.MaxRoutes > 0 {
+		return c.SystemInventory.Network.MaxRoutes
+	}
+	return 32
+}
+
+// MaxNetworkNeighbors caps how many neighbour table entries a collection
+// reports.
+func (c *Contract) MaxNetworkNeighbors() int {
+	if c.SystemInventory.Network.MaxNeighbors > 0 {
+		return c.SystemInventory.Network.MaxNeighbors
+	}
+	return 64
+}
+
+// MaxWirelessLinks caps how many wireless interfaces a collection reports.
+func (c *Contract) MaxWirelessLinks() int {
+	if c.SystemInventory.Network.MaxWireless > 0 {
+		return c.SystemInventory.Network.MaxWireless
+	}
+	return 8
+}
+
+// MaxTunnelLinks caps how many tunnel interfaces a collection reports.
+func (c *Contract) MaxTunnelLinks() int {
+	if c.SystemInventory.Network.MaxTunnels > 0 {
+		return c.SystemInventory.Network.MaxTunnels
+	}
+	return 16
 }
