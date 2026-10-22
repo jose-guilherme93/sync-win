@@ -43,10 +43,28 @@ version, and a breaking change increases the major version.
   tunnel, bridge, container, loopback), the driver behind it, the duplex, the
   carrier changes and the hardware level counters that separate a congested
   network from a broken cable.
+- **The notifications only interrupt when there is something to act on.** A
+  device that comes back online is recorded in the inbox and in the bell, but
+  it no longer raises a toast: the alert stack was filling with good news.
+  Only the events the catalogue marks as needing attention interrupt, and only
+  while the dashboard is open — the history the dashboard reads when it opens
+  is never replayed as a pile of popups.
+- **The alerts lead somewhere.** Clicking a toast or a bell row opens the
+  device the event is about, the stack moved to the bottom right so it stops
+  covering the device readings, three alerts are shown at a time with a link
+  to the rest, and the history is grouped by day.
 - The device agent is now version **0.10.0** and the collection contract
   **1.8.0**. A device on an older agent keeps working: it reports fewer
   fields, and the screen says what is missing instead of showing zeroes as
   facts.
+
+### Fixed
+
+- **A device that came back was left invisible.** The anti-flap window
+  dropped the "back online" notice when another one had been recorded a few
+  minutes earlier, so the alert stayed open in the history and the device
+  that recovered was never reported. The recovery notice is now recognised as
+  the resolution of an alert and is never swallowed.
 
 ## [0.13.2] - 2026-10-21
 
