@@ -184,7 +184,14 @@ jobs:
     # This bound is the backstop for a wedge that no individual step timeout
     # catches: it used to be 30 minutes, which meant one hung CDP session cost
     # half an hour of runner time before anything gave up.
-    timeout-minutes: 10
+    #
+    # It was 10 minutes, and that was shorter than the install itself on a slow
+    # day: `agent-browser install --with-deps` pulls apt packages, and
+    # fonts-noto-cjk alone is 61 MB. At the ~130 KB/s a congested mirror served,
+    # the install took 10m18s and the job was cancelled before the suite ran —
+    # three times in one afternoon, with a green run next to it on the same
+    # commit. 18 minutes still catches a wedge and leaves room for the mirror.
+    timeout-minutes: 18
     needs: [web]
     steps:
       - uses: actions/checkout@v4
@@ -194,6 +201,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Install agent-browser and Chrome
+        timeout-minutes: 12
         run: |
           npm i -g agent-browser
           agent-browser install --with-deps
