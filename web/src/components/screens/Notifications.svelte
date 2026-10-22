@@ -12,6 +12,7 @@
     type NotificationPrefs
   } from '../../lib/notification-prefs'
   import { NOTIFICATION_SOUNDS, playNotificationSound } from '../../lib/notification-sound'
+  import { eventDetail, eventIcon } from '../../lib/notification-format'
   import EmptyState from '../ui/EmptyState.svelte'
   import SeverityBadge from '../ui/SeverityBadge.svelte'
 
@@ -208,13 +209,7 @@
   }
 
   function iconFor(type: string): string {
-    switch (type) {
-      case 'device_offline': return '🔴'
-      case 'device_online': return '🟢'
-      case 'sync_error': return '⚠️'
-      case 'device_enrolled': return '➕'
-      default: return 'ℹ️'
-    }
+    return eventIcon(type)
   }
 
   async function markRead(event: NotificationEvent) {
@@ -475,7 +470,7 @@
                       <span class="event-type">{eventLabel(event.type)}</span>
                       <span class="event-time" title={event.created_at}>{formatRelative(event.created_at)}</span>
                     </div>
-                    <p class="event-message">{event.message}</p>
+                    <p class="event-message">{eventDetail(event.message)}</p>
                   </div>
                   {#if !event.read}
                     <button class="mark-read" on:click={() => markRead(event)}>Mark read</button>

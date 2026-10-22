@@ -36,6 +36,7 @@
   import { uniquePorts } from './lib/ports'
   import { generateInsights } from './lib/insights'
   import { loadNotificationPrefs, notificationPrefs, resetNotificationPrefs, shouldToast } from './lib/notification-prefs'
+  import { eventDetail, eventIcon } from './lib/notification-format'
   import { unlockNotificationAudio } from './lib/notification-sound'
 
 
@@ -1566,11 +1567,11 @@
                 {#each notifEvents.slice(-5) as e (e.id)}
                   <button class="bell-item bell-{e.type}" on:click={() => openNotifDevice(e)}>
                     <div class="bell-item-top">
-                      <span class="bell-item-icon">{e.type === 'device_offline' ? '🔴' : e.type === 'device_online' ? '🟢' : e.type === 'sync_error' ? '⚠️' : '➕'}</span>
+                      <span class="bell-item-icon">{eventIcon(e.type)}</span>
                       <span class="bell-item-host">{e.hostname || e.device_id}</span>
                       <span class="bell-item-time">{timeAgo(e.created_at, now)}</span>
                     </div>
-                    <div class="bell-item-msg">{e.message}</div>
+                    <div class="bell-item-msg">{eventDetail(e.message)}</div>
                   </button>
                 {/each}
               {/if}

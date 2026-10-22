@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher, onMount, onDestroy } from 'svelte'
   import { formatRelative } from '../lib/format'
+  import { eventDetail, eventIcon } from '../lib/notification-format'
   import { playNotificationSound, type NotificationSound } from '../lib/notification-sound'
 
   export let event: {
@@ -46,13 +47,7 @@
   })
 
   function icon(type: string) {
-    switch (type) {
-      case 'device_offline': return '🔴'
-      case 'device_online': return '🟢'
-      case 'sync_error': return '⚠️'
-      case 'device_enrolled': return '➕'
-      default: return 'ℹ️'
-    }
+    return eventIcon(type)
   }
 
   // Shared helper: a null or Go zero timestamp renders empty instead of a day count.
@@ -86,7 +81,7 @@
     <span class="toast-icon">{icon(event.type)}</span>
     <span class="toast-body">
       <strong>{event.hostname || event.device_id}</strong>
-      <span>{event.message}</span>
+      <span>{eventDetail(event.message)}</span>
     </span>
   </button>
   <span class="toast-time">{timeAgo(event.created_at)}</span>
