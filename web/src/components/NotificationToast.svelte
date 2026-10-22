@@ -17,7 +17,9 @@
 
   const dispatch = createEventDispatcher()
 
-  const AUTO_DISMISS_MS = event.type === 'sync_error' ? 15000 : 8000
+  // A problem stays on screen longer than a piece of news, but not forever:
+  // the inbox keeps it either way.
+  const AUTO_DISMISS_MS = event.type === 'sync_error' ? 15000 : 10000
   let remaining = AUTO_DISMISS_MS
   let paused = false
   let timer: ReturnType<typeof setInterval> | null = null
@@ -61,6 +63,12 @@
     dispatch('dismiss', { id: event.id })
   }
 
+  // The toast is a way in: clicking it takes the person to the device the
+  // event is about.
+  function open() {
+    dispatch('open', { id: event.id, device_id: event.device_id })
+  }
+
   $: progress = remaining / AUTO_DISMISS_MS
 </script>
 
@@ -74,11 +82,13 @@
   on:mouseenter={() => (paused = true)}
   on:mouseleave={() => (paused = false)}
 >
-  <span class="toast-icon">{icon(event.type)}</span>
-  <div class="toast-body">
-    <strong>{event.hostname || event.device_id}</strong>
-    <span>{event.message}</span>
-  </div>
+  <button class="toast-hit" on:click={open} title="Open the device">
+    <span class="toast-icon">{icon(event.type)}</span>
+    <span class="toast-body">
+      <strong>{event.hostname || event.device_id}</strong>
+      <span>{event.message}</span>
+    </span>
+  </button>
   <span class="toast-time">{timeAgo(event.created_at)}</span>
   <button class="toast-close" on:click={dismiss} title="Dismiss">✕</button>
   <div class="toast-progress" style="width: {progress * 100}%"></div>
@@ -88,15 +98,15 @@
   .toast {
     display: flex;
     align-items: flex-start;
-    gap: 0.5rem;
-    padding: 0.55rem 0.7rem;
+    gap: 0.4rem;
+    padding: 0.5rem 0.6rem;
     border: 1px solid rgba(148, 163, 184, 0.15);
     border-left-width: 3px;
     border-radius: 9px;
     background: rgba(15, 23, 42, 0.95);
     backdrop-filter: blur(8px);
-    min-width: 260px;
-    max-width: 380px;
+    min-width: 250px;
+    max-width: 340px;
     animation: slideIn 0.25s ease-out;
     position: relative;
     overflow: hidden;
@@ -104,6 +114,20 @@
   .toast.error { border-left-color: #f87171; background: rgba(30, 10, 12, 0.95); }
   .toast.warn { border-left-color: #fbbf24; }
   .toast.good { border-left-color: #34d399; }
+
+  .toast-hit {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    flex: 1;
+    min-width: 0;
+    background: none;
+    border: 0;
+    padding: 0;
+    text-align: left;
+    cursor: pointer;
+  }
+  .toast-hit:hover strong { color: var(--accent, #34d399); }
 
   .toast-icon { font-size: 1rem; flex-shrink: 0; margin-top: 0.1rem; }
   .toast-body {
@@ -115,7 +139,7 @@
   }
   .toast-body strong { font-size: 0.78rem; color: #f8fafc; }
   .toast-body span { font-size: 0.72rem; color: #94a3b8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .toast-time { font-size: 0.6rem; color: #64748b; white-space: nowrap; flex-shrink: 0; }
+  .toast-time { font-size: 0.6rem; color: #64748b; white-space: nowrap; flex-shrink: 0; margin-top: 0.15rem; }
   .toast-close {
     border: none;
     background: none;

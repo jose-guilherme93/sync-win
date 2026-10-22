@@ -3,7 +3,7 @@
   import { get } from 'svelte/store'
   import { apiFetch, apiURL } from '../../lib/api'
   import { deviceLabel, type Device } from '../../lib/types'
-  import { formatRelative } from '../../lib/format'
+  import { formatRelative, parseTimestamp } from '../../lib/format'
   import {
     DEFAULT_NOTIFICATION_PREFS,
     loadNotificationPrefs,
@@ -168,6 +168,35 @@
     if (filterDevice !== 'all' && e.device_id !== filterDevice) return false
     return true
   })
+  $: groups = groupByDay(visible)
+
+  // The history is a diary, so it is read by day. A flat list of a hundred
+  // rows is a wall; "Today" and "Yesterday" are the two anchors a person
+  // looks for.
+  function groupByDay(events: NotificationEvent[]): { label: string; events: NotificationEvent[] }[] {
+    const out: { label: string; events: NotificationEvent[] }[] = []
+    for (const event of events) {
+      const label = dayLabel(event.created_at)
+      const last = out[out.length - 1]
+      if (last && last.label === label) {
+        last.events.push(event)
+        continue
+      }
+      out.push({ label, events: [event] })
+    }
+    return out
+  }
+
+  function dayLabel(stamp: string): string {
+    const parsed = parseTimestamp(stamp)
+    if (parsed == null) return 'Unknown date'
+    const day = new Date(parsed)
+    const today = new Date()
+    if (day.toDateString() === today.toDateString()) return 'Today'
+    const yesterday = new Date(today.getTime() - 86_400_000)
+    if (day.toDateString() === yesterday.toDateString()) return 'Yesterday'
+    return day.toLocaleDateString([], { day: '2-digit', month: 'short', year: 'numeric' })
+  }
 
   function infoFor(type: string): EventInfo {
     return catalog.find((e) => e.type === type) ?? FALLBACK_EVENTS.find((e) => e.type === type) ?? {
@@ -222,9 +251,11 @@
     return list.includes(event) ? list.filter((e) => e !== event) : [...list, event]
   }
 
-  function togglePrefEvent(event: string) {
+  // The in-app card edits the popup list, not the subscription list: every
+  // event is recorded in the inbox, and only the ones chosen here interrupt.
+  function togglePopup(event: string) {
     formDirty = true
-    form = { ...form, events: toggleEvent(form.events, event) }
+    form = { ...form, popups: toggleEvent(form.popups, event) }
   }
 
   function testSound() {
@@ -429,27 +460,34 @@
           : 'No notification matches these filters.'}
       />
     {:else}
-      <ul class="list">
-        {#each visible as event (event.id)}
-          <li class:unread={!event.read} class:read={event.read}>
-            <span class="event-icon">{iconFor(event.type)}</span>
-            <div class="event-main">
-              <div class="event-top">
-                <button class="device-link" on:click={() => onSelect(event.device_id)}>{event.hostname || event.device_id}</button>
-                <SeverityBadge severity={badgeSeverity(event.type)} />
-                <span class="event-type">{eventLabel(event.type)}</span>
-                <span class="event-time" title={event.created_at}>{formatRelative(event.created_at)}</span>
-              </div>
-              <p class="event-message">{event.message}</p>
-            </div>
-            {#if !event.read}
-              <button class="mark-read" on:click={() => markRead(event)}>Mark read</button>
-            {:else}
-              <span class="read-label">Read</span>
-            {/if}
-          </li>
+      <div class="history">
+        {#each groups as group (group.label)}
+          <div class="day-group">
+            <div class="day-label">{group.label}</div>
+            <ul class="list">
+              {#each group.events as event (event.id)}
+                <li class:unread={!event.read} class:read={event.read}>
+                  <span class="event-icon">{iconFor(event.type)}</span>
+                  <div class="event-main">
+                    <div class="event-top">
+                      <button class="device-link" on:click={() => onSelect(event.device_id)}>{event.hostname || event.device_id}</button>
+                      <SeverityBadge severity={badgeSeverity(event.type)} />
+                      <span class="event-type">{eventLabel(event.type)}</span>
+                      <span class="event-time" title={event.created_at}>{formatRelative(event.created_at)}</span>
+                    </div>
+                    <p class="event-message">{event.message}</p>
+                  </div>
+                  {#if !event.read}
+                    <button class="mark-read" on:click={() => markRead(event)}>Mark read</button>
+                  {:else}
+                    <span class="read-label">Read</span>
+                  {/if}
+                </li>
+              {/each}
+            </ul>
+          </div>
         {/each}
-      </ul>
+      </div>
     {/if}
   {:else}
     {#if prefsNote}<p class="ok-inline">{prefsNote}</p>{/if}
@@ -473,12 +511,16 @@
           <span class="field-label">Events that pop up</span>
           <div class="chips">
             {#each catalog as entry (entry.type)}
-              <button class:active={form.events.includes(entry.type)} on:click={() => togglePrefEvent(entry.type)}>
+              <button class:active={form.popups.includes(entry.type)} on:click={() => togglePopup(entry.type)}>
                 {entry.label}
               </button>
             {/each}
           </div>
-          <small class="muted">Unselected events still appear in the inbox; they just do not pop up.</small>
+          <small class="muted">
+            Only events that just happened pop up, and only while the dashboard is open.
+            Everything is recorded in the inbox either way: a device that comes back
+            online is history, not an interruption.
+          </small>
         </div>
 
         <div class="sound-row">
@@ -615,6 +657,17 @@
   .list li { display: flex; align-items: flex-start; gap: 0.55rem; padding: 0.7rem 0.8rem; border-bottom: 1px solid var(--border); }
   .list li:last-child { border-bottom: 0; }
   .list li.read { opacity: 0.65; }
+
+  /* The history is read by day: one group per day, each with its own frame. */
+  .day-group + .day-group { margin-top: 0.8rem; }
+  .day-label {
+    padding: 0.35rem 0.8rem;
+    color: var(--text-faint);
+    font-size: 0.66rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+  }
   .event-icon { font-size: 0.95rem; line-height: 1.4; }
   .event-main { min-width: 0; flex: 1; }
   .event-top { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem; }
