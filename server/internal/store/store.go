@@ -179,32 +179,35 @@ type HardwareSummary struct {
 }
 
 type HardwareStats struct {
-	CPUUsagePercent    float64           `json:"cpu_usage_percent"`
-	MemoryUsedBytes    uint64            `json:"memory_used_bytes"`
-	MemoryTotalBytes   uint64            `json:"memory_total_bytes"`
-	CPUTemperature     float64           `json:"cpu_temperature"`
-	CPUClockMHz        float64           `json:"cpu_clock_mhz,omitempty"`
-	CoreVoltageV       float64           `json:"core_voltage_v,omitempty"`
-	GPUTemperature     float64           `json:"gpu_temperature_celsius"`
-	PowerWatts         float64           `json:"power_watts"`
-	BatteryPercent     float64           `json:"battery_percent"`
-	BatteryStatus      string            `json:"battery_status"`
-	AgentCPUUsage      float64           `json:"agent_cpu_usage"`
-	AgentMemoryBytes   uint64            `json:"agent_memory_bytes"`
-	AgentVersion       string            `json:"agent_version,omitempty"`
-	OperatingSystem    string            `json:"operating_system"`
-	Architecture       string            `json:"architecture"`
-	CPUModel           string            `json:"cpu_model"`
-	KernelVersion      string            `json:"kernel_version"`
-	DesktopEnvironment string            `json:"desktop_environment"`
-	Locale             string            `json:"locale"`
-	Timezone           string            `json:"timezone"`
-	BootTime           string            `json:"boot_time"`
-	UptimeSeconds      int64             `json:"uptime_seconds"`
-	LoadAverage        string            `json:"load_average"`
-	NetworkIFaces      []NetworkIface    `json:"network_ifaces,omitempty"`
-	NetRxRate          float64           `json:"net_rx_rate"`
-	NetTxRate          float64           `json:"net_tx_rate"`
+	CPUUsagePercent    float64        `json:"cpu_usage_percent"`
+	MemoryUsedBytes    uint64         `json:"memory_used_bytes"`
+	MemoryTotalBytes   uint64         `json:"memory_total_bytes"`
+	CPUTemperature     float64        `json:"cpu_temperature"`
+	CPUClockMHz        float64        `json:"cpu_clock_mhz,omitempty"`
+	CoreVoltageV       float64        `json:"core_voltage_v,omitempty"`
+	GPUTemperature     float64        `json:"gpu_temperature_celsius"`
+	PowerWatts         float64        `json:"power_watts"`
+	BatteryPercent     float64        `json:"battery_percent"`
+	BatteryStatus      string         `json:"battery_status"`
+	AgentCPUUsage      float64        `json:"agent_cpu_usage"`
+	AgentMemoryBytes   uint64         `json:"agent_memory_bytes"`
+	AgentVersion       string         `json:"agent_version,omitempty"`
+	OperatingSystem    string         `json:"operating_system"`
+	Architecture       string         `json:"architecture"`
+	CPUModel           string         `json:"cpu_model"`
+	KernelVersion      string         `json:"kernel_version"`
+	DesktopEnvironment string         `json:"desktop_environment"`
+	Locale             string         `json:"locale"`
+	Timezone           string         `json:"timezone"`
+	BootTime           string         `json:"boot_time"`
+	UptimeSeconds      int64          `json:"uptime_seconds"`
+	LoadAverage        string         `json:"load_average"`
+	NetworkIFaces      []NetworkIface `json:"network_ifaces,omitempty"`
+	NetRxRate          float64        `json:"net_rx_rate"`
+	NetTxRate          float64        `json:"net_tx_rate"`
+	// NetworkHealth is the packet level health of the stack. It travels with
+	// the telemetry because the counters move every second.
+	NetworkHealth      *NetworkHealth    `json:"network_health,omitempty"`
 	DiskReadBytes      uint64            `json:"disk_read_bytes"`
 	DiskWriteBytes     uint64            `json:"disk_write_bytes"`
 	DiskReadRate       float64           `json:"disk_read_rate"`
@@ -313,6 +316,84 @@ type NetworkIface struct {
 	TXErrors  uint64   `json:"tx_errors"`
 	RXDropped uint64   `json:"rx_dropped"`
 	TXDropped uint64   `json:"tx_dropped"`
+	// Kind classifies the link: physical, wifi, tunnel, bridge, veth,
+	// loopback or virtual.
+	Kind string `json:"kind,omitempty"`
+	// Counted says whether the interface feeds the fleet totals. The
+	// container plumbing is reported so it can be seen, but summing it would
+	// count the same bytes once per veth, once per bridge and again on
+	// docker0.
+	Counted bool `json:"counted"`
+	// Driver is the kernel driver behind the link.
+	Driver string `json:"driver,omitempty"`
+	// Duplex is full or half on a wired link.
+	Duplex string `json:"duplex,omitempty"`
+	// CarrierChanges counts the link flaps since boot.
+	CarrierChanges uint64 `json:"carrier_changes,omitempty"`
+	// The hardware level counters that separate a congested network from a
+	// broken cable.
+	RXFIFOErrors    uint64 `json:"rx_fifo_errors,omitempty"`
+	TXFIFOErrors    uint64 `json:"tx_fifo_errors,omitempty"`
+	RXCollisions    uint64 `json:"rx_collisions,omitempty"`
+	TXCarrierErrors uint64 `json:"tx_carrier_errors,omitempty"`
+	Multicast       uint64 `json:"multicast,omitempty"`
+}
+
+// NetworkHealth is the packet level health of the device stack: the TCP
+// counters, the socket state breakdown and the conntrack usage.
+type NetworkHealth struct {
+	TCP         TCPStats        `json:"tcp"`
+	UDP         UDPStats        `json:"udp"`
+	Sockets     SocketCounts    `json:"sockets"`
+	Conntrack   *ConntrackState `json:"conntrack,omitempty"`
+	CollectedAt string          `json:"collected_at,omitempty"`
+}
+
+// TCPStats is the kernel TCP view. The counters are cumulative since boot and
+// the retransmission rate is the delta against the previous sample.
+type TCPStats struct {
+	ActiveOpens    uint64  `json:"active_opens"`
+	PassiveOpens   uint64  `json:"passive_opens"`
+	AttemptFails   uint64  `json:"attempt_fails"`
+	EstabResets    uint64  `json:"estab_resets"`
+	CurrEstab      uint64  `json:"curr_estab"`
+	InSegs         uint64  `json:"in_segs"`
+	OutSegs        uint64  `json:"out_segs"`
+	RetransSegs    uint64  `json:"retrans_segs"`
+	InErrs         uint64  `json:"in_errs"`
+	OutRsts        uint64  `json:"out_rsts"`
+	RetransPerSec  float64 `json:"retrans_per_sec"`
+	RetransPercent float64 `json:"retrans_percent"`
+}
+
+// UDPStats is the kernel UDP view.
+type UDPStats struct {
+	InDatagrams  uint64 `json:"in_datagrams"`
+	NoPorts      uint64 `json:"no_ports"`
+	InErrors     uint64 `json:"in_errors"`
+	OutDatagrams uint64 `json:"out_datagrams"`
+	RcvbufErrors uint64 `json:"rcvbuf_errors"`
+	SndbufErrors uint64 `json:"sndbuf_errors"`
+}
+
+// SocketCounts is the socket table by state. A pile of TIME_WAIT or
+// CLOSE_WAIT sockets is a problem the raw totals hide.
+type SocketCounts struct {
+	Established uint64 `json:"established"`
+	TimeWait    uint64 `json:"time_wait"`
+	CloseWait   uint64 `json:"close_wait"`
+	SynSent     uint64 `json:"syn_sent"`
+	SynRecv     uint64 `json:"syn_recv"`
+	FinWait1    uint64 `json:"fin_wait1"`
+	FinWait2    uint64 `json:"fin_wait2"`
+	Listen      uint64 `json:"listen"`
+	UDP         uint64 `json:"udp"`
+}
+
+// ConntrackState is the netfilter connection tracker usage.
+type ConntrackState struct {
+	Count int `json:"count"`
+	Max   int `json:"max"`
 }
 
 type AppInfo struct {
@@ -550,6 +631,7 @@ func (s *Store) migrateAddSystemInventoryColumns(ctx context.Context) error {
 		{"services_json", "TEXT"},
 		{"ports_json", "TEXT"},
 		{"login_users_json", "TEXT"},
+		{"network_json", "TEXT"},
 	} {
 		var count int
 		if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM pragma_table_info('devices') WHERE name=?", column.name).Scan(&count); err != nil {
@@ -707,6 +789,7 @@ func (s *Store) initSchema() error {
 		apps_json TEXT,
 		services_json TEXT,
 		ports_json TEXT,
+		network_json TEXT,
 		login_users_json TEXT,
 		status TEXT NOT NULL DEFAULT 'online',
 		created_at TEXT NOT NULL,
@@ -781,6 +864,24 @@ func (s *Store) initSchema() error {
 		power_avg REAL,
 		sample_count INTEGER
 	);
+	-- The per-interface traffic history. The global telemetry history keeps
+	-- only the summed rate, which cannot answer "was it the wifi or the
+	-- ethernet link that was slow". One row per interface per bucket, with
+	-- the sum of the samples so the average survives the roll-up.
+	CREATE TABLE IF NOT EXISTS network_history (
+		device_id TEXT NOT NULL,
+		iface TEXT NOT NULL,
+		resolution TEXT NOT NULL,
+		bucket TEXT NOT NULL,
+		rx_sum REAL NOT NULL DEFAULT 0,
+		tx_sum REAL NOT NULL DEFAULT 0,
+		rx_max REAL NOT NULL DEFAULT 0,
+		tx_max REAL NOT NULL DEFAULT 0,
+		samples INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (device_id, iface, resolution, bucket)
+	);
+	CREATE INDEX IF NOT EXISTS idx_network_history_range
+		ON network_history (device_id, resolution, bucket);
 	CREATE TABLE IF NOT EXISTS notification_configs (
 		owner_id TEXT NOT NULL,
 		provider TEXT NOT NULL,

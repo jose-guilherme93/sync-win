@@ -1,6 +1,6 @@
 {
-  "contract_version": "1.7.0",
-  "agent_version": "0.9.0",
+  "contract_version": "1.8.0",
+  "agent_version": "0.10.0",
   "collection": {
     "max_file_bytes": 524288,
     "default_preference_files": [
@@ -107,7 +107,12 @@
       ],
       "rationale": "Container and VM plumbing reports the same bytes on the veth pair, its bridge and docker0. Summing them inflates network totals several times over. Real NICs and deliberate tunnels (tailscale, wireguard, tun/tap) are kept.",
       "kept_examples": ["eth0", "wlan0", "enp3s0", "tailscale0", "wg0", "tun0", "tap0"],
-      "metadata": "Each kept interface also carries mac, mtu, oper_state, speed_mbps and addresses (CIDR) alongside rx/tx bytes, packets, errors and drops. Addresses and link state come from net.Interfaces() and /sys/class/net; every field is best-effort and may be empty."
+      "reported": true,
+      "metadata": "Every interface is reported, with kind (physical, wifi, tunnel, bridge, veth, loopback, virtual) and counted. counted=false means the interface is container or VM plumbing: it is shown on the dashboard but never enters the fleet totals. Alongside mac, mtu, oper_state, speed_mbps and addresses (CIDR), each interface carries driver, duplex, carrier_changes, rx_fifo_errors, tx_fifo_errors, rx_collisions, tx_carrier_errors and multicast. Addresses and link state come from net.Interfaces() and /sys/class/net; every field is best-effort and may be empty."
+    },
+    "network_health": {
+      "enabled": true,
+      "sources": ["/proc/net/snmp", "/proc/net/tcp", "/proc/net/tcp6", "/proc/net/udp", "/proc/sys/net/netfilter/nf_conntrack_count"]
     },
     "disk_partition_dedup": {
       "by_device": true,
@@ -141,6 +146,13 @@
       "max_users": 50,
       "min_uid": 1000,
       "rationale": "Only real login accounts are offered as remote-access targets. System accounts (uid below 1000), nologin/false shells and accounts without a home are excluded."
+    },
+    "network": {
+      "max_routes": 32,
+      "max_neighbors": 64,
+      "max_wireless": 8,
+      "max_tunnels": 16,
+      "rationale": "The topology travels with the system inventory, on the slow cadence. The caps bound the payload a device with a large routing table or a busy segment can push. The agent reads only what an unprivileged user can read: the routing table, the resolver configuration, the neighbour table, the radio quality and the tunnel interfaces. Firewall rules are out of reach without root, so only the state of the firewall unit is reported."
     }
   },
   "preferences_sync": {

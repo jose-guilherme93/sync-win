@@ -121,15 +121,47 @@ Campos adicionais coletados: `battery_percent`, `battery_status`, `network_iface
 
 ### Taxas de rede são agregadas pelo agente
 
-`net_rx_rate` e `net_tx_rate` são bytes por segundo **somados pelo agente somente sobre interfaces reais**. O dashboard deve consumir esses campos e **nunca somar `network_ifaces[]` por conta própria**: o pathname ignora o loopback, o que faria a mesma contagem aparecer também no dashboard.
+`net_rx_rate` e `net_tx_rate` são bytes por segundo **somados pelo agente somente sobre as interfaces contadas** (`counted=true`). O dashboard deve consumir esses campos e **nunca somar `network_ifaces[]` por conta própria**: somar a lista inteira contaria o mesmo byte no par `veth`, na sua bridge e no `docker0`.
 
-### Filtro de interfaces de rede
+### Interfaces de rede são reportadas, não descartadas
 
-`/proc/net/dev` lista toda a tubulação de containers e VMs, e o mesmo byte é contabilizado no par `veth`, na sua bridge e no `docker0`. Em um host com 14 containers isso inflava o total em ordens de grandeza. O collector descarta:
+`/proc/net/dev` lista toda a tubulação de containers e VMs, e o mesmo byte é contabilizado no par `veth`, na sua bridge e no `docker0`. Em um host com 14 containers isso inflava o total em ordens de grandeza.
 
-`lo`, `veth*`, `br-*`, `br0`, `docker*`, `virbr*`, `vnet*`, `cni*`, `flannel*`, `cali*`, `kube-ipvs*`
+O collector agora **reporta todas as interfaces** e marca cada uma com dois campos:
 
-Interfaces reais e túneis deliberados são mantidos: `eth0`, `wlan0`, `enp3s0`, `tailscale0`, `wg0`, `tun0`, `tap0`.
+- `kind`: `physical`, `wifi`, `tunnel`, `bridge`, `veth`, `loopback` ou `virtual`
+- `counted`: `false` para a tubulação de containers e VMs, `true` para o resto
+
+As interfaces com `counted=false` são `lo`, `veth*`, `br-*`, `br0`, `docker*`, `virbr*`, `vnet*`, `cni*`, `flannel*`, `cali*`, `kube-ipvs*`. Interfaces reais e túneis deliberados são mantidas e contadas: `eth0`, `wlan0`, `enp3s0`, `tailscale0`, `wg0`, `tun0`, `tap0`.
+
+Elas continuam no payload porque o operador precisa ver a bridge que está carregando o tráfego; o que não pode acontecer é elas entrarem no total. Um agent anterior a 1.8.0 não manda o campo `counted`, e nesse caso **todas** as interfaces recebidas são contadas — ele só reportava as reais.
+
+Além dos contadores de sempre, cada interface carrega `driver`, `duplex`, `carrier_changes`, `rx_fifo_errors`, `tx_fifo_errors`, `rx_collisions`, `tx_carrier_errors` e `multicast`. Todos são best-effort: podem vir vazios.
+
+### Saúde de pacotes (`network_health`)
+
+O bloco `network_health` chega na telemetria e traz o que o kernel já contava:
+
+- `tcp`: `active_opens`, `passive_opens`, `attempt_fails`, `estab_resets`, `curr_estab`, `in_segs`, `out_segs`, `retrans_segs`, `in_errs`, `out_rsts`, `retrans_per_sec` e `retrans_percent`
+- `udp`: `in_datagrams`, `no_ports`, `in_errors`, `out_datagrams`, `rcvbuf_errors`, `sndbuf_errors`
+- `sockets`: contagem por estado (`established`, `time_wait`, `close_wait`, `syn_sent`, `syn_recv`, `fin_wait1`, `fin_wait2`, `listen`, `udp`)
+- `conntrack`: `count` e `max` do netfilter, quando o kernel tem conntrack
+
+`retrans_per_sec` é um **delta** contra o ciclo anterior, como toda taxa do agent. `retrans_percent` é a fração acumulada de segmentos retransmitidos desde o boot. O bloco nunca derruba o ciclo de telemetria: um arquivo de `/proc` ilegível deixa o contador em zero, e não o ciclo em erro.
+
+### Topologia de rede (inventário de sistema)
+
+A topologia viaja no inventário de sistema (`POST /api/devices/{id}/system-inventory`), no ritmo lento de 300 s, e não na telemetria. Ela é lida de `/proc/net/route`, `/proc/net/ipv6_route`, `/etc/resolv.conf`, `/proc/net/arp`, `/proc/net/ndisc_cache` e `/proc/net/wireless`.
+
+O agent roda **sem privilégio**, e isso define o que existe no payload:
+
+- **gateway padrão, rotas, resolvers e domínios de busca**: disponíveis
+- **vizinhos (ARP/NDP)**: disponíveis
+- **qualidade do rádio** (sinal, ruído, quality): disponível; **SSID, canal e bitrate não**, porque precisam da API nl80211
+- **regras de firewall**: inacessíveis. O payload traz só o **estado** do serviço (`ufw`, `firewalld`, `nftables` como `active`, `inactive`, `failed` ou `not installed`), derivado das units systemd já coletadas
+- **peers de tailscale/wireguard**: inacessíveis. O que se vê é a interface do túnel e seus contadores
+
+Os limites (`max_routes`, `max_neighbors`, `max_wireless`, `max_tunnels`) vivem em `system_inventory.network` no `contract.json`.
 
 ### Porcentagem de CPU de processos é um delta
 
@@ -193,8 +225,9 @@ Fontes: `apt-mark showmanual`, `flatpak --user list`, `pacman -Qqe` (menos `-Qmq
 
 ## Inventário de sistema (`POST /api/devices/{id}/system-inventory`)
 
-Três seções independentes, declaradas em `system_inventory` no `contract.json`:
-unidades systemd, sockets em escuta e contas de login. Intervalo padrão 300 s.
+Quatro seções independentes, declaradas em `system_inventory` no `contract.json`:
+unidades systemd, sockets em escuta, contas de login e topologia de rede. Intervalo
+padrão 300 s.
 
 Fontes: `systemctl list-units --type=service --all` +
 `systemctl list-unit-files --type=service` para as unidades, `ss -tulpnH` para os
@@ -244,8 +277,8 @@ sistemas sem systemd e um binário faltando não pode virar erro de ciclo a cada
 5 minutos. Já um comando presente que falha é erro — a seção correspondente é
 omitida do payload e o server preserva o snapshot anterior dela.
 
-O payload aceita `services`, `ports` e `users` ausentes. Uma seção omitida
-preserva o último valor; um array vazio é um relatório real e substitui o
+O payload aceita `services`, `ports`, `users` e `network` ausentes. Uma seção
+omitida preserva o último valor; um array vazio é um relatório real e substitui o
 snapshot.
 
 ## Heartbeat (`POST /api/devices/{id}/heartbeat`)

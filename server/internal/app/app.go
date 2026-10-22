@@ -348,6 +348,19 @@ func Run() error {
 				} else if deleted > 0 {
 					structLogger.Info(logging.CatSystem, logging.EventAppStarted, "telemetry retention cleanup completed", map[string]any{"deleted": deleted})
 				}
+				// The per-interface traffic history is rolled up and pruned on
+				// the same schedule: the minute buckets are folded into five
+				// minute buckets and the ones past the retention go.
+				if rolled, err := dataStore.RollupNetworkHistory(context.Background()); err != nil {
+					structLogger.Error(logging.CatSystem, logging.EventAppError, "network history rollup failed", map[string]any{"error": err.Error()})
+				} else if rolled > 0 {
+					structLogger.Info(logging.CatSystem, logging.EventAppStarted, "network history rollup completed", map[string]any{"rows": rolled})
+				}
+				if deleted, err := dataStore.CleanupNetworkHistory(context.Background(), 7, 30); err != nil {
+					structLogger.Error(logging.CatSystem, logging.EventAppError, "network history cleanup failed", map[string]any{"error": err.Error()})
+				} else if deleted > 0 {
+					structLogger.Info(logging.CatSystem, logging.EventAppStarted, "network history cleanup completed", map[string]any{"deleted": deleted})
+				}
 				timer.Reset(6 * time.Hour)
 			case <-ctx.Done():
 				return
@@ -1068,6 +1081,14 @@ func (s *Server) handleDeviceDetail(w http.ResponseWriter, r *http.Request) {
 		s.handleDevicePorts(w, r, parts[0])
 		return
 	}
+	if len(parts) == 2 && parts[1] == "network" {
+		s.handleDeviceNetwork(w, r, parts[0])
+		return
+	}
+	if len(parts) == 3 && parts[1] == "network" && parts[2] == "history" {
+		s.handleDeviceNetworkHistory(w, r, parts[0])
+		return
+	}
 	if len(parts) == 2 && parts[1] == "sync" {
 		s.handleSync(w, r, parts[0])
 		return
@@ -1622,10 +1643,11 @@ func (s *Server) handleRestoreSaves(w http.ResponseWriter, r *http.Request, devi
 // section it could not collect, and the server must keep the previous snapshot
 // for it rather than recording a device that suddenly reports nothing.
 type systemInventoryRequest struct {
-	DeviceToken string               `json:"device_token"`
-	Services    *[]store.ServiceUnit `json:"services,omitempty"`
-	Ports       *[]store.OpenPort    `json:"ports,omitempty"`
-	Users       *store.LoginUsers    `json:"users,omitempty"`
+	DeviceToken string                `json:"device_token"`
+	Services    *[]store.ServiceUnit  `json:"services,omitempty"`
+	Ports       *[]store.OpenPort     `json:"ports,omitempty"`
+	Users       *store.LoginUsers     `json:"users,omitempty"`
+	Network     *store.NetworkSection `json:"network,omitempty"`
 }
 
 // handleSystemInventory accepts the agent's systemd and port snapshots.
@@ -1642,7 +1664,7 @@ func (s *Server) handleSystemInventory(w http.ResponseWriter, r *http.Request, d
 		s.writeError(w, http.StatusUnauthorized, errors.New("invalid device token"))
 		return
 	}
-	if req.Services == nil && req.Ports == nil && req.Users == nil {
+	if req.Services == nil && req.Ports == nil && req.Users == nil && req.Network == nil {
 		s.writeError(w, http.StatusBadRequest, errors.New("no system inventory section in payload"))
 		return
 	}
@@ -1654,11 +1676,16 @@ func (s *Server) handleSystemInventory(w http.ResponseWriter, r *http.Request, d
 		s.writeError(w, http.StatusNotFound, err)
 		return
 	}
+	if err := s.store.UpdateNetworkSection(r.Context(), deviceID, req.Network); err != nil {
+		s.writeError(w, http.StatusNotFound, err)
+		return
+	}
 	s.log.Info(logging.CatSystem, logging.EventSystemInventory,
 		"system inventory updated", map[string]any{
 			"device_id": deviceID,
 			"services":  inventoryCount(req.Services),
 			"ports":     inventoryPortCount(req.Ports),
+			"network":   inventoryNetworkCount(req.Network),
 		})
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -1675,6 +1702,15 @@ func inventoryPortCount(ports *[]store.OpenPort) int {
 		return -1
 	}
 	return len(*ports)
+}
+
+// inventoryNetworkCount reports how much of the network topology arrived, so
+// the log says whether the section was collected or simply missing.
+func inventoryNetworkCount(network *store.NetworkSection) int {
+	if network == nil {
+		return -1
+	}
+	return len(network.Topology.Routes) + len(network.Topology.Neighbors)
 }
 
 // handleDeviceServices serves the last services snapshot to the dashboard. The
@@ -1713,6 +1749,87 @@ func (s *Server) handleDevicePorts(w http.ResponseWriter, r *http.Request, devic
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(ports)
+}
+
+// handleDeviceNetwork serves the network topology of a device: the gateway,
+// the resolvers, the routes, the neighbors, the radio quality, the tunnels
+// and the state of the host firewall.
+//
+// It is a separate endpoint because this half of the network view changes on
+// the order of minutes. The fast half, the counters and the packet health,
+// travels with the telemetry the dashboard already has.
+func (s *Server) handleDeviceNetwork(w http.ResponseWriter, r *http.Request, deviceID string) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireOwnedDevice(w, r, deviceID) {
+		return
+	}
+	section, err := s.store.GetNetworkSection(r.Context(), deviceID)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(section)
+}
+
+// handleDeviceNetworkHistory serves the per-interface traffic history.
+//
+// The resolution follows the window the dashboard asked for: the minute
+// buckets for the last two days, the five minute buckets for anything older.
+func (s *Server) handleDeviceNetworkHistory(w http.ResponseWriter, r *http.Request, deviceID string) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireOwnedDevice(w, r, deviceID) {
+		return
+	}
+
+	to := time.Now().UTC()
+	from := to.Add(-24 * time.Hour)
+	if v := r.URL.Query().Get("from"); v != "" {
+		parsed, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, errors.New("invalid 'from' timestamp (expected RFC3339)"))
+			return
+		}
+		from = parsed
+	}
+	if v := r.URL.Query().Get("to"); v != "" {
+		parsed, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, errors.New("invalid 'to' timestamp (expected RFC3339)"))
+			return
+		}
+		to = parsed
+	}
+	if to.Before(from) {
+		s.writeError(w, http.StatusBadRequest, errors.New("'to' must not be before 'from'"))
+		return
+	}
+	// The window is bounded so one request cannot scan the whole table.
+	if to.Sub(from) > 30*24*time.Hour {
+		from = to.Add(-30 * 24 * time.Hour)
+	}
+
+	resolution := "1m"
+	if to.Sub(from) > 48*time.Hour {
+		resolution = "5m"
+	}
+	if v := r.URL.Query().Get("resolution"); v == "1m" || v == "5m" {
+		resolution = v
+	}
+
+	history, err := s.store.GetNetworkHistory(r.Context(), deviceID, resolution, from, to)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(history)
 }
 
 // requireOwnedDevice resolves the session owner and fails the request unless it
@@ -1850,6 +1967,12 @@ func (s *Server) handleTelemetry(w http.ResponseWriter, r *http.Request, deviceI
 		_ = s.store.AppendTelemetry(deviceID, payload)
 		// Feed to aggregator for down-sampling
 		s.aggregator.FeedRaw(deviceID, payload, time.Now().UTC())
+	}
+	// The per-interface traffic history is folded in here: it is the same
+	// sample the dashboard sees live, kept so the chart has a past.
+	if err := s.store.RecordNetworkSample(r.Context(), deviceID, req.Hardware.NetworkIFaces, time.Now().UTC()); err != nil {
+		s.log.Warn(logging.CatSync, logging.EventSyncError, "network history sample failed",
+			map[string]any{"device_id": deviceID, "error": err.Error()})
 	}
 	_ = json.NewEncoder(w).Encode(updated)
 

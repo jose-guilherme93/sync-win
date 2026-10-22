@@ -516,6 +516,64 @@ Last listening socket snapshot. Session auth, owner scoped.
 
 **Response:** `200 OK` (array of `OpenPort`, empty when the device never reported)
 
+#### `GET /api/devices/{id}/network`
+
+The slow half of the network view: the gateway, the resolvers, the routes, the
+neighbours, the radio quality, the tunnels and the state of the host firewall.
+Session auth, owner scoped. Refreshed by the agent on the system-inventory
+cycle, so the age of the snapshot is the age of that cycle.
+
+**Response:** `200 OK`
+```json
+{
+  "topology": {
+    "default_gateway": "192.168.2.1",
+    "gateways": ["192.168.2.1"],
+    "dns": ["127.0.0.53"],
+    "search_domains": ["lan"],
+    "routes": [
+      { "destination": "0.0.0.0", "gateway": "192.168.2.1", "interface": "enp3s0", "metric": 100, "kind": "default", "family": "inet" }
+    ],
+    "neighbors": [
+      { "ip": "192.168.2.10", "mac": "aa:bb:cc:dd:ee:ff", "interface": "enp3s0", "state": "reachable", "family": "inet" }
+    ],
+    "wireless": [{ "interface": "wlan0", "signal_dbm": -52, "quality": 68, "noise_dbm": -95 }],
+    "tunnels": [{ "interface": "wg0", "kind": "wireguard", "state": "up" }],
+    "collected_at": "2026-10-22T10:00:00Z"
+  },
+  "firewall": { "ufw": "active", "firewalld": "not installed", "nftables": "inactive" }
+}
+```
+
+A device that never reported yields an empty object, not an error.
+
+#### `GET /api/devices/{id}/network/history`
+
+The per-interface traffic history. Session auth, owner scoped.
+
+**Query:** `from` and `to` (RFC3339, optional, default the last 24 hours) and
+`resolution` (`1m` or `5m`, optional). The resolution follows the window: the
+minute buckets up to 48 hours, the five minute buckets beyond that.
+
+**Response:** `200 OK`
+```json
+{
+  "device_id": "abc123",
+  "resolution": "1m",
+  "from": "2026-10-21T10:00:00Z",
+  "to": "2026-10-22T10:00:00Z",
+  "interfaces": {
+    "enp3s0": [
+      { "timestamp": "2026-10-22T09:00:00Z", "rx_rate": 4821.5, "tx_rate": 1204.2, "rx_max": 9000.1, "tx_max": 3000.4, "samples": 6 }
+    ]
+  }
+}
+```
+
+The rates are bytes per second, averaged over the samples in the bucket. Only
+the counted interfaces are in the history: the container plumbing duplicates
+traffic that is already counted on a real link.
+
 ### Commands
 
 #### `POST /api/devices/{id}/actions`

@@ -11,6 +11,61 @@ version, and a breaking change increases the major version.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-22
+
+### Added
+
+- **The Network screen answers the three questions an operator actually asks.**
+  It now shows the traffic of each link over one hour, 24 hours or seven days
+  (read from the server, not from a ten-minute memory buffer), the health of
+  the stack, the IP configuration, the neighbours on the segment and what is
+  reachable from outside.
+- **Per-interface traffic history.** The server keeps one sample per interface
+  per minute, rolled up into five minute buckets after two days. The global
+  telemetry history only has the summed rate, which cannot say which link was
+  slow.
+- **Packet level health** from the kernel: the share of retransmitted packets
+  with a per-second rate, the socket table by state, and the conntrack usage
+  against its limit.
+- **The network topology of the device:** the default gateway, the resolvers,
+  the routing table, the neighbour table, the radio quality of the wireless
+  links and the tunnels.
+- **The state of the host firewall** (ufw, firewalld, nftables), so a device
+  with an exposed port can be checked without leaving the dashboard.
+- **The container links are visible now.** They used to be dropped at the
+  source, which hid the bridge that was carrying the traffic. They are
+  reported and clearly marked as outside the totals, so the fleet numbers do
+  not change.
+
+### Changed
+
+- **Every interface carries more than counters:** its kind (physical, wireless,
+  tunnel, bridge, container, loopback), the driver behind it, the duplex, the
+  carrier changes and the hardware level counters that separate a congested
+  network from a broken cable.
+- **The notifications only interrupt when there is something to act on.** A
+  device that comes back online is recorded in the inbox and in the bell, but
+  it no longer raises a toast: the alert stack was filling with good news.
+  Only the events the catalogue marks as needing attention interrupt, and only
+  while the dashboard is open — the history the dashboard reads when it opens
+  is never replayed as a pile of popups.
+- **The alerts lead somewhere.** Clicking a toast or a bell row opens the
+  device the event is about, the stack moved to the bottom right so it stops
+  covering the device readings, three alerts are shown at a time with a link
+  to the rest, and the history is grouped by day.
+- The device agent is now version **0.10.0** and the collection contract
+  **1.8.0**. A device on an older agent keeps working: it reports fewer
+  fields, and the screen says what is missing instead of showing zeroes as
+  facts.
+
+### Fixed
+
+- **A device that came back was left invisible.** The anti-flap window
+  dropped the "back online" notice when another one had been recorded a few
+  minutes earlier, so the alert stayed open in the history and the device
+  that recovered was never reported. The recovery notice is now recognised as
+  the resolution of an alert and is never swallowed.
+
 ## [0.13.2] - 2026-10-21
 
 ### Fixed

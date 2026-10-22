@@ -29,6 +29,7 @@ export type HardwareStats = {
   network_ifaces?: NetworkIface[]
   net_rx_rate?: number
   net_tx_rate?: number
+  network_health?: NetworkHealth
   uptime_seconds: number
   load_average: string
   power_watts: number
@@ -80,6 +81,138 @@ export type NetworkIface = {
   tx_errors: number
   rx_dropped?: number
   tx_dropped?: number
+  // kind classifies the link: physical, wifi, tunnel, bridge, veth, loopback
+  // or virtual. An agent that does not report it leaves it empty.
+  kind?: string
+  // counted says whether the interface feeds the fleet totals. The container
+  // plumbing is reported so it can be seen, but it must never be summed with
+  // the real links.
+  counted?: boolean
+  driver?: string
+  duplex?: string
+  carrier_changes?: number
+  rx_fifo_errors?: number
+  tx_fifo_errors?: number
+  rx_collisions?: number
+  tx_carrier_errors?: number
+  multicast?: number
+}
+
+// The packet level health of the device stack, as the agent reports it.
+export type NetworkHealth = {
+  tcp?: TCPStats
+  udp?: UDPStats
+  sockets?: SocketCounts
+  conntrack?: { count: number; max: number }
+  collected_at?: string
+}
+
+export type TCPStats = {
+  active_opens?: number
+  passive_opens?: number
+  attempt_fails?: number
+  estab_resets?: number
+  curr_estab?: number
+  in_segs?: number
+  out_segs?: number
+  retrans_segs?: number
+  in_errs?: number
+  out_rsts?: number
+  retrans_per_sec?: number
+  retrans_percent?: number
+}
+
+export type UDPStats = {
+  in_datagrams?: number
+  no_ports?: number
+  in_errors?: number
+  out_datagrams?: number
+  rcvbuf_errors?: number
+  sndbuf_errors?: number
+}
+
+export type SocketCounts = {
+  established?: number
+  time_wait?: number
+  close_wait?: number
+  syn_sent?: number
+  syn_recv?: number
+  fin_wait1?: number
+  fin_wait2?: number
+  listen?: number
+  udp?: number
+}
+
+// The slow half of the network view: how the device reaches the network and
+// who else is on the segment.
+export type NetworkSection = {
+  topology?: NetworkTopology
+  firewall?: FirewallState
+}
+
+export type NetworkTopology = {
+  default_gateway?: string
+  gateways?: string[]
+  dns?: string[]
+  search_domains?: string[]
+  routes?: NetworkRoute[]
+  neighbors?: NetworkNeighbor[]
+  wireless?: WirelessLink[]
+  tunnels?: TunnelLink[]
+  collected_at?: string
+}
+
+export type NetworkRoute = {
+  destination: string
+  gateway?: string
+  interface: string
+  metric?: number
+  kind: string
+  family: string
+}
+
+export type NetworkNeighbor = {
+  ip: string
+  mac?: string
+  interface: string
+  state?: string
+  family: string
+}
+
+export type WirelessLink = {
+  interface: string
+  signal_dbm?: number
+  quality?: number
+  noise_dbm?: number
+}
+
+export type TunnelLink = {
+  interface: string
+  kind: string
+  state?: string
+}
+
+export type FirewallState = {
+  ufw?: string
+  firewalld?: string
+  nftables?: string
+}
+
+export type NetworkHistoryPoint = {
+  timestamp: string
+  rx_rate: number
+  tx_rate: number
+  rx_max: number
+  tx_max: number
+  samples: number
+}
+
+export type NetworkHistory = {
+  device_id: string
+  resolution: string
+  from: string
+  to: string
+  interfaces: Record<string, NetworkHistoryPoint[]>
 }
 
 export type ProcessInfo = {
