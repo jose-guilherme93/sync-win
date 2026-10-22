@@ -3306,6 +3306,16 @@ func (s *Server) handleNotificationConfig(w http.ResponseWriter, r *http.Request
 				Configured: false,
 			})
 		}
+		// The in-app channel answers with the effective popup list. A row that
+		// predates the setting gets the server's default — the events the
+		// catalog marks as needing attention — so the dashboard never has to
+		// keep a copy of that list of its own.
+		for i := range result {
+			if result[i].Provider != "web_inbox" {
+				continue
+			}
+			result[i].Config = effectiveInboxConfig(result[i].Config)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(result)
 
@@ -3366,6 +3376,34 @@ func (s *Server) handleNotificationProviders(w http.ResponseWriter, r *http.Requ
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(list)
+}
+
+// effectiveInboxConfig fills the popup list of the in-app channel when the
+// stored row does not have one.
+//
+// The default is the set of events the server's catalog marks as needing
+// attention. Filling it here keeps the decision on the server: the dashboard
+// reads the list it is given instead of keeping a second copy that can drift.
+func effectiveInboxConfig(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		raw = json.RawMessage(`{}`)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return raw
+	}
+	if _, ok := doc["popups"]; !ok {
+		popups := make([]string, 0, len(notify.DefaultPopupEvents()))
+		for _, event := range notify.DefaultPopupEvents() {
+			popups = append(popups, string(event))
+		}
+		doc["popups"] = popups
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return raw
+	}
+	return out
 }
 
 type notificationTestRequest struct {

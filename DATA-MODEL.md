@@ -546,6 +546,13 @@ Rules:
 - The frontend never receives raw secret values; `PublicFields()` controls what is safe to expose.
 - A unique constraint on `(owner_id, provider)` prevents duplicate configs per provider.
 - Supported event types: `device_offline`, `device_online`, `sync_error`, `device_enrolled`.
+- The in-app channel (`web_inbox`) carries two extra fields in its config blob:
+  - `popups`: the event types that raise a toast in the dashboard
+  - `popups_set`: whether the person chose that list, which tells a
+    deliberate empty selection from a row that predates the setting
+- The server fills the effective `popups` list when the stored row has none:
+  the events the catalog marks as needing attention. The dashboard reads the
+  list it is given instead of keeping a copy of its own.
 
 ## Notification events (`notification_events`)
 
@@ -566,6 +573,11 @@ Rules:
 - Old events are pruned by a background job after `DataRetention.NotificationsHours`.
 - The `/api/notifications/inbox` endpoint accepts an optional `since` query parameter to return only events with `id > since`.
 - Real-time push to browsers is handled via SSE (`/api/notifications/stream`).
+- Every event is recorded, including the ones that do not interrupt. A device
+  that came back online is history; it does not raise a toast unless the person
+  asked for it. The dashboard decides that from the event's age as well as
+  from the popup list, so the history it reads when it opens is never replayed
+  as a pile of popups.
 
 ## DeviceCommand
 
