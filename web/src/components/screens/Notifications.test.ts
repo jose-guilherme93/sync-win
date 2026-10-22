@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import Notifications from './Notifications.svelte'
 import type { Device } from '../../lib/types'
@@ -148,9 +148,40 @@ describe('Notifications center', () => {
       expect(put).toBeTruthy()
       const body = JSON.parse(String(put?.init?.body))
       expect(body.provider).toBe('web_inbox')
-      expect(body.config).toEqual({ sound: 'pulse', volume: 0.8, events_set: true })
+      // The popup list travels with the preferences: the server told the
+      // dashboard which events interrupt, and the dashboard writes back what
+      // the person chose.
+      expect(body.config).toEqual({
+        sound: 'pulse',
+        volume: 0.8,
+        events_set: true,
+        popups: ['device_offline', 'sync_error'],
+        popups_set: true
+      })
     })
     expect(await screen.findByText(/Saved\./)).toBeTruthy()
+  })
+
+  it('lets the person choose which events pop up', async () => {
+    const { calls } = stubFetch()
+    renderScreen()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Preferences' }))
+    await screen.findAllByText('Device goes offline')
+    // The same event labels appear in the Telegram and the webhook cards, so
+    // the click has to be scoped to the in-app card.
+    const inApp = within(screen.getByText('In-app alerts').closest('.card') as HTMLElement)
+    // "Device comes back online" is not a popup by default.
+    await fireEvent.click(inApp.getByRole('button', { name: 'Device comes back online' }))
+    await fireEvent.click(screen.getByText('Save in-app preferences'))
+
+    await waitFor(() => {
+      const put = calls.find((c) => c.url.includes('/api/notifications/config') && c.init?.method === 'PUT')
+      expect(put).toBeTruthy()
+      const body = JSON.parse(String(put?.init?.body))
+      expect(body.config.popups).toEqual(['device_offline', 'sync_error', 'device_online'])
+      expect(body.config.popups_set).toBe(true)
+    })
   })
 
   it('keeps the inbox visible when the event catalogue cannot be loaded', async () => {

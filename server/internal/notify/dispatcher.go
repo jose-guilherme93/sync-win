@@ -31,6 +31,10 @@ type Dispatcher struct {
 
 	mu       sync.Mutex
 	lastSent map[string]time.Time // throttle key: "type\x00deviceID"
+	// pendingRecovery holds the devices whose offline alert was raised and not
+	// resolved yet. Their "back online" is the resolution of that alert and is
+	// never dropped by the anti-flap window.
+	pendingRecovery map[string]bool
 
 	// status watcher state
 	watchMu sync.Mutex
@@ -49,6 +53,7 @@ func NewDispatcher(st *store.Store, log *logging.Logger) *Dispatcher {
 		log:              log,
 		client:           &http.Client{Timeout: sendTimeout},
 		lastSent:         map[string]time.Time{},
+		pendingRecovery:  map[string]bool{},
 		known:            map[string]string{},
 		notifBroadcaster: NewNotifBroadcaster(),
 	}
@@ -80,7 +85,12 @@ func (d *Dispatcher) Emit(ownerID string, e Event) {
 		e.OccurredAt = time.Now().UTC()
 	}
 	e.Message = FormatMessage(e)
-	if d.throttled(e) {
+	// A recovery notice resolves an alert that was raised. It must not be
+	// swallowed by the anti-flap window: the last "back online" may belong to
+	// a different outage, and dropping this one would leave the alert open
+	// forever in the history.
+	recovery := d.isRecovery(e)
+	if d.throttled(e, recovery) {
 		if d.log != nil {
 			d.log.Info(logging.CatDevice, logging.EventNotifyThrottle,
 				"notify emit: throttled",
@@ -89,6 +99,7 @@ func (d *Dispatcher) Emit(ownerID string, e Event) {
 		}
 		return
 	}
+	d.trackTransition(e)
 	id, err := d.store.InsertNotificationEvent(ownerID, string(e.Type), e.DeviceID, e.Hostname, e.Message)
 	if err != nil {
 		d.logFailure("inbox insert failed", e, err)
@@ -118,14 +129,44 @@ func (d *Dispatcher) Emit(ownerID string, e Event) {
 	go d.deliver(ownerID, e)
 }
 
+// isRecovery reports whether the event closes an alert that was raised: a
+// device that went offline and is reporting again.
+func (d *Dispatcher) isRecovery(e Event) bool {
+	if e.Type != EventDeviceOnline {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.pendingRecovery[e.DeviceID]
+}
+
+// trackTransition remembers that a device went offline, so the moment it
+// comes back is recorded as the resolution of that alert.
+func (d *Dispatcher) trackTransition(e Event) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	switch e.Type {
+	case EventDeviceOffline:
+		d.pendingRecovery[e.DeviceID] = true
+	case EventDeviceOnline:
+		delete(d.pendingRecovery, e.DeviceID)
+	}
+}
+
 // throttled implements the anti-flap window.
-func (d *Dispatcher) throttled(e Event) bool {
+//
+// skipCheck is set for a recovery notice: it resolves an alert and is never
+// dropped, not even when the last event of that type was recent. The window
+// still moves, so the next spurious event is throttled against it.
+func (d *Dispatcher) throttled(e Event, skipCheck bool) bool {
 	key := string(e.Type) + "\x00" + e.DeviceID
 	now := time.Now()
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if last, ok := d.lastSent[key]; ok && now.Sub(last) < throttleWindow {
-		return true
+	if !skipCheck {
+		if last, ok := d.lastSent[key]; ok && now.Sub(last) < throttleWindow {
+			return true
+		}
 	}
 	d.lastSent[key] = now
 	return false

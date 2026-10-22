@@ -1819,10 +1819,18 @@ button.secondary {
 }
 
 .bell-item {
-  padding: 0.65rem 1rem;
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
   border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+  color: inherit;
+  font: inherit;
+  padding: 0.65rem 1rem;
   position: relative;
   transition: background 0.12s;
+  cursor: pointer;
 }
 
 .bell-item:hover {
@@ -2347,16 +2355,19 @@ button.secondary {
   background: rgba(148, 163, 184, 0.04);
 }
 
-/* ── Notification toast stack ── */
+/* ── Notification toast stack ──
+   Bottom right, out of the way of the header and the cards. The top right
+   corner holds the device readings: a toast that covers them hides the very
+   numbers the alert is about. */
 .notif-toast-stack {
   position: fixed;
-  top: 1rem;
+  bottom: 1rem;
   right: 1rem;
   z-index: 50;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  max-width: 400px;
+  max-width: 360px;
 }
 
 .notif-toast-header {
@@ -2372,6 +2383,19 @@ button.secondary {
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
+
+.notif-toast-more {
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 9px;
+  color: #94a3b8;
+  font-size: 0.68rem;
+  padding: 0.3rem 0.5rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+.notif-toast-more:hover { color: #e2e8f0; }
 
 /* ── App shell (Rigsight redesign) ──
    The signed-in page no longer uses the centered .page column: the shell is a

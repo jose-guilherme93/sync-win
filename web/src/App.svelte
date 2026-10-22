@@ -35,7 +35,8 @@
   import type { SecurityPosture } from './lib/security-posture'
   import { uniquePorts } from './lib/ports'
   import { generateInsights } from './lib/insights'
-  import { loadNotificationPrefs, notificationPrefs, resetNotificationPrefs, shouldNotify } from './lib/notification-prefs'
+  import { loadNotificationPrefs, notificationPrefs, resetNotificationPrefs, shouldToast } from './lib/notification-prefs'
+  import { eventDetail, eventIcon } from './lib/notification-format'
   import { unlockNotificationAudio } from './lib/notification-sound'
 
 
@@ -214,7 +215,11 @@
   let notifEvents: { id: number; type: string; device_id: string; hostname: string; message: string; created_at: string }[] = []
   let lastNotifId = 0
   let notifPrefsLoaded = false
-  $: toastEvents = notifEvents.filter((e) => shouldNotify($notificationPrefs, e.type))
+  // The toasts live in their own list. A toast is a decision taken once, when
+  // the event arrives: filtering the inbox on every render would make a toast
+  // appear and disappear as the event aged, and it would replay the whole
+  // history every time the dashboard was opened.
+  let toasts: { id: number; type: string; device_id: string; hostname: string; message: string; created_at: string }[] = []
   let extraDirs: string[] = []
   let newExtraDir = ''
   let workspaceDirs: string[] = []
@@ -364,6 +369,7 @@
             if (event.id > lastNotifId) lastNotifId = event.id
             if (!notifEvents.some(e => e.id === event.id)) {
               notifEvents = [...notifEvents, event]
+              pushToast(event)
             }
           }
         } catch {}
@@ -693,14 +699,38 @@
           if (e.id > lastNotifId) lastNotifId = e.id
           if (!e.read && !notifEvents.some(existing => existing.id === e.id)) {
             notifEvents = [...notifEvents, e]
+            // Only an event that just happened is worth interrupting for. The
+            // history the dashboard reads on open is older than that, so it
+            // lands in the inbox and in the bell without a toast.
+            pushToast(e)
           }
         }
       }
     } catch {}
   }
 
+  // pushToast decides whether an event interrupts, once, when it arrives.
+  //
+  // The rules: the in-app alerts are on, the event is one the person chose to
+  // be interrupted by, and it happened moments ago. Two events of the same
+  // kind about the same device replace each other instead of stacking, so a
+  // flapping agent cannot fill the screen.
+  function pushToast(event: { id: number; type: string; device_id: string; hostname: string; message: string; created_at: string }) {
+    if (!shouldToast($notificationPrefs, event)) return
+    if (toasts.some((t) => t.id === event.id)) return
+    const kept = toasts.filter((t) => !(t.type === event.type && t.device_id === event.device_id))
+    // Three at a time: the newest is the one that matters, and the rest are
+    // in the inbox.
+    toasts = [...kept, event].slice(-3)
+  }
+
+  function dismissToast(id: number) {
+    toasts = toasts.filter((t) => t.id !== id)
+  }
+
   function dismissNotif(id: number) {
     notifEvents = notifEvents.filter((e) => e.id !== id)
+    toasts = toasts.filter((t) => t.id !== id)
     void apiFetch(apiURL(`/api/notifications/inbox/read`), {
       method: 'POST',
       headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
@@ -712,6 +742,7 @@
   // client has not loaded yet, so it uses the server-side all flag.
   function clearNotifs() {
     notifEvents = []
+    toasts = []
     void apiFetch(apiURL(`/api/notifications/inbox/read`), {
       method: 'POST',
       headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
@@ -720,7 +751,8 @@
   }
 
   function dismissToasts() {
-    const ids = notifEvents.filter((e) => shouldNotify($notificationPrefs, e.type)).map((e) => e.id)
+    const ids = toasts.map((t) => t.id)
+    toasts = []
     if (ids.length === 0) return
     notifEvents = notifEvents.filter((e) => !ids.includes(e.id))
     void apiFetch(apiURL(`/api/notifications/inbox/read`), {
@@ -735,10 +767,12 @@
   function handleNotifMarkedRead(ids: number[], all: boolean) {
     if (all) {
       notifEvents = []
+      toasts = []
       return
     }
     const marked = new Set(ids)
     notifEvents = notifEvents.filter((e) => !marked.has(e.id))
+    toasts = toasts.filter((e) => !marked.has(e.id))
   }
 
   // Selecting a device navigates the shell to its overview. No popup: the same
@@ -747,6 +781,17 @@
     if (!deviceId) return
     nav.selectDevice(deviceId)
     mobileNavOpen = false
+  }
+
+  // openNotifDevice takes the person to the device the event is about and
+  // clears the event. A notification that does not lead anywhere is noise, so
+  // the toast and the bell row are both a way in.
+  function openNotifDevice(event: { id: number; device_id: string }) {
+    if (event.device_id) {
+      selectDevice(event.device_id)
+    }
+    bellOpen = false
+    dismissNotif(event.id)
   }
 
   async function loadDeviceDetail(deviceId: string, includePosture = false) {
@@ -1091,6 +1136,7 @@
   // notifications, cached panels or telemetry.
   function resetAccountState() {
     notifEvents = []
+    toasts = []
     lastNotifId = 0
     notifPrefsLoaded = false
     resetNotificationPrefs()
@@ -1519,15 +1565,14 @@
                 <div class="bell-empty">No new notifications</div>
               {:else}
                 {#each notifEvents.slice(-5) as e (e.id)}
-                  <div class="bell-item bell-{e.type}">
+                  <button class="bell-item bell-{e.type}" on:click={() => openNotifDevice(e)}>
                     <div class="bell-item-top">
-                      <span class="bell-item-icon">{e.type === 'device_offline' ? '🔴' : e.type === 'device_online' ? '🟢' : e.type === 'sync_error' ? '⚠️' : '➕'}</span>
+                      <span class="bell-item-icon">{eventIcon(e.type)}</span>
                       <span class="bell-item-host">{e.hostname || e.device_id}</span>
                       <span class="bell-item-time">{timeAgo(e.created_at, now)}</span>
                     </div>
-                    <div class="bell-item-msg">{e.message}</div>
-                    <button class="bell-item-dismiss" on:click={() => dismissNotif(e.id)}>✕</button>
-                  </div>
+                    <div class="bell-item-msg">{eventDetail(e.message)}</div>
+                  </button>
                 {/each}
               {/if}
             </div>
@@ -1893,14 +1938,25 @@
   </div>
 {/if}
 
-{#if toastEvents.length > 0}
+{#if toasts.length > 0}
   <div class="notif-toast-stack">
     <div class="notif-toast-header">
       <strong>Alerts</strong>
       <button class="inline" on:click={dismissToasts}>Dismiss</button>
     </div>
-    {#each toastEvents.slice(-5) as evt (evt.id)}
-      <NotificationToast event={evt} sound={$notificationPrefs.sound} volume={$notificationPrefs.volume} on:dismiss={() => dismissNotif(evt.id)} />
+    {#each toasts as evt (evt.id)}
+      <NotificationToast
+        event={evt}
+        sound={$notificationPrefs.sound}
+        volume={$notificationPrefs.volume}
+        on:dismiss={() => dismissToast(evt.id)}
+        on:open={() => openNotifDevice(evt)}
+      />
     {/each}
+    {#if notifEvents.length > toasts.length}
+      <button class="notif-toast-more" on:click={openNotifications}>
+        {notifEvents.length - toasts.length} more in the notification center
+      </button>
+    {/if}
   </div>
 {/if}

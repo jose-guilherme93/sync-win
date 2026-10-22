@@ -1256,11 +1256,24 @@ row created before event selection existed; the dashboard treats an old row as
   "provider": "web_inbox",
   "enabled": true,
   "events": ["device_offline", "sync_error"],
-  "config": { "sound": "pulse", "volume": 0.8, "events_set": true }
+  "config": {
+    "sound": "pulse",
+    "volume": 0.8,
+    "events_set": true,
+    "popups": ["device_offline", "sync_error"],
+    "popups_set": true
+  }
 }
 ```
 
 `sound` is `beep`, `chime`, `pulse` or `none`; `volume` is between 0 and 1.
+
+`popups` is the list of events that raise a toast in the dashboard. It is
+narrower than `events`: every event is recorded in the inbox, but only these
+interrupt. `popups_set` distinguishes a deliberate empty selection from a row
+that predates the setting. When the stored row has no `popups` list, the
+response carries the server's default — the events the catalogue marks as
+needing attention — so the dashboard never has to keep a copy of that list.
 
 **Response:** `200 OK`
 
@@ -1275,7 +1288,7 @@ List available notification providers. Requires session token.
     "name": "web_inbox",
     "label": "Web Inbox",
     "description": "In-app notification inbox",
-    "public_fields": ["sound", "volume", "events_set"]
+    "public_fields": ["sound", "volume", "events_set", "popups", "popups_set"]
   },
   {
     "name": "telegram",
@@ -1295,15 +1308,22 @@ List available notification providers. Requires session token.
 ### `GET /api/notifications/events`
 
 Return the event catalog used by the notification center: `type`, `label`,
-`description` and `severity` for every event the server can emit. Requires
-session token.
+`description`, `severity` and `interrupt` for every event the server can emit.
+Requires session token.
+
+`interrupt` says whether the event deserves to interrupt the person looking at
+the dashboard. A device that comes back online is recorded but does not
+interrupt; a device that went away does.
 
 **Response:** `200 OK`
 ```json
 [
   { "type": "device_offline", "label": "Device goes offline",
     "description": "The agent stopped reporting and the device is unreachable.",
-    "severity": "crit" }
+    "severity": "crit", "interrupt": true },
+  { "type": "device_online", "label": "Device comes back online",
+    "description": "The agent reported again after being offline.",
+    "severity": "good", "interrupt": false }
 ]
 ```
 
