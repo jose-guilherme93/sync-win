@@ -10,7 +10,7 @@ import (
 
 // The network view has two halves with very different tempos. The counters
 // and the packet health travel with the telemetry, every ten seconds. The
-// topology (gateway, resolvers, routes, neighbours) changes on the order of
+// topology (gateway, resolvers, routes, neighbors) changes on the order of
 // minutes, so it travels with the system inventory and is stored in its own
 // column on the device row, next to the services and the ports.
 
@@ -24,7 +24,7 @@ type NetworkRoute struct {
 	Family      string `json:"family"`
 }
 
-// NetworkNeighbor is one entry of the neighbour table.
+// NetworkNeighbor is one entry of the neighbor table.
 type NetworkNeighbor struct {
 	IP        string `json:"ip"`
 	MAC       string `json:"mac,omitempty"`
@@ -157,7 +157,7 @@ const networkHistoryMaxRows = 20000
 // The container plumbing is left out on purpose: the same bytes travel
 // through the veth pair, the bridge and docker0, so a history that counted
 // them would show three times the traffic that actually left the machine.
-func (s *Store) RecordNetworkSample(deviceID string, ifaces []NetworkIface, at time.Time) error {
+func (s *Store) RecordNetworkSample(ctx context.Context, deviceID string, ifaces []NetworkIface, at time.Time) error {
 	if deviceID == "" || len(ifaces) == 0 {
 		return nil
 	}
@@ -166,13 +166,13 @@ func (s *Store) RecordNetworkSample(deviceID string, ifaces []NetworkIface, at t
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	tx, err := s.db.Begin()
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
-	stmt, err := tx.Prepare(`
+	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO network_history (device_id, iface, resolution, bucket, rx_sum, tx_sum, rx_max, tx_max, samples)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
 		ON CONFLICT(device_id, iface, resolution, bucket) DO UPDATE SET
@@ -184,15 +184,15 @@ func (s *Store) RecordNetworkSample(deviceID string, ifaces []NetworkIface, at t
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for _, iface := range ifaces {
 		if !iface.Counted {
 			continue
 		}
-		if _, err := stmt.Exec(deviceID, iface.Name, networkHistory1m, bucketText,
-			iface.RXRate, iface.TXRate, iface.RXRate, iface.TXRate); err != nil {
-			return err
+		if _, execErr := stmt.ExecContext(ctx, deviceID, iface.Name, networkHistory1m, bucketText,
+			iface.RXRate, iface.TXRate, iface.RXRate, iface.TXRate); execErr != nil {
+			return execErr
 		}
 	}
 	return tx.Commit()
@@ -204,14 +204,14 @@ func (s *Store) RecordNetworkSample(deviceID string, ifaces []NetworkIface, at t
 // days, the five minute buckets for anything older. Asking for a resolution
 // that has no rows yields an empty map rather than an error, so a device that
 // was offline for a week shows an empty chart and not a failure.
-func (s *Store) GetNetworkHistory(deviceID, resolution string, from, to time.Time) (NetworkHistory, error) {
+func (s *Store) GetNetworkHistory(ctx context.Context, deviceID, resolution string, from, to time.Time) (NetworkHistory, error) {
 	if resolution == "" {
 		resolution = networkHistory1m
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	rows, err := s.db.Query(`
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT iface, bucket, rx_sum, tx_sum, rx_max, tx_max, samples
 		FROM network_history
 		WHERE device_id = ? AND resolution = ? AND bucket >= ? AND bucket <= ?
@@ -220,7 +220,7 @@ func (s *Store) GetNetworkHistory(deviceID, resolution string, from, to time.Tim
 	if err != nil {
 		return NetworkHistory{}, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	history := NetworkHistory{
 		DeviceID:   deviceID,
@@ -260,20 +260,20 @@ func (s *Store) GetNetworkHistory(deviceID, resolution string, from, to time.Tim
 // The minute data is the raw signal and it is expensive to keep: three
 // interfaces on a device are 4320 rows a day. The five minute buckets keep
 // the shape of the traffic for a month at a twentieth of the rows.
-func (s *Store) RollupNetworkHistory() (int64, error) {
+func (s *Store) RollupNetworkHistory(ctx context.Context) (int64, error) {
 	cutoff := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Minute)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	rows, err := s.db.Query(`
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT device_id, iface, bucket, rx_sum, tx_sum, rx_max, tx_max, samples
 		FROM network_history
 		WHERE resolution = ? AND bucket < ?`, networkHistory1m, timeText(cutoff))
 	if err != nil {
 		return 0, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	type key struct {
 		device string
@@ -286,11 +286,11 @@ func (s *Store) RollupNetworkHistory() (int64, error) {
 		var device, iface, bucket string
 		var rxSum, txSum, rxMax, txMax float64
 		var samples int
-		if err := rows.Scan(&device, &iface, &bucket, &rxSum, &txSum, &rxMax, &txMax, &samples); err != nil {
-			return 0, err
+		if scanErr := rows.Scan(&device, &iface, &bucket, &rxSum, &txSum, &rxMax, &txMax, &samples); scanErr != nil {
+			return 0, scanErr
 		}
-		stamp, err := time.Parse(time.RFC3339, bucket)
-		if err != nil {
+		stamp, parseErr := time.Parse(time.RFC3339, bucket)
+		if parseErr != nil {
 			continue
 		}
 		five := stamp.Truncate(5 * time.Minute).UTC()
@@ -308,22 +308,24 @@ func (s *Store) RollupNetworkHistory() (int64, error) {
 		rolled[k] = point
 		counts[k]++
 	}
-	if err := rows.Err(); err != nil {
-		return 0, err
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return 0, rowsErr
 	}
-	rows.Close()
+	// The rows are read before the transaction starts, so the connection has
+	// to be released first.
+	_ = rows.Close()
 
 	if len(rolled) == 0 {
 		return 0, nil
 	}
 
-	tx, err := s.db.Begin()
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
-	stmt, err := tx.Prepare(`
+	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO network_history (device_id, iface, resolution, bucket, rx_sum, tx_sum, rx_max, tx_max, samples)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(device_id, iface, resolution, bucket) DO UPDATE SET
@@ -335,16 +337,16 @@ func (s *Store) RollupNetworkHistory() (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for k, point := range rolled {
-		if _, err := stmt.Exec(k.device, k.iface, networkHistory5m, k.bucket,
-			point.RXRate, point.TXRate, point.RXMax, point.TXMax, point.Samples); err != nil {
-			return 0, err
+		if _, execErr := stmt.ExecContext(ctx, k.device, k.iface, networkHistory5m, k.bucket,
+			point.RXRate, point.TXRate, point.RXMax, point.TXMax, point.Samples); execErr != nil {
+			return 0, execErr
 		}
 	}
 
-	res, err := tx.Exec(`DELETE FROM network_history WHERE resolution = ? AND bucket < ?`, networkHistory1m, timeText(cutoff))
+	res, err := tx.ExecContext(ctx, `DELETE FROM network_history WHERE resolution = ? AND bucket < ?`, networkHistory1m, timeText(cutoff))
 	if err != nil {
 		return 0, err
 	}
@@ -357,7 +359,7 @@ func (s *Store) RollupNetworkHistory() (int64, error) {
 
 // CleanupNetworkHistory deletes the history rows that are older than the
 // retention the server keeps for them.
-func (s *Store) CleanupNetworkHistory(minuteDays, fiveMinuteDays int) (int64, error) {
+func (s *Store) CleanupNetworkHistory(ctx context.Context, minuteDays, fiveMinuteDays int) (int64, error) {
 	if minuteDays <= 0 {
 		minuteDays = 7
 	}
@@ -377,7 +379,7 @@ func (s *Store) CleanupNetworkHistory(minuteDays, fiveMinuteDays int) (int64, er
 		{networkHistory5m, fiveMinuteDays},
 	} {
 		cutoff := now.AddDate(0, 0, -tier.days)
-		res, err := s.db.Exec(`DELETE FROM network_history WHERE resolution = ? AND bucket < ?`, tier.resolution, timeText(cutoff))
+		res, err := s.db.ExecContext(ctx, `DELETE FROM network_history WHERE resolution = ? AND bucket < ?`, tier.resolution, timeText(cutoff))
 		if err != nil {
 			return total, fmt.Errorf("delete network history %s: %w", tier.resolution, err)
 		}

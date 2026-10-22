@@ -21,7 +21,7 @@ type NetworkRoute struct {
 	Family string `json:"family"`
 }
 
-// NetworkNeighbor is one entry of the neighbour table: who else is on the
+// NetworkNeighbor is one entry of the neighbor table: who else is on the
 // local network, as the kernel currently sees them.
 type NetworkNeighbor struct {
 	IP        string `json:"ip"`
@@ -186,7 +186,7 @@ func readIPv4Routes(path string) []NetworkRoute {
 	if err != nil {
 		return nil
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -226,7 +226,7 @@ func readIPv6DefaultRoute(path string) []NetworkRoute {
 	if err != nil {
 		return nil
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var routes []NetworkRoute
 	scanner := bufio.NewScanner(file)
@@ -267,7 +267,7 @@ func readResolvConfFrom(path string) ([]string, []string) {
 	if err != nil {
 		return nil, nil
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var dns []string
 	var search []string
@@ -301,21 +301,21 @@ func readResolvConfFrom(path string) ([]string, []string) {
 	return dns, search
 }
 
-// readNeighbors reads the ARP table and, when present, the IPv6 neighbour
+// readNeighbors reads the ARP table and, when present, the IPv6 neighbor
 // cache. Entries without a hardware address are dropped: they are unresolved
 // requests, not devices.
 func readNeighbors() []NetworkNeighbor {
 	return append(readARPNeighbors("/proc/net/arp"), readIPv6Neighbors("/proc/net/ndisc_cache")...)
 }
 
-// readARPNeighbors reads the IPv4 neighbour table.
+// readARPNeighbors reads the IPv4 neighbor table.
 func readARPNeighbors(path string) []NetworkNeighbor {
 	var neighbors []NetworkNeighbor
 	file, err := os.Open(path)
 	if err != nil {
 		return nil
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -356,7 +356,7 @@ func readIPv6Neighbors(path string) []NetworkNeighbor {
 	if err != nil {
 		return nil
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var neighbors []NetworkNeighbor
 	scanner := bufio.NewScanner(file)
@@ -405,7 +405,7 @@ func readWirelessFrom(path string) []WirelessLink {
 	if err != nil {
 		return nil
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var links []WirelessLink
 	scanner := bufio.NewScanner(file)

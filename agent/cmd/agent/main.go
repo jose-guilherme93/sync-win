@@ -3006,7 +3006,7 @@ func syncSystemInventory(serverURL, deviceID, deviceToken string, st *agentState
 		Logins:      names,
 	}
 
-	// The network topology: gateway, resolvers, routes, neighbours, radio
+	// The network topology: gateway, resolvers, routes, neighbors, radio
 	// quality and tunnels. It is read here, on the slow cadence, because it
 	// changes on the order of minutes.
 	ifaces := collectors.CollectNetwork()

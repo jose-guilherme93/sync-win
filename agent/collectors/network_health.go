@@ -97,7 +97,7 @@ func parseProcNetSNMP(path string) (TCPStats, UDPStats, bool) {
 	if err != nil {
 		return TCPStats{}, UDPStats{}, false
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var tcp TCPStats
 	var udp UDPStats
@@ -211,7 +211,7 @@ func (c *SocketCounts) addFrom(path string) {
 	if err != nil {
 		return
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		fields := strings.Fields(scanner.Text())
@@ -245,7 +245,7 @@ func countLines(path string) uint64 {
 	if err != nil {
 		return 0
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	scanner := bufio.NewScanner(file)
 	var count uint64
 	for scanner.Scan() {

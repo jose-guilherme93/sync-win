@@ -37,8 +37,8 @@ func TestUpdateNetworkSectionRoundTrips(t *testing.T) {
 		},
 		Firewall: FirewallState{UFW: "active", Firewalld: "not installed", Nftables: "inactive"},
 	}
-	if err := s.UpdateNetworkSection(context.Background(), device.ID, &section); err != nil {
-		t.Fatalf("UpdateNetworkSection: %v", err)
+	if updateErr := s.UpdateNetworkSection(context.Background(), device.ID, &section); updateErr != nil {
+		t.Fatalf("UpdateNetworkSection: %v", updateErr)
 	}
 
 	got, err := s.GetNetworkSection(context.Background(), device.ID)
@@ -88,16 +88,16 @@ func TestRecordNetworkSampleKeepsCountedInterfaces(t *testing.T) {
 		{Name: "enp3s0", Counted: true, RXRate: 1000, TXRate: 500},
 		{Name: "veth1234", Counted: false, RXRate: 1000, TXRate: 500},
 	}
-	if err := s.RecordNetworkSample(device.ID, ifaces, at); err != nil {
-		t.Fatalf("RecordNetworkSample: %v", err)
+	if sampleErr := s.RecordNetworkSample(context.Background(), device.ID, ifaces, at); sampleErr != nil {
+		t.Fatalf("RecordNetworkSample: %v", sampleErr)
 	}
 	// A second sample in the same minute must average with the first, not
 	// replace it.
-	if err := s.RecordNetworkSample(device.ID, ifaces, at.Add(10*time.Second)); err != nil {
-		t.Fatalf("RecordNetworkSample: %v", err)
+	if secondErr := s.RecordNetworkSample(context.Background(), device.ID, ifaces, at.Add(10*time.Second)); secondErr != nil {
+		t.Fatalf("RecordNetworkSample: %v", secondErr)
 	}
 
-	history, err := s.GetNetworkHistory(device.ID, "1m", at.Add(-time.Hour), at.Add(time.Hour))
+	history, err := s.GetNetworkHistory(context.Background(), device.ID, "1m", at.Add(-time.Hour), at.Add(time.Hour))
 	if err != nil {
 		t.Fatalf("GetNetworkHistory: %v", err)
 	}
@@ -133,12 +133,12 @@ func TestRollupNetworkHistory(t *testing.T) {
 	old := time.Now().UTC().Add(-72 * time.Hour).Truncate(5 * time.Minute)
 	ifaces := []NetworkIface{{Name: "enp3s0", Counted: true, RXRate: 2000, TXRate: 1000}}
 	for i := 0; i < 3; i++ {
-		if err := s.RecordNetworkSample(device.ID, ifaces, old.Add(time.Duration(i)*time.Minute)); err != nil {
-			t.Fatalf("RecordNetworkSample: %v", err)
+		if sampleErr := s.RecordNetworkSample(context.Background(), device.ID, ifaces, old.Add(time.Duration(i)*time.Minute)); sampleErr != nil {
+			t.Fatalf("RecordNetworkSample: %v", sampleErr)
 		}
 	}
 
-	rolled, err := s.RollupNetworkHistory()
+	rolled, err := s.RollupNetworkHistory(context.Background())
 	if err != nil {
 		t.Fatalf("RollupNetworkHistory: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestRollupNetworkHistory(t *testing.T) {
 		t.Errorf("rolled = %d rows, want 3", rolled)
 	}
 
-	history, err := s.GetNetworkHistory(device.ID, "5m", old.Add(-time.Hour), old.Add(time.Hour))
+	history, err := s.GetNetworkHistory(context.Background(), device.ID, "5m", old.Add(-time.Hour), old.Add(time.Hour))
 	if err != nil {
 		t.Fatalf("GetNetworkHistory: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestRollupNetworkHistory(t *testing.T) {
 	}
 
 	// The minute rows must be gone once they were folded.
-	minute, err := s.GetNetworkHistory(device.ID, "1m", old.Add(-time.Hour), old.Add(time.Hour))
+	minute, err := s.GetNetworkHistory(context.Background(), device.ID, "1m", old.Add(-time.Hour), old.Add(time.Hour))
 	if err != nil {
 		t.Fatalf("GetNetworkHistory: %v", err)
 	}

@@ -83,7 +83,7 @@ func IsTunnelInterface(name string) bool {
 }
 
 // InterfaceKind classifies a link. The name is only a hint: a wireless
-// interface is recognised by its sysfs entry and a physical one by the
+// interface is recognized by its sysfs entry and a physical one by the
 // backing device it has, so a renamed interface (wlp3s0, enp3s0, eth0) is
 // still classified correctly.
 func InterfaceKind(name string) string {
@@ -128,7 +128,7 @@ func CollectNetwork() []NetworkInterface {
 	if err != nil {
 		return nil
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var interfaces []NetworkInterface
 	scanner := bufio.NewScanner(file)

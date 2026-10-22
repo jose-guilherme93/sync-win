@@ -65,7 +65,7 @@ type Contract struct {
 		NetworkHealth struct {
 			// Enabled turns the packet-level health block on. It is always on
 			// in this version; the flag exists so an older agent can be
-			// recognised by the server.
+			// recognized by the server.
 			Enabled bool `json:"enabled"`
 			// Sources lists the kernel files the block is read from.
 			Sources []string `json:"sources"`
@@ -357,7 +357,7 @@ func (c *Contract) MaxNetworkRoutes() int {
 	return 32
 }
 
-// MaxNetworkNeighbors caps how many neighbour table entries a collection
+// MaxNetworkNeighbors caps how many neighbor table entries a collection
 // reports.
 func (c *Contract) MaxNetworkNeighbors() int {
 	if c.SystemInventory.Network.MaxNeighbors > 0 {

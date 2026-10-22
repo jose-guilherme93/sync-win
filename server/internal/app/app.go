@@ -351,12 +351,12 @@ func Run() error {
 				// The per-interface traffic history is rolled up and pruned on
 				// the same schedule: the minute buckets are folded into five
 				// minute buckets and the ones past the retention go.
-				if rolled, err := dataStore.RollupNetworkHistory(); err != nil {
+				if rolled, err := dataStore.RollupNetworkHistory(context.Background()); err != nil {
 					structLogger.Error(logging.CatSystem, logging.EventAppError, "network history rollup failed", map[string]any{"error": err.Error()})
 				} else if rolled > 0 {
 					structLogger.Info(logging.CatSystem, logging.EventAppStarted, "network history rollup completed", map[string]any{"rows": rolled})
 				}
-				if deleted, err := dataStore.CleanupNetworkHistory(7, 30); err != nil {
+				if deleted, err := dataStore.CleanupNetworkHistory(context.Background(), 7, 30); err != nil {
 					structLogger.Error(logging.CatSystem, logging.EventAppError, "network history cleanup failed", map[string]any{"error": err.Error()})
 				} else if deleted > 0 {
 					structLogger.Info(logging.CatSystem, logging.EventAppStarted, "network history cleanup completed", map[string]any{"deleted": deleted})
@@ -1752,7 +1752,7 @@ func (s *Server) handleDevicePorts(w http.ResponseWriter, r *http.Request, devic
 }
 
 // handleDeviceNetwork serves the network topology of a device: the gateway,
-// the resolvers, the routes, the neighbours, the radio quality, the tunnels
+// the resolvers, the routes, the neighbors, the radio quality, the tunnels
 // and the state of the host firewall.
 //
 // It is a separate endpoint because this half of the network view changes on
@@ -1823,7 +1823,7 @@ func (s *Server) handleDeviceNetworkHistory(w http.ResponseWriter, r *http.Reque
 		resolution = v
 	}
 
-	history, err := s.store.GetNetworkHistory(deviceID, resolution, from, to)
+	history, err := s.store.GetNetworkHistory(r.Context(), deviceID, resolution, from, to)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
@@ -1970,7 +1970,7 @@ func (s *Server) handleTelemetry(w http.ResponseWriter, r *http.Request, deviceI
 	}
 	// The per-interface traffic history is folded in here: it is the same
 	// sample the dashboard sees live, kept so the chart has a past.
-	if err := s.store.RecordNetworkSample(deviceID, req.Hardware.NetworkIFaces, time.Now().UTC()); err != nil {
+	if err := s.store.RecordNetworkSample(r.Context(), deviceID, req.Hardware.NetworkIFaces, time.Now().UTC()); err != nil {
 		s.log.Warn(logging.CatSync, logging.EventSyncError, "network history sample failed",
 			map[string]any{"device_id": deviceID, "error": err.Error()})
 	}
