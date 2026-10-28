@@ -38,6 +38,22 @@
   --series-4: #22d3ee;
   --series-5: #a78bfa;
 
+  /* Plot palette, taken from Beszel's chart tokens (hsl 220/160/30/280/340 at
+     70–80% saturation). Charts are filled areas with a faint downward
+     gradient, so these need enough saturation to stay readable at 20–35%
+     opacity on the near-black card. Keep them as hex: canvas gradients are
+     built from these strings and cannot parse hsl(). */
+  --chart-1: #2663d9;
+  --chart-2: #2eb88a;
+  --chart-3: #f28c26;
+  --chart-4: #b546ec;
+  --chart-5: #ec2c6c;
+  --chart-grid: rgba(148, 163, 184, 0.1);
+  --chart-axis: #8b8f9a;
+  --chart-baseline: rgba(148, 163, 184, 0.18);
+  --chart-tooltip: rgba(20, 22, 27, 0.96);
+  --chart-tooltip-border: rgba(148, 163, 184, 0.2);
+
   /* Text. --text-muted is the floor for body copy: #64748b fails AA on this
      background at small sizes, so it is reserved for large or decorative text. */
   --text: #e7e9ee;

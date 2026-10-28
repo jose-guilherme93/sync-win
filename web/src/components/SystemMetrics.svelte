@@ -1,21 +1,9 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
-  import {
-    Chart,
-    LineController,
-    LineElement,
-    PointElement,
-    LinearScale,
-    CategoryScale,
-    Filler,
-    Tooltip,
-    Legend
-  } from 'chart.js'
   import { setHistoryFromAPI, addTelemetryPoint, deviceHistoryStore, type ChartPoint } from '../lib/telemetry-store'
-  import { apiFetch, apiURL, serverBase } from '../lib/api'
+  import { apiFetch, apiURL } from '../lib/api'
   import type { Device as SharedDevice, HardwareStats as SharedHardwareStats } from '../lib/types'
-
-  Chart.register(LineController, LineElement, PointElement, LinearScale, CategoryScale, Filler, Tooltip, Legend)
+  import TimeSeriesChart, { type ChartSeries } from './ui/TimeSeriesChart.svelte'
 
   type DeviceLog = { timestamp: string; level: string; source: string; message: string }
 
@@ -40,218 +28,26 @@
   let logFilter = 'all'
   let loadingLogs = false
 
-  let cpuCanvas: HTMLCanvasElement
-  let memCanvas: HTMLCanvasElement
-  let netCanvas: HTMLCanvasElement
-  let tempCanvas: HTMLCanvasElement
-
-  let cpuChart: Chart | null = null
-  let memChart: Chart | null = null
-  let netChart: Chart | null = null
-  let tempChart: Chart | null = null
-
   const MAX_POINTS = 120
 
-  const chartDefaults = {
-    responsive: true,
-    maintainAspectRatio: false,
-    animation: false as const,
-    interaction: { intersect: false, mode: 'index' as const },
-    plugins: {
-      legend: { display: false },
-      tooltip: {
-        backgroundColor: 'rgba(15, 23, 42, 0.92)',
-        titleColor: '#e2e8f0',
-        bodyColor: '#cbd5e1',
-        borderColor: 'rgba(148, 163, 184, 0.2)',
-        borderWidth: 1,
-        padding: 8,
-        titleFont: { size: 11 },
-        bodyFont: { size: 10 }
-      }
-    },
-    scales: {
-      x: {
-        display: true,
-        grid: { color: 'rgba(148, 163, 184, 0.08)' },
-        ticks: { color: '#64748b', font: { size: 9 }, maxTicksLimit: 8, maxRotation: 0 }
-      },
-      y: {
-        display: true,
-        beginAtZero: true,
-        grid: { color: 'rgba(148, 163, 184, 0.08)' },
-        ticks: { color: '#64748b', font: { size: 9 }, maxTicksLimit: 5 }
-      }
-    }
-  }
-
-  function labels(): string[] {
-    return history.map((p) => {
-      const d = new Date(p.timestamp)
-      return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}`
-    })
-  }
-
-  function destroyCharts() {
-    for (const c of [cpuChart, memChart, netChart, tempChart]) {
-      c?.destroy()
-    }
-    cpuChart = null
-    memChart = null
-    netChart = null
-    tempChart = null
-  }
-
-  // A chart needs at least two samples to draw a meaningful line. With fewer,
-  // Chart.js renders a flat line pinned to the axis, which reads as "this
-  // metric is stuck at zero" rather than "we have no data yet".
-  $: hasSeries = history.length >= 2
-
-  function buildCharts() {
-    destroyCharts()
-    if (!hasSeries) {
-      chartError = ''
-      return
-    }
-    if (!cpuCanvas || !memCanvas || !netCanvas || !tempCanvas) {
-      chartError = 'Canvas elements not ready'
-      return
-    }
-    const lbls = labels()
-
-    cpuChart = new Chart(cpuCanvas, {
-      type: 'line',
-      data: {
-        labels: lbls,
-        datasets: [{
-          data: history.map((p) => p.cpu),
-          borderColor: '#2dd4bf',
-          backgroundColor: 'rgba(45, 212, 191, 0.1)',
-          fill: true,
-          borderWidth: 1.5,
-          pointRadius: 0,
-          tension: 0.3
-        }]
-      },
-      options: { ...chartDefaults, scales: { ...chartDefaults.scales, y: { ...chartDefaults.scales.y, max: 100 } } }
-    })
-
-    memChart = new Chart(memCanvas, {
-      type: 'line',
-      data: {
-        labels: lbls,
-        datasets: [{
-          data: history.map((p) => p.memory),
-          borderColor: '#3b82f6',
-          backgroundColor: 'rgba(59, 130, 246, 0.1)',
-          fill: true,
-          borderWidth: 1.5,
-          pointRadius: 0,
-          tension: 0.3
-        }]
-      },
-      options: { ...chartDefaults, scales: { ...chartDefaults.scales, y: { ...chartDefaults.scales.y, max: 100 } } }
-    })
-
-    netChart = new Chart(netCanvas, {
-      type: 'line',
-      data: {
-        labels: lbls,
-        datasets: [
-          {
-            label: 'Download (RX)',
-            data: history.map((p) => p.netRx),
-            borderColor: '#2dd4bf',
-            backgroundColor: 'rgba(45, 212, 191, 0.08)',
-            fill: true,
-            borderWidth: 1.5,
-            pointRadius: 0,
-            tension: 0.3
-          },
-          {
-            label: 'Upload (TX)',
-            data: history.map((p) => p.netTx),
-            borderColor: '#fbbf24',
-            backgroundColor: 'rgba(251, 191, 36, 0.08)',
-            fill: true,
-            borderWidth: 1.5,
-            pointRadius: 0,
-            tension: 0.3
-          }
-        ]
-      },
-      options: {
-        ...chartDefaults,
-        plugins: {
-          ...chartDefaults.plugins,
-          legend: { display: true, labels: { color: '#94a3b8', font: { size: 9 }, boxWidth: 10, padding: 6 } },
-          tooltip: {
-            ...chartDefaults.plugins.tooltip,
-            callbacks: {
-              label: (context) => `${context.dataset.label}: ${formatRate(Number(context.raw) || 0)}`
-            }
-          }
-        },
-        scales: {
-          ...chartDefaults.scales,
-          y: {
-            ...chartDefaults.scales.y,
-            ticks: {
-              ...chartDefaults.scales.y.ticks,
-              callback: (value) => formatRate(Number(value) || 0)
-            }
-          }
-        }
-      }
-    })
-
-    tempChart = new Chart(tempCanvas, {
-      type: 'line',
-      data: {
-        labels: lbls,
-        datasets: [{
-          data: history.map((p) => p.temp),
-          borderColor: '#f87171',
-          backgroundColor: 'rgba(248, 113, 113, 0.1)',
-          fill: true,
-          borderWidth: 1.5,
-          pointRadius: 0,
-          tension: 0.3
-        }]
-      },
-      options: chartDefaults
-    })
-    chartError = ''
-  }
-
-  function updateCharts() {
-    if (!hasSeries) {
-      destroyCharts()
-      return
-    }
-    const lbls = labels()
-    if (cpuChart) {
-      cpuChart.data.labels = lbls
-      cpuChart.data.datasets[0].data = history.map((p) => p.cpu)
-      cpuChart.update('none')
-    }
-    if (memChart) {
-      memChart.data.labels = lbls
-      memChart.data.datasets[0].data = history.map((p) => p.memory)
-      memChart.update('none')
-    }
-    if (netChart) {
-      netChart.data.labels = lbls
-      netChart.data.datasets[0].data = history.map((p) => p.netRx)
-      netChart.data.datasets[1].data = history.map((p) => p.netTx)
-      netChart.update('none')
-    }
-    if (tempChart) {
-      tempChart.data.labels = lbls
-      tempChart.data.datasets[0].data = history.map((p) => p.temp)
-      tempChart.update('none')
-    }
-  }
+  // The live window holds MAX_POINTS samples at the selected cadence. Fixing
+  // the x axis to that span is what keeps a fresh chart growing from the left
+  // instead of stretching two samples across the whole card.
+  $: sampleWindowMs = refreshInterval * MAX_POINTS
+  $: chartLabels = history.map((point) => point.timestamp)
+  $: cpuSeries = [
+    { label: 'CPU', values: history.map((point) => point.cpu), color: 'var(--chart-1)' }
+  ] as ChartSeries[]
+  $: memSeries = [
+    { label: 'Memory', values: history.map((point) => point.memory), color: 'var(--chart-2)' }
+  ] as ChartSeries[]
+  $: netSeries = [
+    { label: 'Download (RX)', values: history.map((point) => point.netRx), color: 'var(--chart-2)', format: formatRate },
+    { label: 'Upload (TX)', values: history.map((point) => point.netTx), color: 'var(--chart-5)', format: formatRate }
+  ] as ChartSeries[]
+  $: tempSeries = [
+    { label: 'Temperature', values: history.map((point) => point.temp), color: 'var(--chart-3)', format: (value: number) => `${value.toFixed(0)}°C` }
+  ] as ChartSeries[]
 
   function transformPayload(raw: any): ChartPoint {
     const hw = typeof raw === 'string' ? (JSON.parse(raw) || {}) : (raw || {})
@@ -297,31 +93,16 @@
     }
   }
 
-  // Keep charts in sync with the shared telemetry store through a real
-  // subscription instead of length-only polling, and coalesce rebuilds so we
-  // never stack setTimeout calls.
+  // Keep the charts in sync with the shared telemetry store through a real
+  // subscription instead of length-only polling.
   let historyUnsub: (() => void) | null = null
   let subscribedDeviceId = ''
-  let buildTimer: ReturnType<typeof setTimeout> | null = null
-
-  function scheduleBuild() {
-    if (buildTimer) return
-    buildTimer = setTimeout(() => {
-      buildTimer = null
-      buildCharts()
-    }, 50)
-  }
 
   $: if (device.id && device.id !== subscribedDeviceId) {
     historyUnsub?.()
     subscribedDeviceId = device.id
     historyUnsub = deviceHistoryStore(device.id).subscribe((points) => {
       history = points.slice(-MAX_POINTS)
-      // Rebuilding on a drop to zero or one point is what keeps the empty state
-      // honest: a device that stops reporting loses its charts instead of
-      // freezing on a stale line.
-      if (cpuChart) updateCharts()
-      else if (!loadingHistory) scheduleBuild()
     })
   }
 
@@ -491,18 +272,12 @@
 
   onMount(() => {
     startTelemetryRefresh()
-    void loadInitialHistory().then(() => {
-      if (history.length > 0 && !cpuChart) {
-        scheduleBuild()
-      }
-    })
+    void loadInitialHistory()
   })
 
   onDestroy(() => {
     historyUnsub?.()
-    if (buildTimer) clearTimeout(buildTimer)
     if (refreshTimer) clearInterval(refreshTimer)
-    destroyCharts()
   })
 </script>
 
@@ -548,41 +323,54 @@
       <div class="chart-box">
         <span class="chart-title">CPU %</span>
         <div class="chart-wrap">
-          {#if hasSeries}
-            <canvas bind:this={cpuCanvas}></canvas>
-          {:else}
-            <div class="chart-pending" role="status">collecting data...</div>
-          {/if}
+          <TimeSeriesChart
+            labels={chartLabels}
+            series={cpuSeries}
+            leftMax={100}
+            height={170}
+            windowMs={sampleWindowMs}
+            emptyMessage="collecting data..."
+          />
         </div>
       </div>
       <div class="chart-box">
         <span class="chart-title">Memory %</span>
         <div class="chart-wrap">
-          {#if hasSeries}
-            <canvas bind:this={memCanvas}></canvas>
-          {:else}
-            <div class="chart-pending" role="status">collecting data...</div>
-          {/if}
+          <TimeSeriesChart
+            labels={chartLabels}
+            series={memSeries}
+            leftMax={100}
+            height={170}
+            windowMs={sampleWindowMs}
+            emptyMessage="collecting data..."
+          />
         </div>
       </div>
       <div class="chart-box">
         <span class="chart-title">Network (bytes)</span>
         <div class="chart-wrap">
-          {#if hasSeries}
-            <canvas bind:this={netCanvas}></canvas>
-          {:else}
-            <div class="chart-pending" role="status">collecting data...</div>
-          {/if}
+          <TimeSeriesChart
+            labels={chartLabels}
+            series={netSeries}
+            leftUnit=""
+            leftFormat={formatRate}
+            height={170}
+            windowMs={sampleWindowMs}
+            emptyMessage="collecting data..."
+          />
         </div>
       </div>
       <div class="chart-box">
         <span class="chart-title">Temperature (C)</span>
         <div class="chart-wrap">
-          {#if hasSeries}
-            <canvas bind:this={tempCanvas}></canvas>
-          {:else}
-            <div class="chart-pending" role="status">collecting data...</div>
-          {/if}
+          <TimeSeriesChart
+            labels={chartLabels}
+            series={tempSeries}
+            leftUnit="°C"
+            height={170}
+            windowMs={sampleWindowMs}
+            emptyMessage="collecting data..."
+          />
         </div>
       </div>
     </div>
@@ -751,18 +539,10 @@
     background: rgba(15, 23, 42, 0.3);
   }
   .chart-title { display: block; font-size: 0.65rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.3rem; }
-  /* A fixed height clipped taller canvases. min-height plus an aspect ratio lets
-     the plot grow with the container and still reserve room for the axis. */
-  .chart-wrap { position: relative; min-height: 170px; height: 170px; }
-  @media (max-width: 640px) { .chart-wrap { min-height: 150px; height: 150px; } }
-  .chart-pending {
-    position: absolute;
-    inset: 0;
-    display: grid;
-    place-items: center;
-    color: #64748b;
-    font-size: 0.72rem;
-  }
+  /* The chart component owns the canvas height; the wrap only reserves room
+     and lets the legend sit above it without clipping. */
+  .chart-wrap { position: relative; min-height: 170px; }
+  @media (max-width: 640px) { .chart-wrap { min-height: 150px; } }
 
   .section-block {
     padding: 0.6rem 0.7rem;

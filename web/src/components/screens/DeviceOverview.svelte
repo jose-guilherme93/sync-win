@@ -35,6 +35,9 @@
   let serverHistory: ChartPoint[] = []
   let loadingHistory = false
   let historyError = ''
+  // The exact window the server answered for, so the x axis can end where the
+  // requested range ends instead of where the last bucket happens to fall.
+  let historyWindow: { from: number; to: number } | null = null
 
   let range: RangeId = DEFAULT_RANGE
   const unsubRange = selectedRange.subscribe((value) => (range = value))
@@ -46,6 +49,7 @@
     const option = rangeById(range)
     if (option.id === 'live') {
       serverHistory = []
+      historyWindow = null
       return
     }
 
@@ -66,7 +70,10 @@
       )
       if (!response.ok) throw new Error(`request failed (${response.status})`)
       const points = normalizeHistory(await response.json())
-      if (request === historyRequest) serverHistory = points
+      if (request === historyRequest) {
+        serverHistory = points
+        historyWindow = { from: from.getTime(), to: to.getTime() }
+      }
     } catch (err) {
       // Keep whatever we had; a failed fetch must not blank the chart.
       if (request === historyRequest) {
@@ -116,13 +123,13 @@
 
   $: tempAvailable = tempGap.some((value) => value != null)
   $: performanceSeries = [
-    ...(showCpu ? [{ label: 'CPU', values: cpuGap, color: 'var(--accent)' }] : []),
-    ...(showMem ? [{ label: 'Memory', values: memGap, color: 'var(--series-1)' }] : []),
+    ...(showCpu ? [{ label: 'CPU', values: cpuGap, color: 'var(--chart-1)' }] : []),
+    ...(showMem ? [{ label: 'Memory', values: memGap, color: 'var(--chart-2)' }] : []),
     ...(showTemp && tempAvailable
       ? [{
           label: 'Temp',
           values: tempGap,
-          color: 'var(--series-3)',
+          color: 'var(--chart-3)',
           axis: 'right' as const,
           format: (value: number) => `${value.toFixed(0)}°C`
         }]
@@ -130,13 +137,13 @@
   ] as ChartSeries[]
 
   $: networkSeries = [
-    { label: 'Down', values: rxGap, color: 'var(--accent)', format: formatRate },
-    { label: 'Up', values: txGap, color: 'var(--series-5)', format: formatRate }
+    { label: 'Down', values: rxGap, color: 'var(--chart-2)', format: formatRate },
+    { label: 'Up', values: txGap, color: 'var(--chart-5)', format: formatRate }
   ] as ChartSeries[]
 
   $: diskIoSeries = [
-    { label: 'Read', values: readGap, color: 'var(--series-2)', format: formatRate },
-    { label: 'Write', values: writeGap, color: 'var(--series-4)', format: formatRate }
+    { label: 'Read', values: readGap, color: 'var(--chart-1)', format: formatRate },
+    { label: 'Write', values: writeGap, color: 'var(--chart-3)', format: formatRate }
   ] as ChartSeries[]
 
   // Hardware facts.
@@ -212,6 +219,8 @@
         leftMax={100}
         rightMax={100}
         height={360}
+        windowMs={rangeById(range).ms}
+        windowEnd={historyWindow?.to ?? null}
         emptyMessage={isLive
           ? 'The chart appears once at least two live samples have been collected.'
           : 'No server-side samples exist for this window yet.'}
@@ -229,6 +238,8 @@
           leftUnit=""
           leftFormat={formatRate}
           height={240}
+          windowMs={rangeById(range).ms}
+          windowEnd={historyWindow?.to ?? null}
           emptyMessage="No network samples in this window."
         />
       </article>
@@ -243,6 +254,8 @@
           leftUnit=""
           leftFormat={formatRate}
           height={240}
+          windowMs={rangeById(range).ms}
+          windowEnd={historyWindow?.to ?? null}
           emptyMessage={isLive
             ? 'Disk I/O appears once two live samples have been collected.'
             : 'Disk I/O history is only kept in the live window; longer ranges aggregate CPU, memory, network and temperature.'}

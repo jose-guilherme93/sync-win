@@ -138,3 +138,6 @@ entries:
   - id: sessions/261022-release-0.14.0
     path: sessions/261022-release-0.14.0.md
     type: session
+  - id: sessions/261028-chart-time-axis
+    path: sessions/261028-chart-time-axis.md
+    type: session
