@@ -11,6 +11,8 @@ version, and a breaking change increases the major version.
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-10-28
+
 ### Fixed
 
 - **Telemetry charts plot time, not samples.** A window with only a few
