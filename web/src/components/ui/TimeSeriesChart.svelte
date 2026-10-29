@@ -5,6 +5,9 @@
     color: string
     axis?: 'left' | 'right'
     format?: (value: number) => string
+    // Series sharing a stack id are drawn as one stacked area (the network
+    // screen uses this so the top of the stack is the total traffic).
+    stack?: string
   }
 </script>
 
@@ -16,18 +19,29 @@
     LineElement,
     PointElement,
     LinearScale,
-    CategoryScale,
+    Filler,
     Tooltip,
     Legend,
     type ChartConfiguration
   } from 'chart.js'
   import { resolveCssColor } from '../../lib/color'
   import { seriesStats } from '../../lib/telemetry-history'
+  import {
+    buildTimeTicks,
+    formatTimeTick,
+    formatTooltipTime,
+    parseTimestamp,
+    timeDomain,
+    withAlpha
+  } from '../../lib/chart'
 
-  // One reusable line chart for the device screens. Chart.js is already a
-  // dependency (SystemMetrics uses it); using it here buys axes, ticks and a
-  // crosshair tooltip that the hand-drawn SVG history chart never had.
-  Chart.register(LineController, LineElement, PointElement, LinearScale, CategoryScale, Tooltip, Legend)
+  // One reusable plot for every telemetry screen. A linear x axis places each
+  // sample at its real timestamp inside a fixed window, so the line grows from
+  // the left edge as data arrives instead of being stretched across the card
+  // (the category axis this replaced did exactly that). Monotone interpolation
+  // removes the spline overshoot that used to invent peaks at the start of a
+  // series.
+  Chart.register(LineController, LineElement, PointElement, LinearScale, Filler, Tooltip, Legend)
 
   export let labels: string[] = []
   export let series: ChartSeries[] = []
@@ -39,6 +53,12 @@
   export let rightFormat: ((value: number) => string) | null = null
   export let height = 240
   export let emptyMessage = 'No samples in this window yet.'
+  // Fixed span of the x axis. Without it a sparse window would still stretch
+  // its few samples edge to edge, because the axis would fit the data.
+  export let windowMs: number | null = null
+  // Optional right edge of the window (the "to" of a history fetch). Live
+  // charts omit it and anchor on the newest sample.
+  export let windowEnd: number | null = null
 
   type LegendEntry = { series: ChartSeries; stats: NonNullable<ReturnType<typeof seriesStats>> }
 
@@ -51,8 +71,7 @@
   $: legend = visible
     .map((s) => ({ series: s, stats: seriesStats(s.values.filter((value): value is number => value != null)) }))
     .filter((entry): entry is LegendEntry => entry.stats != null)
-  $: multiDay = labels.length > 1
-    && (Date.parse(labels[labels.length - 1]) - Date.parse(labels[0])) > 24 * 60 * 60 * 1000
+  $: domain = timeDomain(labels, windowMs, windowEnd)
 
   function fmt(entry: ChartSeries, value: number): string {
     if (entry.format) return entry.format(value)
@@ -65,34 +84,47 @@
     return `${value.toFixed(0)}${axis === 'right' ? rightUnit : leftUnit}`
   }
 
-  function timeLabel(iso: string): string {
-    const date = new Date(iso)
-    if (Number.isNaN(date.getTime())) return iso
-    const time = date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-    if (!multiDay) return time
-    return `${date.toLocaleDateString(undefined, { day: '2-digit', month: '2-digit' })} ${time}`
+  // A vertical gradient, like Beszel's filled areas: readable near the line,
+  // nearly transparent at the baseline so overlapping series stay distinct.
+  function areaFill(color: string) {
+    return (context: any) => {
+      const { chart: instance } = context
+      const area = instance?.chartArea
+      if (!area) return withAlpha(color, 0.16)
+      const gradient = instance.ctx.createLinearGradient(0, area.top, 0, area.bottom)
+      gradient.addColorStop(0, withAlpha(color, 0.32))
+      gradient.addColorStop(1, withAlpha(color, 0.02))
+      return gradient
+    }
   }
 
-  function withAlpha(color: string, alpha: number): string {
-    const hex = /^#([0-9a-f]{6})$/i.exec(color)
-    if (!hex) return color
-    const value = parseInt(hex[1], 16)
-    return `rgba(${(value >> 16) & 255}, ${(value >> 8) & 255}, ${value & 255}, ${alpha})`
+  function chartPoints(values: (number | null)[]) {
+    const points: { x: number; y: number | null }[] = []
+    labels.forEach((label, index) => {
+      const x = parseTimestamp(label)
+      if (Number.isFinite(x)) points.push({ x, y: values[index] ?? null })
+    })
+    return points
   }
 
   function buildConfig(): ChartConfiguration<'line'> {
+    const span = domain ? domain.to - domain.from : 0
     const datasets = visible.map((entry) => {
       const color = resolveCssColor(entry.color)
       return {
         label: entry.label,
-        data: entry.values,
+        data: chartPoints(entry.values),
         borderColor: color,
-        backgroundColor: entry.axis === 'right' ? 'transparent' : withAlpha(color, 0.08),
-        borderWidth: 1.5,
+        backgroundColor: areaFill(color),
+        fill: true,
+        borderWidth: 1.6,
         pointRadius: 0,
-        pointHitRadius: 10,
-        spanGaps: true,
-        tension: 0.25,
+        pointHoverRadius: 2.5,
+        pointHoverBorderWidth: 0,
+        pointHitRadius: 12,
+        spanGaps: false,
+        cubicInterpolationMode: 'monotone' as const,
+        stack: entry.stack,
         yAxisID: entry.axis === 'right' ? 'y1' : 'y',
         // Kept for the tooltip, which needs the series' own unit/format.
         __series: entry
@@ -101,25 +133,30 @@
 
     return {
       type: 'line',
-      data: { labels, datasets: datasets as any },
+      data: { datasets: datasets as any },
       options: {
         responsive: true,
         maintainAspectRatio: false,
         animation: false,
         interaction: { intersect: false, mode: 'index' },
+        layout: { padding: { top: 4, right: 2 } },
         plugins: {
           legend: { display: false },
           tooltip: {
-            backgroundColor: 'rgba(15, 18, 22, 0.96)',
+            backgroundColor: resolveCssColor('var(--chart-tooltip)', 'rgba(20, 22, 27, 0.96)'),
             titleColor: '#e7e9ee',
             bodyColor: '#c7cbd4',
-            borderColor: 'rgba(148, 163, 184, 0.25)',
+            borderColor: resolveCssColor('var(--chart-tooltip-border)', 'rgba(148, 163, 184, 0.2)'),
             borderWidth: 1,
-            padding: 9,
-            titleFont: { size: 11 },
+            padding: 10,
+            cornerRadius: 8,
+            boxWidth: 8,
+            boxHeight: 8,
+            usePointStyle: true,
+            titleFont: { size: 11, weight: 600 },
             bodyFont: { size: 11 },
             callbacks: {
-              title: (items) => labels[items[0]?.dataIndex] ?? '',
+              title: (items) => formatTooltipTime(items[0]?.parsed.x ?? 0),
               label: (item) => {
                 const value = item.parsed.y
                 if (value == null) return ''
@@ -131,43 +168,53 @@
         },
         scales: {
           x: {
+            type: 'linear',
+            min: domain?.from,
+            max: domain?.to,
             display: true,
             grid: { display: false },
-            border: { color: 'rgba(148, 163, 184, 0.18)' },
+            border: { color: resolveCssColor('var(--chart-baseline)', 'rgba(148, 163, 184, 0.18)') },
+            afterBuildTicks: (axis) => {
+              if (!domain) return
+              axis.ticks = buildTimeTicks(domain.from, domain.to).map((value) => ({ value }))
+            },
             ticks: {
-              color: '#9398a6',
+              color: resolveCssColor('var(--chart-axis)', '#8b8f9a'),
               font: { size: 10 },
-              maxTicksLimit: 8,
               maxRotation: 0,
-              callback: (_value, index) => timeLabel(labels[index] || '')
+              autoSkip: true,
+              padding: 6,
+              callback: (value) => formatTimeTick(Number(value), span)
             }
           },
           y: {
             position: 'left',
             beginAtZero: true,
             suggestedMax: leftMax ?? undefined,
-            grid: { color: 'rgba(148, 163, 184, 0.10)' },
+            grid: { color: resolveCssColor('var(--chart-grid)', 'rgba(148, 163, 184, 0.1)') },
             border: { display: false },
             ticks: {
-              color: '#9398a6',
+              color: resolveCssColor('var(--chart-axis)', '#8b8f9a'),
               font: { size: 10 },
               maxTicksLimit: 5,
+              padding: 6,
               callback: (value) => axisTick('left', Number(value))
             }
           },
           ...(hasRight
             ? {
                 y1: {
-                  position: 'right',
+                  position: 'right' as const,
                   beginAtZero: true,
                   suggestedMax: rightMax ?? undefined,
                   grid: { drawOnChartArea: false },
                   border: { display: false },
                   ticks: {
-                    color: '#9398a6',
+                    color: resolveCssColor('var(--chart-axis)', '#8b8f9a'),
                     font: { size: 10 },
                     maxTicksLimit: 5,
-                    callback: (value) => axisTick('right', Number(value))
+                    padding: 6,
+                    callback: (value: string | number) => axisTick('right', Number(value))
                   }
                 }
               }
@@ -249,16 +296,16 @@
   .legend-item {
     display: inline-flex;
     align-items: baseline;
-    gap: 0.3rem;
+    gap: 0.32rem;
     min-width: 0;
-    font-size: 0.7rem;
+    font-size: 0.72rem;
     color: var(--text-muted);
     white-space: nowrap;
   }
 
   .dot {
-    width: 7px;
-    height: 7px;
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
     flex: none;
     transform: translateY(-1px);

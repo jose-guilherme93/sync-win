@@ -15,6 +15,7 @@ vi.mock('chart.js', () => ({
   PointElement: class {},
   LinearScale: class {},
   CategoryScale: class {},
+  Filler: class {},
   Tooltip: class {},
   Legend: class {}
 }))

@@ -11,6 +11,20 @@ version, and a breaking change increases the major version.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Telemetry charts plot time, not samples.** A window with only a few
+  samples no longer stretches them across the whole card. Every point sits at
+  its real timestamp inside the selected window, so a fresh chart grows from
+  the left as data arrives, gaps stay where they happened and a device that
+  reported for ten minutes of an hour shows ten minutes of line, not an hour
+  of invented slope. The spline overshoot that drew a peak at the start of a
+  series is gone as well.
+- **Every plot shares one look.** The Overview, the Network traffic chart and
+  the detailed System tab now draw filled areas with Beszel's chart palette
+  (blue CPU, green memory, orange temperature and disk writes, pink upload),
+  round time ticks, horizontal-only grid lines and one dark tooltip.
+
 ## [0.14.0] - 2026-10-22
 
 ### Added
