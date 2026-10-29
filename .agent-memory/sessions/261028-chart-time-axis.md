@@ -56,3 +56,24 @@ the distance between ticks proportional to time.
   24h. The 1h chart with 15 minutes of history shows data only in the last
   quarter instead of stretching it; Live shows 15 s ticks; the tooltip reads
   "Oct 25, 01:05 PM" with both series. Screenshots in `/tmp/opencode`.
+
+## What shipped
+
+PR #19 (the chart work) and PR #20 (its release notes), released as **0.14.1**
+on 2026-10-28: Docker Hub and GHCR tagged `0.14.1`, `v0.14.1` and `latest`,
+tag `v0.14.1`, GitHub Release body read from `## [0.14.1]`. The agent version
+stays at 0.10.0 because nothing under `agent/` changed; a web-only release is
+not an agent update.
+
+## The lesson
+
+The chart change carried only an `## [Unreleased]` entry, so the first Release
+run on the merged commit stopped after 13 seconds with
+`CHANGELOG.md has no section for 0.14.1` — the workflow reads the notes for the
+version it just computed *before* it publishes, which is exactly the guard
+working. Nothing was tagged, so the fix was another PR that moved the entries
+into `## [0.14.1]`; the next green CI run on `main` published it.
+
+Write the section for the version the bump will produce **before** the PR is
+merged, and compute that version from the commits since the last tag rather
+than from the one commit you are writing. `[Unreleased]` is not a substitute.
