@@ -11,6 +11,17 @@ version, and a breaking change increases the major version.
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-10-30
+
+### Fixed
+
+- **The topology agent now reaches devices that were already enrolled.** The
+  0.15.0 image contained the new Tailscale collector but still advertised agent
+  `0.10.0`, so the updater compared `0.10.0` with `0.10.0` and never downloaded
+  it. The agent is now `0.11.0` and the collection contract `1.9.0`; a device on
+  `0.10.0` updates on its next check and can read the tailnet. A fresh install
+  from the 0.15.0 image was unaffected.
+
 ## [0.15.0] - 2026-10-30
 
 ### Added
