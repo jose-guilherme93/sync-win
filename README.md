@@ -37,6 +37,8 @@ small text files and nothing else.
   temperatures, power, battery, uptime, load
 - installed packages (apt, pacman/AUR, flatpak, AppImage) and pending updates
 - systemd services, open ports and Docker containers
+- a network map per device: every local segment and every Tailscale peer it can
+  see, with direct/relayed paths, MAC vendors and a detail drawer
 - Linux journal logs, searchable and filterable per device
 - Lynis security audits with hardening score and history
 - alerts, per-device notes and file attachments

@@ -33,7 +33,21 @@ func TestUpdateNetworkSectionRoundTrips(t *testing.T) {
 			Neighbors:      []NetworkNeighbor{{IP: "192.168.2.10", MAC: "aa:bb:cc:dd:ee:ff", Interface: "enp3s0", State: "reachable", Family: "inet"}},
 			Wireless:       []WirelessLink{{Interface: "wlan0", SignalDBM: -50, Quality: 70}},
 			Tunnels:        []TunnelLink{{Interface: "wg0", Kind: "wireguard", State: "up"}},
-			CollectedAt:    "2026-10-22T10:00:00Z",
+			Overlays: []OverlayNetwork{{
+				Kind:     "tailscale",
+				Name:     "example.github",
+				MagicDNS: "tail5df2c3.ts.net",
+				State:    "running",
+				Self:     &OverlayNode{HostName: "laptop", Online: true, IPs: []string{"100.64.0.1"}},
+				Peers: []OverlayNode{{
+					HostName: "server",
+					OS:       "linux",
+					IPs:      []string{"100.64.0.2"},
+					Online:   true,
+					Direct:   true,
+				}},
+			}},
+			CollectedAt: "2026-10-22T10:00:00Z",
 		},
 		Firewall: FirewallState{UFW: "active", Firewalld: "not installed", Nftables: "inactive"},
 	}
@@ -53,6 +67,16 @@ func TestUpdateNetworkSectionRoundTrips(t *testing.T) {
 	}
 	if len(got.Topology.Neighbors) != 1 || got.Topology.Neighbors[0].MAC != "aa:bb:cc:dd:ee:ff" {
 		t.Errorf("neighbors = %#v", got.Topology.Neighbors)
+	}
+	if len(got.Topology.Overlays) != 1 {
+		t.Fatalf("overlays = %#v, want the tailnet", got.Topology.Overlays)
+	}
+	overlay := got.Topology.Overlays[0]
+	if overlay.Name != "example.github" || overlay.Self == nil || overlay.Self.HostName != "laptop" {
+		t.Errorf("overlay = %#v, want the tailnet and its self node", overlay)
+	}
+	if len(overlay.Peers) != 1 || !overlay.Peers[0].Direct {
+		t.Errorf("overlay peers = %#v, want the direct peer", overlay.Peers)
 	}
 	if got.Firewall.UFW != "active" || got.Firewall.Firewalld != "not installed" {
 		t.Errorf("firewall = %#v", got.Firewall)

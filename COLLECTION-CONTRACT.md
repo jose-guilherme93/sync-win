@@ -159,9 +159,19 @@ O agent roda **sem privilégio**, e isso define o que existe no payload:
 - **vizinhos (ARP/NDP)**: disponíveis
 - **qualidade do rádio** (sinal, ruído, quality): disponível; **SSID, canal e bitrate não**, porque precisam da API nl80211
 - **regras de firewall**: inacessíveis. O payload traz só o **estado** do serviço (`ufw`, `firewalld`, `nftables` como `active`, `inactive`, `failed` ou `not installed`), derivado das units systemd já coletadas
-- **peers de tailscale/wireguard**: inacessíveis. O que se vê é a interface do túnel e seus contadores
+- **peers de Tailscale**: disponíveis pelo socket local `/var/run/tailscale/tailscaled.sock`, que é legível por qualquer usuário na instalação padrão (0666). O agent faz um `GET` em `/localapi/v0/status` via HTTP sobre Unix socket; nunca executa o binário `tailscale` e nunca lê chaves
+- **peers de WireGuard e de outros daemons**: inacessíveis sem root. O que se vê é a interface do túnel e seus contadores; a tela de topologia nomeia esses túneis em vez de omiti-los
 
-Os limites (`max_routes`, `max_neighbors`, `max_wireless`, `max_tunnels`) vivem em `system_inventory.network` no `contract.json`.
+A seção `overlays` dentro de `topology` descreve cada rede privada que o daemon expõe:
+
+- `{kind, name?, magic_dns?, interface?, state, self?, peers[], error?}`
+- `self` e cada peer: `{hostname, dns_name?, os?, ips[], online, direct?, relay?, exit_node?, exit_node_option?, tags?, last_seen?}`
+- `state` é o estado do backend: `running`, `stopped`, `needs login` ou `unknown`
+- `error` explica por que a lista de peers não veio. Um socket ilegível e uma rede sem peers são casos diferentes e não podem parecer iguais
+
+Os peers são ordenados com os online primeiro e cortados em `max_overlay_peers`; um tailnet grande nunca perde os nós alcançáveis para o limite. Um daemon ausente não gera overlay nenhum. Os limites (`max_routes`, `max_neighbors`, `max_wireless`, `max_tunnels`, `max_overlay_networks`, `max_overlay_peers`) vivem em `system_inventory.network` no `contract.json`.
+
+A topologia de LAN é passiva: a tabela ARP/NDP só contém dispositivos com os quais esta máquina trocou tráfego. O agent não faz ping sweep nem varredura de portas; a tela diz isso explicitamente em vez de apresentar o vizinho como a rede inteira.
 
 ### Porcentagem de CPU de processos é um delta
 

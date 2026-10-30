@@ -15,6 +15,7 @@
   import Reports from './components/screens/Reports.svelte'
   import Storage from './components/screens/Storage.svelte'
   import Network from './components/screens/Network.svelte'
+  import Topology from './components/screens/Topology.svelte'
   import Security from './components/screens/Security.svelte'
   import Docker from './components/screens/Docker.svelte'
   import CpuThermal from './components/screens/CpuThermal.svelte'
@@ -1647,6 +1648,8 @@
               <Storage device={modalDevice} />
             {:else if navState.section === 'network'}
               <Network device={modalDevice} />
+            {:else if navState.section === 'topology'}
+              <Topology device={modalDevice} devices={devices} onSelectDevice={selectDevice} />
             {:else if navState.section === 'containers'}
               <Docker device={modalDevice} authHeaders={ownerHeaders} />
             {:else if navState.section === 'security'}

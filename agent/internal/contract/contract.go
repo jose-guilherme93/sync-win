@@ -106,10 +106,12 @@ type Contract struct {
 			// MaxRoutes and MaxNeighbors bound the topology payload. A host
 			// with a thousand routes would otherwise push a payload the
 			// dashboard has no use for.
-			MaxRoutes    int `json:"max_routes"`
-			MaxNeighbors int `json:"max_neighbors"`
-			MaxWireless  int `json:"max_wireless"`
-			MaxTunnels   int `json:"max_tunnels"`
+			MaxRoutes       int `json:"max_routes"`
+			MaxNeighbors    int `json:"max_neighbors"`
+			MaxWireless     int `json:"max_wireless"`
+			MaxTunnels      int `json:"max_tunnels"`
+			MaxOverlays     int `json:"max_overlay_networks"`
+			MaxOverlayPeers int `json:"max_overlay_peers"`
 		} `json:"network"`
 	} `json:"system_inventory"`
 	PreferencesSync struct {
@@ -380,4 +382,22 @@ func (c *Contract) MaxTunnelLinks() int {
 		return c.SystemInventory.Network.MaxTunnels
 	}
 	return 16
+}
+
+// MaxOverlayNetworks caps how many overlay networks a collection reports.
+func (c *Contract) MaxOverlayNetworks() int {
+	if c.SystemInventory.Network.MaxOverlays > 0 {
+		return c.SystemInventory.Network.MaxOverlays
+	}
+	return 4
+}
+
+// MaxOverlayPeers caps how many peers one overlay may report. The tailnet is
+// sorted online-first before the cap is applied, so a large tailnet keeps the
+// nodes that matter.
+func (c *Contract) MaxOverlayPeers() int {
+	if c.SystemInventory.Network.MaxOverlayPeers > 0 {
+		return c.SystemInventory.Network.MaxOverlayPeers
+	}
+	return 128
 }

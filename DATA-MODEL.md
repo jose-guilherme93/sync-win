@@ -108,7 +108,7 @@ system-inventory cycle (300 s).
 `NetworkSection`: `{topology, firewall}`.
 
 `NetworkTopology`: `{default_gateway?, gateways?, dns?, search_domains?, routes?,
-neighbors?, wireless?, tunnels?, collected_at?}`.
+neighbors?, wireless?, tunnels?, overlays?, collected_at?}`.
 
 `NetworkRoute`: `{destination, gateway?, interface, metric?, kind, family}` — the
 kind is `default`, `network` or `host`, and the family is `inet` or `inet6`.
@@ -120,6 +120,20 @@ channel and the bitrate are absent on purpose: the agent is unprivileged and
 cannot read them.
 
 `TunnelLink`: `{interface, kind, state?}`.
+
+`OverlayNetwork`: `{kind, name?, magic_dns?, interface?, state, self?, peers[],
+error?}`. It describes a private network the device joins through a daemon, with
+the membership that daemon reports. Today only Tailscale is readable without
+root: the agent asks its local API socket, never the `tailscale` binary.
+
+`OverlayNode`: `{hostname, dns_name?, os?, ips[], online, direct?, relay?,
+exit_node?, exit_node_option?, tags?, last_seen?}`. `ips` are overlay addresses,
+not physical ones. An offline peer is still kept: it is part of the network.
+
+`error` is the reason a peer list is missing (unreadable socket, permission
+denied), never an empty `peers[]` standing in for a failure. The SQLite column
+is the same `network_json` blob, so an older server reads the section and ignores
+the field, and an older agent simply omits it.
 
 `FirewallState`: `{ufw, firewalld, nftables}` — the state of the unit, never the
 rules. The agent cannot read the rules without root, and a dashboard that

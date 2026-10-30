@@ -519,9 +519,15 @@ Last listening socket snapshot. Session auth, owner scoped.
 #### `GET /api/devices/{id}/network`
 
 The slow half of the network view: the gateway, the resolvers, the routes, the
-neighbours, the radio quality, the tunnels and the state of the host firewall.
-Session auth, owner scoped. Refreshed by the agent on the system-inventory
-cycle, so the age of the snapshot is the age of that cycle.
+neighbours, the radio quality, the tunnels, the overlay networks and the state
+of the host firewall. Session auth, owner scoped. Refreshed by the agent on the
+system-inventory cycle, so the age of the snapshot is the age of that cycle.
+
+The `topology.overlays` array is the membership of each private network the
+device joins through a daemon (today Tailscale). A peer marked `online: false`
+is still returned: it is part of the network. An overlay whose daemon could not
+be read carries `error` with the reason and no peers, which is deliberately
+different from a network that genuinely has no peers.
 
 **Response:** `200 OK`
 ```json
@@ -539,6 +545,20 @@ cycle, so the age of the snapshot is the age of that cycle.
     ],
     "wireless": [{ "interface": "wlan0", "signal_dbm": -52, "quality": 68, "noise_dbm": -95 }],
     "tunnels": [{ "interface": "wg0", "kind": "wireguard", "state": "up" }],
+    "overlays": [
+      {
+        "kind": "tailscale",
+        "name": "example.github",
+        "magic_dns": "tail5df2c3.ts.net",
+        "interface": "tailscale0",
+        "state": "running",
+        "self": { "hostname": "laptop", "os": "linux", "ips": ["100.64.0.1"], "online": true },
+        "peers": [
+          { "hostname": "server", "os": "linux", "ips": ["100.64.0.2"], "online": true, "direct": true },
+          { "hostname": "nas", "os": "linux", "ips": ["100.64.0.3"], "online": false, "relay": "sao", "last_seen": "2026-10-29T10:00:00Z" }
+        ]
+      }
+    ],
     "collected_at": "2026-10-22T10:00:00Z"
   },
   "firewall": { "ufw": "active", "firewalld": "not installed", "nftables": "inactive" }

@@ -9,7 +9,32 @@ The next version is the last tag plus the Conventional Commits bump:
 `feat:` increases the minor version, everything else increases the patch
 version, and a breaking change increases the major version.
 
-## [Unreleased]
+## [0.15.0] - 2026-10-30
+
+### Added
+
+- **A network map for every device.** The new **Topology** screen draws the
+  networks a device belongs to — each local segment and each overlay — with the
+  nodes the device can see. The device sits in the middle, every network hangs
+  off it as a hub, and the members sit around their hub.
+- **Tailscale is part of the map.** The agent reads the tailnet from the
+  daemon's local API socket (world readable on a default install, no root and no
+  `tailscale` binary), so the map shows the tailnet name, every peer, its OS, its
+  overlay address, whether the path is direct or relayed, tags, exit-node status
+  and when it was last seen. Offline peers stay on the map, greyed out.
+- **The local segment comes from the kernel.** ARP and NDP neighbours are grouped
+  by interface, deduplicated, drawn with their MAC vendor, and the gateway is
+  shown once as the way out to the internet. Another SyncWin device on the same
+  segment or in the same tailnet is recognised and can be opened from the map.
+- **The map is interactive.** Drag a node to pin it, scroll to zoom, drag the
+  background to pan, reset the view, and click any node or network for a detail
+  drawer with addresses, state, path, tags and members.
+- **Honest about what it cannot see.** A LAN member is only a device this host
+  has exchanged traffic with recently, never the result of a scan; WireGuard and
+  other root-owned tunnels are named instead of hidden; an unreadable Tailscale
+  socket is reported as an error instead of an empty peer list.
+- The Network screen links to the map, and the map refreshes whenever it opens
+  and once a minute while it stays open.
 
 ## [0.14.0] - 2026-10-22
 

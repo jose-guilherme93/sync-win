@@ -37,7 +37,9 @@
     uncountedInterfaces
   } from '../../lib/network'
   import EmptyState from '../ui/EmptyState.svelte'
+  import Icon from '../ui/Icon.svelte'
   import MiniSparkline from '../ui/MiniSparkline.svelte'
+  import { nav } from '../../lib/router'
 
   export let device: Device
 
@@ -406,6 +408,14 @@
   {#if !hw}
     <EmptyState icon="🌐" title="No telemetry yet" message="The agent has not reported network counters for this device." />
   {:else}
+    <button class="map-link" on:click={() => nav.setSection('topology')}>
+      <span class="map-link-icon"><Icon name="topology" size={18} /></span>
+      <span class="map-link-copy">
+        <strong>Open the network map</strong>
+        <span>Every LAN segment and overlay this device belongs to, with the nodes it can see.</span>
+      </span>
+      <span class="map-link-arrow" aria-hidden="true">→</span>
+    </button>
     <div class="summary">
       <article class="stat">
         <span class="label">Download</span>
@@ -811,6 +821,23 @@
 
 <style>
   .network { display: grid; gap: 0.85rem; }
+
+  .map-link {
+    display: flex; align-items: center; gap: 0.7rem; width: 100%;
+    padding: 0.65rem 0.8rem; border: 1px solid var(--border); border-radius: var(--radius);
+    background: linear-gradient(100deg, var(--accent-dim), transparent 55%), var(--card);
+    color: var(--text); font: inherit; text-align: left; cursor: pointer;
+    transition: border-color var(--t-fast), background var(--t-fast);
+  }
+  .map-link:hover { border-color: var(--accent-border); }
+  .map-link-icon {
+    width: 32px; height: 32px; flex: none; display: grid; place-items: center;
+    border-radius: 9px; background: var(--bg-elevated); color: var(--accent);
+  }
+  .map-link-copy { display: grid; gap: 0.1rem; min-width: 0; }
+  .map-link-copy strong { font-size: 0.8rem; font-weight: 600; }
+  .map-link-copy span { color: var(--text-muted); font-size: 0.72rem; }
+  .map-link-arrow { margin-left: auto; color: var(--accent); font-size: 0.9rem; }
 
   .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 0.6rem; }
   .stat {
