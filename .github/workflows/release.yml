@@ -207,6 +207,13 @@ jobs:
           # path take half an hour.
           platforms: linux/amd64
           push: true
+          # BuildKit does not cache-key on a secret's content, so the nonce
+          # forces the agent layer to re-run with AGENT_UPDATE_KEY on every
+          # release. REQUIRE_AGENT_SIGNATURE turns a missing key into a failed
+          # build instead of another unsigned image that no device can accept.
+          build-args: |
+            AGENT_BUILD_NONCE=${{ github.sha }}
+            REQUIRE_AGENT_SIGNATURE=1
           # Both forms of the version tag are published. Docker convention drops
           # the `v`, but the Git tag keeps it, and a deployment platform that
           # derives the image tag from the Git ref would otherwise look for

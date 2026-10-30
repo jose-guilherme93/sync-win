@@ -11,6 +11,22 @@ version, and a breaking change increases the major version.
 
 ## [Unreleased]
 
+## [0.15.2] - 2026-10-30
+
+### Fixed
+
+- **Release images sign the agent again.** The Docker build layer for the agent
+  is cached by BuildKit without the signing secret's content, so the images
+  from 0.13.x through 0.15.1 shipped an empty `sync-win-agent.sig`. Every
+  updater failed closed at the signature endpoint. The release build now
+  invalidates that layer with the commit SHA, requires `AGENT_UPDATE_KEY`, and
+  fails instead of publishing an unsigned image.
+- **The agent is now 0.11.1.** A device installed from an unsigned image has no
+  public key to verify an update, so it needs one manual binary replacement
+  (`/api/agent/download` → `/usr/local/bin/sync-win-agent`, then restart the
+  service). After that, auto-update works normally. A fresh install from 0.15.2
+  is signed and updates without intervention.
+
 ## [0.15.1] - 2026-10-30
 
 ### Fixed
