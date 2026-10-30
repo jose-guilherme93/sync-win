@@ -688,6 +688,24 @@ export function layoutTopology(graph: TopologyGraph, width = 1200, height = 720)
       if (!point) continue
       point.x = clamp(point.x, PADDING, width - PADDING)
       point.y = clamp(point.y, PADDING, height - PADDING)
+
+      // Keep each network on its own side of the device. Without this, a peer
+      // drifting past the centre puts its label under the device label, which
+      // is the one overlap that makes the map look broken. The internet node
+      // follows its gateway instead.
+      const node = nodeById.get(id)
+      const hub = node ? hubAnchors.get(node.networkId) : undefined
+      if (!hub || node?.kind === 'internet') continue
+      if (stacked) {
+        if (hub.y < cy) point.y = Math.min(point.y, cy - 95)
+        else point.y = Math.max(point.y, cy + 95)
+      } else if (hub.x > cx) {
+        point.x = Math.max(point.x, cx + 105)
+      } else {
+        point.x = Math.min(point.x, cx - 105)
+      }
+      point.x = clamp(point.x, PADDING, width - PADDING)
+      point.y = clamp(point.y, PADDING, height - PADDING)
     }
   }
 
