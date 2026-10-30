@@ -159,7 +159,7 @@ func readTailscaleStatus(socketPath string) ([]byte, error) {
 	defer transport.CloseIdleConnections()
 
 	client := &http.Client{Transport: transport, Timeout: 3 * time.Second}
-	req, err := http.NewRequest(http.MethodGet, "http://local-tailscaled.sock"+tailscaleStatusPath, nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://local-tailscaled.sock"+tailscaleStatusPath, nil)
 	if err != nil {
 		return nil, err
 	}

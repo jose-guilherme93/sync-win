@@ -70,7 +70,7 @@ type NetworkTopology struct {
 	Tunnels        []TunnelLink      `json:"tunnels,omitempty"`
 	// Overlays are the private networks the device joins through a daemon
 	// (today Tailscale), with the peers that daemon knows about. A LAN
-	// neighbour is only visible to the kernel; an overlay member is fully
+	// neighbor is only visible to the kernel; an overlay member is fully
 	// described by the overlay itself.
 	Overlays    []OverlayNetwork `json:"overlays,omitempty"`
 	CollectedAt string           `json:"collected_at,omitempty"`

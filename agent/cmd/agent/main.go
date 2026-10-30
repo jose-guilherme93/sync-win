@@ -3017,7 +3017,7 @@ func syncSystemInventory(serverURL, deviceID, deviceToken string, st *agentState
 		MaxTunnels:   syncwinContract.MaxTunnelLinks(),
 	})
 	// Overlays are read after the LAN view because a failed overlay must not
-	// cost the neighbours. Tailscale's local API is the only overlay an
+	// cost the neighbors. Tailscale's local API is the only overlay an
 	// unprivileged agent can describe today.
 	topology.Overlays = collectors.CollectNetworkOverlays(ifaces, collectors.OverlayLimits{
 		MaxNetworks: syncwinContract.MaxOverlayNetworks(),

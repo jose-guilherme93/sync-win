@@ -67,7 +67,7 @@ type OverlayNode struct {
 
 // OverlayNetwork is one private network the device joins through a daemon,
 // with the peers that daemon knows about. The peers are a real membership
-// list; a LAN neighbour is only what the kernel has seen.
+// list; a LAN neighbor is only what the kernel has seen.
 type OverlayNetwork struct {
 	Kind      string        `json:"kind"`
 	Name      string        `json:"name,omitempty"`
