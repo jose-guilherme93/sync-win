@@ -9,6 +9,8 @@ The next version is the last tag plus the Conventional Commits bump:
 `feat:` increases the minor version, everything else increases the patch
 version, and a breaking change increases the major version.
 
+## [Unreleased]
+
 ## [0.15.0] - 2026-10-30
 
 ### Added
@@ -35,6 +37,22 @@ version, and a breaking change increases the major version.
   socket is reported as an error instead of an empty peer list.
 - The Network screen links to the map, and the map refreshes whenever it opens
   and once a minute while it stays open.
+
+## [0.14.1] - 2026-10-28
+
+### Fixed
+
+- **Telemetry charts plot time, not samples.** A window with only a few
+  samples no longer stretches them across the whole card. Every point sits at
+  its real timestamp inside the selected window, so a fresh chart grows from
+  the left as data arrives, gaps stay where they happened and a device that
+  reported for ten minutes of an hour shows ten minutes of line, not an hour
+  of invented slope. The spline overshoot that drew a peak at the start of a
+  series is gone as well.
+- **Every plot shares one look.** The Overview, the Network traffic chart and
+  the detailed System tab now draw filled areas with Beszel's chart palette
+  (blue CPU, green memory, orange temperature and disk writes, pink upload),
+  round time ticks, horizontal-only grid lines and one dark tooltip.
 
 ## [0.14.0] - 2026-10-22
 

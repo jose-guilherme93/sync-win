@@ -1,16 +1,5 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
-  import {
-    Chart,
-    LineController,
-    LineElement,
-    PointElement,
-    LinearScale,
-    CategoryScale,
-    Filler,
-    Tooltip,
-    Legend
-  } from 'chart.js'
   import { apiFetch, apiURL } from '../../lib/api'
   import { formatBytes, formatRate } from '../../lib/format'
   import type {
@@ -40,6 +29,7 @@
   import Icon from '../ui/Icon.svelte'
   import MiniSparkline from '../ui/MiniSparkline.svelte'
   import { nav } from '../../lib/router'
+  import TimeSeriesChart, { type ChartSeries } from '../ui/TimeSeriesChart.svelte'
 
   export let device: Device
 
@@ -59,10 +49,10 @@
     9000: 'http-alt', 9090: 'prometheus', 11211: 'memcached', 27017: 'mongodb'
   }
 
-  // The palette the traffic chart cycles through. The series colours are the
-  // ones the rest of the dashboard uses, so a link keeps its colour.
-  const SERIES = ['--accent', '--series-1', '--series-2', '--series-3', '--series-4', '--series-5']
-  const SERIES_FALLBACK = ['#34d399', '#60a5fa', '#f472b6', '#facc15', '#22d3ee', '#a78bfa']
+  // The palette the traffic chart cycles through, taken from the shared plot
+  // tokens so a link keeps the same colour on every screen.
+  const SERIES = ['--chart-1', '--chart-2', '--chart-3', '--chart-4', '--chart-5']
+  const SERIES_FALLBACK = ['#2663d9', '#2eb88a', '#f28c26', '#b546ec', '#ec2c6c']
 
   type RangeId = '1h' | '24h' | '7d'
   const RANGES: { id: RangeId; label: string; ms: number }[] = [
@@ -84,6 +74,7 @@
   let history: NetworkHistory | null = null
   let historyError = ''
   let historyLoading = false
+  let historyWindow: { from: number; to: number } | null = null
   let range: RangeId = '24h'
   let direction: 'rx' | 'tx' = 'rx'
 
@@ -98,8 +89,6 @@
   let lastStamp = ''
   let seriesDeviceId = ''
 
-  let trafficCanvas: HTMLCanvasElement
-  let trafficChart: Chart | null = null
   let historyTimer: ReturnType<typeof setInterval> | null = null
   let topologyTimer: ReturnType<typeof setInterval> | null = null
 
@@ -218,8 +207,6 @@
   onDestroy(() => {
     if (topologyTimer) clearInterval(topologyTimer)
     if (historyTimer) clearInterval(historyTimer)
-    trafficChart?.destroy()
-    trafficChart = null
   })
 
   async function loadPorts() {
@@ -261,6 +248,7 @@
       )
       if (!res.ok) throw new Error(`history request failed (${res.status})`)
       history = await res.json()
+      historyWindow = { from: from.getTime(), to: to.getTime() }
       historyError = ''
     } catch (e: any) {
       historyError = e?.message || 'Unable to load the traffic history'
@@ -298,92 +286,44 @@
 
   // The chart draws one stacked area per interface. The sum of the areas is
   // the total the device sent, and the height of one area is what one link
-  // carried.
-  $: if (trafficCanvas && history) {
-    buildChart(history)
-  }
+  // carried. Series share a stack id so the shared chart renders them as an
+  // area stack instead of overlapping fills.
+  $: traffic = buildTraffic(history, direction)
 
-  function buildChart(data: NetworkHistory) {
-    trafficChart?.destroy()
-    trafficChart = null
-    if (!trafficCanvas) return
+  function buildTraffic(
+    data: NetworkHistory | null,
+    dir: 'rx' | 'tx'
+  ): { labels: string[]; series: ChartSeries[] } {
+    if (!data) return { labels: [], series: [] }
 
     const names = Object.keys(data.interfaces ?? {}).sort()
-    if (names.length === 0) return
-
     const stamps = new Set<string>()
-    for (const points of Object.values(data.interfaces)) {
+    for (const points of Object.values(data.interfaces ?? {})) {
       for (const point of points) stamps.add(point.timestamp)
     }
     const ordered = [...stamps].sort()
-    if (ordered.length < 2) return
+    if (ordered.length < 2) return { labels: ordered, series: [] }
 
-    const datasets = names.map((name, index) => {
-      const points = new Map<string, NetworkHistoryPoint>(
+    const series = names.map((name, index) => {
+      const byStamp = new Map<string, NetworkHistoryPoint>(
         (data.interfaces[name] ?? []).map((point) => [point.timestamp, point])
       )
-      const color = trafficColor(index)
       return {
         label: name,
-        data: ordered.map((stamp) => {
-          const point = points.get(stamp)
+        values: ordered.map((stamp) => {
+          const point = byStamp.get(stamp)
           if (!point) return 0
-          return direction === 'rx' ? point.rx_rate : point.tx_rate
+          return dir === 'rx' ? point.rx_rate : point.tx_rate
         }),
-        borderColor: color,
-        backgroundColor: `${color}33`,
-        fill: true,
-        borderWidth: 1.2,
-        pointRadius: 0,
-        tension: 0.25,
-        stack: 'traffic'
+        color: trafficColor(index),
+        stack: 'traffic',
+        // Shared by the tooltip and the legend stats, which do not go through
+        // the axis formatter.
+        format: formatRate
       }
     })
 
-    trafficChart = new Chart(trafficCanvas, {
-      type: 'line',
-      data: { labels: ordered, datasets },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        animation: false as const,
-        interaction: { intersect: false, mode: 'index' as const },
-        plugins: {
-          legend: { display: true, labels: { color: '#94a3b8', font: { size: 9 }, boxWidth: 10, padding: 6 } },
-          tooltip: {
-            backgroundColor: 'rgba(15, 23, 42, 0.92)',
-            titleColor: '#e2e8f0',
-            bodyColor: '#cbd5e1',
-            borderColor: 'rgba(148, 163, 184, 0.2)',
-            borderWidth: 1,
-            padding: 8,
-            titleFont: { size: 11 },
-            bodyFont: { size: 10 },
-            callbacks: {
-              label: (context) => `${context.dataset.label}: ${formatRate(Number(context.raw) || 0)}`
-            }
-          }
-        },
-        scales: {
-          x: {
-            display: true,
-            grid: { color: 'rgba(148, 163, 184, 0.08)' },
-            ticks: { color: '#64748b', font: { size: 9 }, maxTicksLimit: 8, maxRotation: 0 }
-          },
-          y: {
-            display: true,
-            beginAtZero: true,
-            grid: { color: 'rgba(148, 163, 184, 0.08)' },
-            ticks: {
-              color: '#64748b',
-              font: { size: 9 },
-              maxTicksLimit: 5,
-              callback: (value) => formatRate(Number(value) || 0)
-            }
-          }
-        }
-      }
-    })
+    return { labels: ordered, series }
   }
 
   function ageOf(stamp: string): string {
@@ -420,13 +360,13 @@
       <article class="stat">
         <span class="label">Download</span>
         <span class="value">{formatRate(totalRxRate)}</span>
-        <MiniSparkline series={totalRx} color="var(--accent)" height={26} label="Download rate" />
+        <MiniSparkline series={totalRx} color="var(--chart-2)" height={26} label="Download rate" />
         <span class="sub">{formatBytes(counted.reduce((n, i) => n + i.rx_bytes, 0))} since boot</span>
       </article>
       <article class="stat">
         <span class="label">Upload</span>
         <span class="value">{formatRate(totalTxRate)}</span>
-        <MiniSparkline series={totalTx} color="var(--series-1)" height={26} label="Upload rate" />
+        <MiniSparkline series={totalTx} color="var(--chart-5)" height={26} label="Upload rate" />
         <span class="sub">{formatBytes(counted.reduce((n, i) => n + i.tx_bytes, 0))} since boot</span>
       </article>
       <article class="stat">
@@ -493,9 +433,16 @@
           message="The server keeps one sample per interface per minute. The chart fills as the device reports."
         />
       {:else}
-        <div class="chart-wrap">
-          <canvas bind:this={trafficCanvas}></canvas>
-        </div>
+        <TimeSeriesChart
+          labels={traffic.labels}
+          series={traffic.series}
+          leftUnit=""
+          leftFormat={formatRate}
+          height={260}
+          windowMs={RANGES.find((r) => r.id === range)?.ms ?? null}
+          windowEnd={historyWindow?.to ?? null}
+          emptyMessage="No traffic samples in this window yet."
+        />
         <p class="foot-note">
           {history.resolution} buckets · {Object.keys(history.interfaces).length} interface{Object.keys(history.interfaces).length === 1 ? '' : 's'} recorded
           {#if historyLoading}· refreshing…{/if}
@@ -554,11 +501,11 @@
               <div class="rates">
                 <div class="rate">
                   <span class="rate-k">↓ {formatRate(iface.rx_rate || 0)}</span>
-                  <MiniSparkline series={ifaceSeries[iface.name]?.rx || []} color="var(--accent)" height={22} />
+                  <MiniSparkline series={ifaceSeries[iface.name]?.rx || []} color="var(--chart-2)" height={22} />
                 </div>
                 <div class="rate">
                   <span class="rate-k">↑ {formatRate(iface.tx_rate || 0)}</span>
-                  <MiniSparkline series={ifaceSeries[iface.name]?.tx || []} color="var(--series-1)" height={22} />
+                  <MiniSparkline series={ifaceSeries[iface.name]?.tx || []} color="var(--chart-5)" height={22} />
                 </div>
               </div>
 
@@ -870,7 +817,6 @@
     font-size: 0.7rem; cursor: pointer; text-decoration: underline;
   }
 
-  .chart-wrap { position: relative; height: 220px; padding: 0.8rem 0.9rem 0.4rem; }
   .foot-note { margin: 0; padding: 0 0.9rem 0.7rem; color: var(--text-faint); font-size: 0.68rem; }
   .screen-foot { margin: 0; color: var(--text-faint); font-size: 0.7rem; }
 
