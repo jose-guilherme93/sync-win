@@ -32,15 +32,34 @@ RUN cd server && CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
 # secret id=agent_update_key, embed its public key and emit a detached
 # signature. Without the secret the agent is built unsigned and refuses
 # auto-updates (fail closed). The private key never lands in an image layer.
+#
+# AGENT_BUILD_NONCE exists because BuildKit does not include a secret's content
+# in the cache key for a RUN --mount=type=secret. A cached unsigned agent layer
+# therefore survived every release after the key was added, and the images
+# shipped an empty sync-win-agent.sig. The release workflow passes the commit
+# SHA here, which changes the instruction and forces this layer to run with the
+# secret. REQUIRE_AGENT_SIGNATURE makes a release build fail loudly instead of
+# publishing another unsigned image.
+ARG AGENT_BUILD_NONCE=local
+ARG REQUIRE_AGENT_SIGNATURE=
 RUN --mount=type=secret,id=agent_update_key,required=false \
     set -e; \
+    echo "agent build nonce: ${AGENT_BUILD_NONCE}"; \
     key=""; ldf=""; \
     if [ -f /run/secrets/agent_update_key ]; then key="$(cat /run/secrets/agent_update_key)"; fi; \
+    if [ -n "${REQUIRE_AGENT_SIGNATURE}" ] && [ -z "$key" ]; then \
+      echo "REQUIRE_AGENT_SIGNATURE is set but agent_update_key is empty" >&2; \
+      exit 1; \
+    fi; \
     if [ -n "$key" ]; then ldf="-X main.agentUpdatePublicKey=$(/out/agentsign -derive-public -key "$key")"; fi; \
     cd /src/agent && CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
       go build -trimpath -ldflags="$ldf -s -w" -o /out/sync-win-agent ./cmd/agent; \
     : > /out/sync-win-agent.sig; \
-    if [ -n "$key" ]; then /out/agentsign -key "$key" -in /out/sync-win-agent -out /out/sync-win-agent.sig; fi
+    if [ -n "$key" ]; then /out/agentsign -key "$key" -in /out/sync-win-agent -out /out/sync-win-agent.sig; fi; \
+    if [ -n "${REQUIRE_AGENT_SIGNATURE}" ] && [ ! -s /out/sync-win-agent.sig ]; then \
+      echo "REQUIRE_AGENT_SIGNATURE is set but no signature was produced" >&2; \
+      exit 1; \
+    fi
 
 # Extract agent version from contract.json (single source of truth)
 RUN apk add --no-cache jq && \

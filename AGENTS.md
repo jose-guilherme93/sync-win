@@ -176,6 +176,16 @@ A device does not pull the image: it downloads the binary over HTTP and swaps th
 file. The image being current is necessary but not sufficient — the device still
 needs a trigger, which is the update timer plus the path unit.
 
+The release build **must sign the agent**, and the signature must be inside the
+image. BuildKit does not include a BuildKit secret's content in the cache key
+for a `RUN --mount=type=secret`, so an unsigned agent layer can survive every
+release after the key is added. The build therefore takes `AGENT_BUILD_NONCE`
+(the commit SHA in the release workflow) to invalidate that layer, and
+`REQUIRE_AGENT_SIGNATURE=1` to fail when the key is missing or no signature was
+produced. An image with an empty `/app/sync-win-agent.sig` is a broken release:
+the updater fails closed and no device can update. Every published image must
+have a non-empty signature file and an embedded public key.
+
 ## How to develop
 
 - Keep changes small and explicit.
