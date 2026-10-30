@@ -17,6 +17,8 @@
     memory: 'M3 7h18v10H3zM7 7v10M12 7v10M17 7v10M7 17v3M17 17v3',
     disk: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4z',
     network: 'M12 20v-6M6 8a6 6 0 0 0 0 8M18 8a6 6 0 0 1 0 8M9 11a3 3 0 0 0 0 4M15 11a3 3 0 0 1 0 4M12 10h.01',
+    // Two nodes joined through a third: the network map, not the traffic view.
+    topology: 'M5 4h5v5H5zM14 15h5v5h-5zM7.5 9v3a3 3 0 0 0 3 3h3.5M16.5 15v-2a3 3 0 0 0-3-3h-1',
     thermometer: 'M14 14.8V4a2 2 0 0 0-4 0v10.8a4 4 0 1 0 4 0z',
     box: 'M21 8l-9-5-9 5 9 5 9-5zM3 8v8l9 5 9-5V8M12 13v8',
     list: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',

@@ -49,6 +49,38 @@ type TunnelLink struct {
 	State     string `json:"state,omitempty"`
 }
 
+// OverlayNode is one machine in an overlay network, as the overlay daemon
+// describes it. The agent copies only what the dashboard renders.
+type OverlayNode struct {
+	HostName       string   `json:"hostname"`
+	DNSName        string   `json:"dns_name,omitempty"`
+	OS             string   `json:"os,omitempty"`
+	IPs            []string `json:"ips,omitempty"`
+	Online         bool     `json:"online"`
+	Direct         bool     `json:"direct,omitempty"`
+	Relay          string   `json:"relay,omitempty"`
+	ExitNode       bool     `json:"exit_node,omitempty"`
+	ExitNodeOption bool     `json:"exit_node_option,omitempty"`
+	Tags           []string `json:"tags,omitempty"`
+	LastSeen       string   `json:"last_seen,omitempty"`
+}
+
+// OverlayNetwork is one private network the device joins through a daemon,
+// with the peers that daemon knows about. The peers are a real membership
+// list; a LAN neighbor is only what the kernel has seen.
+type OverlayNetwork struct {
+	Kind      string        `json:"kind"`
+	Name      string        `json:"name,omitempty"`
+	MagicDNS  string        `json:"magic_dns,omitempty"`
+	Interface string        `json:"interface,omitempty"`
+	State     string        `json:"state"`
+	Self      *OverlayNode  `json:"self,omitempty"`
+	Peers     []OverlayNode `json:"peers,omitempty"`
+	// Error says why the peer list is missing, so an unreadable socket does
+	// not look like a network with no peers.
+	Error string `json:"error,omitempty"`
+}
+
 // NetworkTopology is the shape of the device's network.
 type NetworkTopology struct {
 	DefaultGateway string            `json:"default_gateway,omitempty"`
@@ -59,6 +91,7 @@ type NetworkTopology struct {
 	Neighbors      []NetworkNeighbor `json:"neighbors,omitempty"`
 	Wireless       []WirelessLink    `json:"wireless,omitempty"`
 	Tunnels        []TunnelLink      `json:"tunnels,omitempty"`
+	Overlays       []OverlayNetwork  `json:"overlays,omitempty"`
 	CollectedAt    string            `json:"collected_at,omitempty"`
 }
 

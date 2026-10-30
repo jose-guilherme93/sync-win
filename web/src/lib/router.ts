@@ -20,6 +20,7 @@ export type Section =
   | 'memory'
   | 'storage'
   | 'network'
+  | 'topology'
   | 'sensors'
   // Device-scoped — system
   | 'containers'
@@ -44,7 +45,7 @@ export type NavState = {
 // a click in the sidebar should be allowed and whether to fall back to the
 // fleet view when the selected device disappears.
 export const DEVICE_SCOPED: ReadonlySet<Section> = new Set<Section>([
-  'overview', 'cpu', 'memory', 'storage', 'network', 'sensors',
+  'overview', 'cpu', 'memory', 'storage', 'network', 'topology', 'sensors',
   'containers', 'processes', 'services', 'packages', 'logs',
   'security', 'remote', 'settings'
 ])
@@ -77,6 +78,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { section: 'memory', label: 'Memory', icon: 'memory', deviceScoped: true },
       { section: 'storage', label: 'Storage', icon: 'disk', deviceScoped: true },
       { section: 'network', label: 'Network', icon: 'network', deviceScoped: true },
+      { section: 'topology', label: 'Topology', icon: 'topology', deviceScoped: true },
       { section: 'sensors', label: 'All sensors', icon: 'thermometer', deviceScoped: true }
     ]
   },

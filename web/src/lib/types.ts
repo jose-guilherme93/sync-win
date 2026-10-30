@@ -159,7 +159,38 @@ export type NetworkTopology = {
   neighbors?: NetworkNeighbor[]
   wireless?: WirelessLink[]
   tunnels?: TunnelLink[]
+  overlays?: OverlayNetwork[]
   collected_at?: string
+}
+
+// OverlayNode is one machine in a private overlay network (today Tailscale).
+// IPs are overlay addresses, not the physical ones.
+export type OverlayNode = {
+  hostname: string
+  dns_name?: string
+  os?: string
+  ips?: string[]
+  online: boolean
+  direct?: boolean
+  relay?: string
+  exit_node?: boolean
+  exit_node_option?: boolean
+  tags?: string[]
+  last_seen?: string
+}
+
+// OverlayNetwork is a private network the device joins through a daemon. An
+// unreadable daemon is reported with `error`, which is different from a
+// network with no peers.
+export type OverlayNetwork = {
+  kind: string
+  name?: string
+  magic_dns?: string
+  interface?: string
+  state: string
+  self?: OverlayNode
+  peers?: OverlayNode[]
+  error?: string
 }
 
 export type NetworkRoute = {

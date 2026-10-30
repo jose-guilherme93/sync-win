@@ -141,3 +141,6 @@ entries:
   - id: sessions/261028-chart-time-axis
     path: sessions/261028-chart-time-axis.md
     type: session
+  - id: sessions/261030-network-topology
+    path: sessions/261030-network-topology.md
+    type: session

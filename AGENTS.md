@@ -26,6 +26,7 @@ The project is built around three main components:
    - collects small explicit preference files and game saves
    - reports device heartbeat, hardware telemetry, and installed packages
    - monitors Docker containers via local socket
+   - reports the network topology on the slow inventory cycle: routes, ARP/NDP neighbours, wireless quality, tunnels, and the Tailscale peer list from the daemon's local API socket
    - executes Docker management commands (start, stop, restart, kill, remove, exec, compose, prune)
    - opt-in interactive remote access (off by default): keeps an outbound tunnel and, per session, injects an ephemeral key through the root helper and runs `ssh` against its own loopback
    - enforces local policy: any command type can be disabled via `/etc/sync-win/policy.json`
@@ -39,7 +40,7 @@ The project is built around three main components:
    - account-first: sign in / create account entry screen
    - shows a dense fleet list with online state, last-seen time and inline CPU/RAM/disk percentage meters; detailed telemetry charts live on the device Overview
    - device Overview: axis-labelled Performance/Network/Disk I/O charts whose legends show last/average/min/max for every series, plus load and cores, storage, interfaces, top processes and system facts
-   - device screens rendered inline by the shell: Overview, CPU & Thermal, Memory, Storage, Network, All sensors, Services (services and ports side by side with a detail drawer), Docker, Security (audit history plus host posture), Processes, Packages, Logs, Remote access, Settings
+   - device screens rendered inline by the shell: Overview, CPU & Thermal, Memory, Storage, Network, Topology (the interactive network map), All sensors, Services (services and ports side by side with a detail drawer), Docker, Security (audit history plus host posture), Processes, Packages, Logs, Remote access, Settings
    - Docker container management (list, start/stop/restart/kill/remove, exec, compose, prune)
    - Remote access screen: tabbed SSH terminal (xterm.js, up to six concurrent sessions, tabs named by the running program) and a scrollable recent-session audit; device actions live in Settings → Maintenance
    - Lynis security audit: run audit, read the stored report (hardening index, warnings/suggestions/categories) and history; host posture (public listeners, pending updates, failed units)
