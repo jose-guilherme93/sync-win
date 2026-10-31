@@ -33,8 +33,7 @@ API_PORT="${DEV_HTTP_PORT:-8088}"
 BASE="http://localhost:${WEB_PORT}"
 API="http://localhost:${API_PORT}"
 
-EMAIL="${SYNCWIN_EMAIL:-demo@sync-win.local}"
-PASSWORD="${SYNCWIN_PASSWORD:-sync-win-demo-password}"
+TOKEN="${SYNCWIN_ACCESS_TOKEN:-dev-access-token-0123456789abcdef}"
 # A stable hostname and machine id make re-runs adopt the device record instead
 # of adding another e2e-laptop row to the dev database on every run.
 HOSTNAME="${E2E_HOSTNAME:-e2e-laptop}"
@@ -206,7 +205,7 @@ curl -fsS -o /dev/null "${BASE}/" || { echo "dashboard not reachable at ${BASE};
 # anything new.
 LOGIN=$(curl -fsS -c "${COOKIES}" -X POST "${BASE}/api/auth/login" \
   -H 'Content-Type: application/json' \
-  -d "{\"email\":\"${EMAIL}\",\"password\":\"${PASSWORD}\"}")
+  -d "{\"token\":\"${TOKEN}\"}")
 check "signed in as the development account" "${LOGIN}" "owner_id"
 
 # enroll-token and enroll take the token in the "token" field, not
@@ -351,10 +350,10 @@ sleep 1
 timeout 60 agent-browser open "${BASE}/" --args "--no-sandbox" >/dev/null
 sleep 3
 
-# The dev stack injects SYNCWIN_DEV_TOKEN / VITE_DEV_TOKEN, so the dashboard
-# trades it for a session cookie and renders the fleet directly. Seeing the
-# sign-in form here means one of those variables is missing from the stack.
-SIGN_IN_FORM=$(unquote "$(eval_js "document.querySelector('input[type=email]') ? 'FORM' : 'SKIPPED'")")
+# The dev stack injects SYNCWIN_ACCESS_TOKEN / VITE_ACCESS_TOKEN, so the
+# dashboard trades it for a session cookie and renders the fleet directly.
+# Seeing the sign-in form means one of those variables is missing from the stack.
+SIGN_IN_FORM=$(unquote "$(eval_js "document.querySelector('input[name=access-token], input[type=password]') ? 'FORM' : 'SKIPPED'")")
 check "dev stack signs in without the login screen" "${SIGN_IN_FORM}" "SKIPPED"
 SIGNED=$(wait_for "Fleet" "document.body.textContent.includes('Fleet') ? 'Fleet' : document.body.textContent.slice(0,60)" 10)
 check "signed in" "${SIGNED}" "Fleet"

@@ -51,7 +51,7 @@ func csrfCookieMatches(r *http.Request) bool {
 }
 
 func csrfExemptPath(path string) bool {
-	return path == "/api/auth/login" || path == "/api/auth/register" || path == "/api/auth/dev" || strings.HasPrefix(path, "/api/agent/")
+	return path == "/api/auth/login" || strings.HasPrefix(path, "/api/agent/")
 }
 
 func csrfMiddleware(next http.Handler) http.Handler {

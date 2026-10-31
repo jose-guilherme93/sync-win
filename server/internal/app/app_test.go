@@ -23,6 +23,23 @@ import (
 	"sync-win/server/internal/tunnel"
 )
 
+// testAccessToken is the dashboard credential used by the tests. It is long
+// enough to pass the production length check.
+const testAccessToken = "test-access-token-0123456789abcdef"
+
+// loginWithToken opens a dashboard session the way a browser does.
+func loginWithToken(t *testing.T, s *Server) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"token":"`+testAccessToken+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.handleAuthLogin(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("token login: %d %s", rec.Code, rec.Body.String())
+	}
+	return rec
+}
+
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
 	st, err := store.NewStore(filepath.Join(t.TempDir(), "data"))
@@ -38,7 +55,7 @@ func newTestServer(t *testing.T) *Server {
 	structLogger := logging.New(logCfg, logStore)
 	t.Cleanup(func() { structLogger.Stop() })
 
-	return &Server{store: st, logStore: logStore, log: structLogger, aggregator: store.NewAggregator(st), dockerQueue: docker.NewQueue(time.Minute), dockerBroadcaster: docker.NewBroadcaster(), streamTickets: newStreamTicketStore(), rateLimiter: newRateLimiter(), tunnelHub: tunnel.NewHub(), flags: featureFlags{EnableRegistration: true}, logStreamInterval: 10 * time.Millisecond}
+	return &Server{store: st, logStore: logStore, log: structLogger, aggregator: store.NewAggregator(st), dockerQueue: docker.NewQueue(time.Minute), dockerBroadcaster: docker.NewBroadcaster(), streamTickets: newStreamTicketStore(), rateLimiter: newRateLimiter(), tunnelHub: tunnel.NewHub(), flags: featureFlags{AccessToken: testAccessToken}, logStreamInterval: 10 * time.Millisecond}
 }
 
 func TestAgentInstallScriptRegistersAndVerifies(t *testing.T) {
@@ -120,38 +137,23 @@ func TestAgentInstallScriptRegistersAndVerifies(t *testing.T) {
 func TestAuthMe(t *testing.T) {
 	s := newTestServer(t)
 
-	post := func(path string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"email":"joao@example.com","password":"supersecret1"}`))
-		req.Header.Set("Content-Type", "application/json")
-		rec := httptest.NewRecorder()
-		s.handleAuthRegister(rec, req)
-		return rec
-	}
-	if rec := post("/api/auth/register"); rec.Code != http.StatusOK {
-		t.Fatalf("register failed: %s", rec.Body.String())
-	}
-
 	meReq := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
 	meRec := httptest.NewRecorder()
 	s.handleAuthMe(meRec, meReq)
 	if meRec.Code != http.StatusUnauthorized {
-		t.Fatalf("me without token must be 401, got %d", meRec.Code)
+		t.Fatalf("me without a session must be 401, got %d", meRec.Code)
 	}
 
-	loginReq := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"email":"joao@example.com","password":"supersecret1"}`))
-	loginReq.Header.Set("Content-Type", "application/json")
-	loginRec := httptest.NewRecorder()
-	s.handleAuthLogin(loginRec, loginReq)
-	if loginRec.Code != http.StatusOK {
-		t.Fatalf("login failed: %s", loginRec.Body.String())
-	}
+	loginRec := loginWithToken(t, s)
 	var auth struct {
 		Token   string `json:"token"`
 		OwnerID string `json:"owner_id"`
-		Email   string `json:"email"`
 	}
 	if err := json.Unmarshal(loginRec.Body.Bytes(), &auth); err != nil {
 		t.Fatal(err)
+	}
+	if auth.OwnerID == "" {
+		t.Fatal("login must name the owner")
 	}
 
 	authedReq := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
@@ -163,13 +165,61 @@ func TestAuthMe(t *testing.T) {
 	}
 	var me struct {
 		OwnerID string `json:"owner_id"`
-		Email   string `json:"email"`
 	}
 	if err := json.Unmarshal(authedRec.Body.Bytes(), &me); err != nil {
 		t.Fatal(err)
 	}
-	if me.OwnerID != auth.OwnerID || me.Email != "joao@example.com" {
+	if me.OwnerID != auth.OwnerID {
 		t.Fatalf("unexpected me payload: %+v", me)
+	}
+}
+
+// A wrong token must not open a session, and the owner row must be created only
+// once no matter how many logins happen.
+func TestAccessTokenRejectsWrongToken(t *testing.T) {
+	s := newTestServer(t)
+	for _, body := range []string{`{"token":"wrong"}` , `{"token":""}`, `{}`} {
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		s.handleAuthLogin(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("body %s: expected 401, got %d %s", body, rec.Code, rec.Body.String())
+		}
+	}
+	if _, err := s.store.UserByID("nope"); err == nil {
+		t.Fatal("no owner should exist after rejected logins")
+	}
+	loginWithToken(t, s)
+	first, err := s.store.EnsureOwner()
+	if err != nil {
+		t.Fatalf("ensure owner: %v", err)
+	}
+	second, err := s.store.EnsureOwner()
+	if err != nil {
+		t.Fatalf("ensure owner again: %v", err)
+	}
+	if first.ID != second.ID {
+		t.Fatalf("owner must be stable, got %s then %s", first.ID, second.ID)
+	}
+}
+
+// A server with no usable token must say so instead of rejecting the token as
+// wrong, which would send the operator looking for a typo.
+func TestAccessTokenUnconfiguredFailsClosed(t *testing.T) {
+	s := newTestServer(t)
+	s.flags.AccessToken = ""
+	s.flags.AccessTokenProblem = "SYNCWIN_ACCESS_TOKEN is not set; the dashboard cannot be opened until it is"
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"token":"anything"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.handleAuthLogin(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when the token is not configured, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "SYNCWIN_ACCESS_TOKEN") {
+		t.Fatalf("the error must name the setting: %s", rec.Body.String())
 	}
 }
 
@@ -267,13 +317,7 @@ func TestOwnerIsolationForDevicesAndFleetWideLogs(t *testing.T) {
 
 func TestCookieSessionAndCSRF(t *testing.T) {
 	s := newTestServer(t)
-	register := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(`{"email":"cookie@example.com","password":"correct horse battery staple"}`))
-	register.Header.Set("Content-Type", "application/json")
-	registerRec := httptest.NewRecorder()
-	s.handleAuthRegister(registerRec, register)
-	if registerRec.Code != http.StatusOK {
-		t.Fatalf("register: %d %s", registerRec.Code, registerRec.Body.String())
-	}
+	registerRec := loginWithToken(t, s)
 	var authPayload struct {
 		Token string `json:"token"`
 	}
@@ -319,83 +363,6 @@ func TestCookieSessionAndCSRF(t *testing.T) {
 		t.Fatalf("valid CSRF status = %d, want 204", withCSRFRec.Code)
 	}
 	_ = authPayload
-}
-
-func TestAuthUpdateEmail(t *testing.T) {
-	s := newTestServer(t)
-
-	// Register a user
-	regBody := `{"email":"test@example.com","password":"password123"}`
-	regReq := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(regBody))
-	regReq.Header.Set("Content-Type", "application/json")
-	regRec := httptest.NewRecorder()
-	s.handleAuthRegister(regRec, regReq)
-	if regRec.Code != http.StatusOK {
-		t.Fatalf("register failed: %d %s", regRec.Code, regRec.Body.String())
-	}
-	var regPayload map[string]string
-	json.NewDecoder(regRec.Body).Decode(&regPayload)
-	token := regPayload["token"]
-
-	// Update email
-	emailBody := `{"email":"new@example.com"}`
-	emailReq := httptest.NewRequest(http.MethodPost, "/api/auth/update-email", strings.NewReader(emailBody))
-	emailReq.Header.Set("Content-Type", "application/json")
-	emailReq.Header.Set("Authorization", "Bearer "+token)
-	emailRec := httptest.NewRecorder()
-	s.handleAuthUpdateEmail(emailRec, emailReq)
-	if emailRec.Code != http.StatusOK {
-		t.Fatalf("update email failed: %d %s", emailRec.Code, emailRec.Body.String())
-	}
-
-	// Verify new email via /api/auth/me
-	meReq := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
-	meReq.Header.Set("Authorization", "Bearer "+token)
-	meRec := httptest.NewRecorder()
-	s.handleAuthMe(meRec, meReq)
-	var mePayload map[string]string
-	json.NewDecoder(meRec.Body).Decode(&mePayload)
-	if mePayload["email"] != "new@example.com" {
-		t.Fatalf("expected email new@example.com, got %q", mePayload["email"])
-	}
-}
-
-func TestAuthUpdatePassword(t *testing.T) {
-	s := newTestServer(t)
-
-	// Register
-	regBody := `{"email":"pwd@example.com","password":"oldpassword"}`
-	regReq := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(regBody))
-	regReq.Header.Set("Content-Type", "application/json")
-	regRec := httptest.NewRecorder()
-	s.handleAuthRegister(regRec, regReq)
-	if regRec.Code != http.StatusOK {
-		t.Fatalf("register failed: %d %s", regRec.Code, regRec.Body.String())
-	}
-	var regPayload map[string]string
-	json.NewDecoder(regRec.Body).Decode(&regPayload)
-	token := regPayload["token"]
-
-	// Update password
-	pwdBody := `{"current_password":"oldpassword","new_password":"newpassword123"}`
-	pwdReq := httptest.NewRequest(http.MethodPost, "/api/auth/update-password", strings.NewReader(pwdBody))
-	pwdReq.Header.Set("Content-Type", "application/json")
-	pwdReq.Header.Set("Authorization", "Bearer "+token)
-	pwdRec := httptest.NewRecorder()
-	s.handleAuthUpdatePassword(pwdRec, pwdReq)
-	if pwdRec.Code != http.StatusNoContent {
-		t.Fatalf("update password failed: %d %s", pwdRec.Code, pwdRec.Body.String())
-	}
-
-	// Login with new password
-	loginBody := `{"email":"pwd@example.com","password":"newpassword123"}`
-	loginReq := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(loginBody))
-	loginReq.Header.Set("Content-Type", "application/json")
-	loginRec := httptest.NewRecorder()
-	s.handleAuthLogin(loginRec, loginReq)
-	if loginRec.Code != http.StatusOK {
-		t.Fatalf("login with new password failed: %d %s", loginRec.Code, loginRec.Body.String())
-	}
 }
 
 func TestMergeConfigsPreservesMaskedFields(t *testing.T) {
@@ -448,31 +415,6 @@ func TestMergeConfigsNoExisting(t *testing.T) {
 	}
 }
 
-func TestAuthUpdatePasswordWrongCurrent(t *testing.T) {
-	s := newTestServer(t)
-
-	// Register
-	regBody := `{"email":"wrong@example.com","password":"correctpass"}`
-	regReq := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(regBody))
-	regReq.Header.Set("Content-Type", "application/json")
-	regRec := httptest.NewRecorder()
-	s.handleAuthRegister(regRec, regReq)
-	var regPayload map[string]string
-	json.NewDecoder(regRec.Body).Decode(&regPayload)
-	token := regPayload["token"]
-
-	// Try update with wrong current password
-	pwdBody := `{"current_password":"wrongpass","new_password":"newpassword123"}`
-	pwdReq := httptest.NewRequest(http.MethodPost, "/api/auth/update-password", strings.NewReader(pwdBody))
-	pwdReq.Header.Set("Content-Type", "application/json")
-	pwdReq.Header.Set("Authorization", "Bearer "+token)
-	pwdRec := httptest.NewRecorder()
-	s.handleAuthUpdatePassword(pwdRec, pwdReq)
-	if pwdRec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for wrong password, got %d", pwdRec.Code)
-	}
-}
-
 func TestRemoteMutationClassification(t *testing.T) {
 	for _, cmdType := range []string{"install_app", "restore_saves", "exclude_file"} {
 		if !isRemoteMutationCommand(cmdType) {
@@ -489,75 +431,30 @@ func TestFeatureFlagsFailClosed(t *testing.T) {
 	t.Setenv("SYNCWIN_ENABLE_LEGACY_INSTALL", "")
 	t.Setenv("SYNCWIN_ENABLE_REMOTE_MUTATIONS", "")
 	t.Setenv("SYNCWIN_ENABLE_DOCKER_MUTATIONS", "")
-	t.Setenv("SYNCWIN_ENABLE_REGISTRATION", "")
 
 	flags := loadFeatureFlags()
-	if flags.EnableFingerprintReconnect || flags.EnableLegacyInstall || flags.EnableRemoteMutations || flags.EnableDockerMutations || flags.EnableRegistration {
+	if flags.EnableFingerprintReconnect || flags.EnableLegacyInstall || flags.EnableRemoteMutations || flags.EnableDockerMutations {
 		t.Fatalf("security feature flags must default to false: %#v", flags)
 	}
 }
 
-func TestRegistrationDisabledByDefault(t *testing.T) {
-	s := newTestServer(t)
-	s.flags.EnableRegistration = false
-
-	req := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(`{"email":"public@example.com","password":"supersecret1"}`))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	s.handleAuthRegister(rec, req)
-
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("registration must be 403 when disabled, got %d: %s", rec.Code, rec.Body.String())
+// The dashboard token is the only credential, so a missing or short one must
+// lock sign-in instead of accepting something guessable.
+func TestAccessTokenMustBeConfigured(t *testing.T) {
+	t.Setenv("SYNCWIN_ACCESS_TOKEN", "")
+	flags := loadFeatureFlags()
+	if flags.AccessTokenUsable() {
+		t.Fatal("an empty access token must not be usable")
 	}
-}
-
-func TestAuthConfigExposesRegistrationFlag(t *testing.T) {
-	s := newTestServer(t)
-
-	s.flags.EnableRegistration = true
-	rec := httptest.NewRecorder()
-	s.handleAuthConfig(rec, httptest.NewRequest(http.MethodGet, "/api/auth/config", nil))
-	var payload map[string]bool
-	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("decode config: %v", err)
+	t.Setenv("SYNCWIN_ACCESS_TOKEN", "too-short")
+	flags = loadFeatureFlags()
+	if flags.AccessTokenUsable() {
+		t.Fatal("a short access token must not be usable")
 	}
-	if !payload["registration_enabled"] {
-		t.Fatalf("expected registration_enabled=true, got %v", payload)
-	}
-
-	s.flags.EnableRegistration = false
-	rec = httptest.NewRecorder()
-	s.handleAuthConfig(rec, httptest.NewRequest(http.MethodGet, "/api/auth/config", nil))
-	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("decode config: %v", err)
-	}
-	if payload["registration_enabled"] {
-		t.Fatalf("expected registration_enabled=false, got %v", payload)
-	}
-}
-
-func TestBootstrapAdminCreatesAndPreservesAccount(t *testing.T) {
-	s := newTestServer(t)
-	t.Setenv("SYNCWIN_ADMIN_EMAIL", "admin@example.com")
-	t.Setenv("SYNCWIN_ADMIN_PASSWORD", "correct horse battery staple")
-
-	bootstrapAdmin(s.store, s.log, false)
-	user, err := s.store.AuthenticateUser("admin@example.com", "correct horse battery staple")
-	if err != nil {
-		t.Fatalf("admin login: %v", err)
-	}
-
-	// The environment password must never overwrite an account that already
-	// exists, so a password changed in the dashboard survives restarts.
-	if err := s.store.UpdateUserPassword(user.ID, "correct horse battery staple", "changed-password-123"); err != nil {
-		t.Fatalf("change password: %v", err)
-	}
-	bootstrapAdmin(s.store, s.log, false)
-	if _, err := s.store.AuthenticateUser("admin@example.com", "correct horse battery staple"); err == nil {
-		t.Fatal("bootstrap must not reset an existing password")
-	}
-	if _, err := s.store.AuthenticateUser("admin@example.com", "changed-password-123"); err != nil {
-		t.Fatalf("changed password should still work: %v", err)
+	t.Setenv("SYNCWIN_ACCESS_TOKEN", testAccessToken)
+	flags = loadFeatureFlags()
+	if !flags.AccessTokenUsable() || flags.AccessToken != testAccessToken {
+		t.Fatalf("expected the configured token to be usable: %#v", flags)
 	}
 }
 

@@ -63,23 +63,23 @@ Requires Docker with the Compose plugin. Nothing else — no checkout, no Go, no
 Node.
 
 ```bash
-# 1. Get this one file and generate the required secret
+# 1. Get this one file and generate the two required values
 curl -fsSLO https://raw.githubusercontent.com/jose-guilherme93/sync-win/main/compose.yaml
-echo "SYNCWIN_SECRET_KEY=$(openssl rand -hex 32)" > .env
+{
+  echo "SYNCWIN_SECRET_KEY=$(openssl rand -hex 32)"
+  echo "SYNCWIN_ACCESS_TOKEN=$(openssl rand -hex 24)"
+} > .env
 
 # 2. Start
 docker compose up -d
 ```
 
-Open **http://localhost:8080** and create your account.
+Open **http://localhost:8080** and paste the `SYNCWIN_ACCESS_TOKEN` from `.env`.
 
-That is the whole setup. The first start creates the database inside a named
-Docker volume, so your data survives every update.
-
-> **After you create your account**, set `SYNCWIN_ENABLE_REGISTRATION=false` in
-> `.env` and run `docker compose up -d` again. Registration is open by default so
-> the first account is easy to make; leaving it open on a public server lets
-> anyone sign up.
+That is the whole setup. There are no accounts to create: the token is the only
+credential, it lives only in your environment, and changing it signs every
+browser out. The first start creates the database inside a named Docker volume,
+so your data survives every update.
 
 <details>
 <summary>Prefer to build from source instead of pulling the image?</summary>
@@ -87,7 +87,10 @@ Docker volume, so your data survives every update.
 ```bash
 git clone https://github.com/jose-guilherme93/sync-win.git
 cd sync-win
-echo "SYNCWIN_SECRET_KEY=$(openssl rand -hex 32)" > .env
+{
+  echo "SYNCWIN_SECRET_KEY=$(openssl rand -hex 32)"
+  echo "SYNCWIN_ACCESS_TOKEN=$(openssl rand -hex 24)"
+} > .env
 docker compose up -d --build
 ```
 
@@ -128,14 +131,13 @@ refuses to install, so every device must be re-installed by hand.
 ## Configuration
 
 All settings are environment variables, read from `.env` next to `compose.yaml`.
-Only `SYNCWIN_SECRET_KEY` is required.
+`SYNCWIN_SECRET_KEY` and `SYNCWIN_ACCESS_TOKEN` are required.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `SYNCWIN_SECRET_KEY` | — (**required**) | Encrypts stored provider credentials. Must stay stable. Generate with `openssl rand -hex 32`. |
 | `SYNCWIN_HTTP_PORT` | `8080` | Host port for the dashboard and API. |
-| `SYNCWIN_ENABLE_REGISTRATION` | `true` | Open sign-up. Turn off after creating your account. |
-| `SYNCWIN_ADMIN_EMAIL` / `SYNCWIN_ADMIN_PASSWORD` | — | Bootstrap the first account from the environment instead of signing up. Created once, never overwritten. |
+| `SYNCWIN_ACCESS_TOKEN` | — (**required**) | The dashboard token. At least 32 characters. Generate with `openssl rand -hex 24`. |
 | `SYNCWIN_SESSION_TTL_HOURS` | `720` | Dashboard session lifetime (30 days). |
 | `SYNCWIN_ENABLE_REMOTE_MUTATIONS` | `false` | Allow reboot / package updates / agent restart. |
 | `SYNCWIN_ENABLE_DOCKER_MUTATIONS` | `false` | Allow container start/stop/remove, exec, prune. |
@@ -256,13 +258,11 @@ Development data lives in `./data-dev`, separate from production. Run it
 alongside a production stack by changing ports:
 `DEV_HTTP_PORT=8081 WEB_PORT=5199 make dev`.
 
-The dev stack signs itself in: it bootstraps
-`demo@sync-win.local` / `sync-win-demo-password` and injects
-`SYNCWIN_DEV_TOKEN`, which the dashboard exchanges for a normal session cookie,
-so the sign-in screen does not appear. `SYNCWIN_DEV_TOKEN` is ignored unless
-`SYNCWIN_ENV=development`; production compose sets neither. Override the
-account with `SYNCWIN_ADMIN_EMAIL`/`SYNCWIN_ADMIN_PASSWORD` and the token with
-`SYNCWIN_DEV_TOKEN` if you need different ones.
+The dev stack signs itself in: it sets `SYNCWIN_ACCESS_TOKEN` (a fixed
+`dev-access-token-0123456789abcdef`) and passes the same value to the SPA as
+`VITE_ACCESS_TOKEN`, so the sign-in screen does not appear. Override both by
+exporting `SYNCWIN_ACCESS_TOKEN` before `make dev`; `make dev-token` prints the
+token and checks that sign-in works.
 
 **Reaching the dashboard from another machine**
 
@@ -358,10 +358,10 @@ systemctl status sync-win-agent-update.path
 They are off by default. Set `SYNCWIN_ENABLE_DOCKER_MUTATIONS=true` on the server
 and check the device's `~/.config/sync-win/policy.json`.
 
-**Forgot the admin password.**
-There is no recovery flow. Remove the database row, or set
-`SYNCWIN_ADMIN_EMAIL`/`SYNCWIN_ADMIN_PASSWORD` for a fresh account and create a
-second one.
+**Lost the access token.**
+There is nothing to recover: read `SYNCWIN_ACCESS_TOKEN` from the server's
+`.env`, or set a new one and restart. Sessions survive a token change only as
+long as the cookie is valid; restart with a new token to lock every browser out.
 
 ---
 

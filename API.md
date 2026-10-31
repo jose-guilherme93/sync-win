@@ -5,7 +5,7 @@ All endpoints return JSON. Requests with bodies must set `Content-Type: applicat
 ## Authentication
 
 Dashboard sessions use the `syncwin_session` HttpOnly cookie. Non-browser clients
-may use the compatibility bearer token returned by login/register:
+may use the compatibility bearer token returned by login:
 
 ```
 Authorization: Bearer <session-token>
@@ -19,7 +19,7 @@ X-SYNCWIN-CSRF: <value of the syncwin_csrf cookie>
 ```
 
 Token types:
-- **Session token**: from login/register, used by the dashboard/API; only a hash is stored server-side
+- **Session token**: from login, used by the dashboard/API; only a hash is stored server-side
 - **Device token**: returned only during enrollment, used by the agent; only a hash is stored server-side
 
 The legacy `X-SYNCWIN-Anonymous-ID` header and `owner_id` query parameter are not
@@ -52,51 +52,16 @@ Health check endpoint. No authentication required.
 
 ## Authentication
 
-### `GET /api/auth/config`
-
-Public (unauthenticated) auth configuration the dashboard reads before sign-in.
-No credentials required.
-
-**Response:** `200 OK`
-```json
-{
-  "registration_enabled": false
-}
-```
-
-### `POST /api/auth/register`
-
-Register a new user account. **Disabled by default**: unless
-`SYNCWIN_ENABLE_REGISTRATION=true`, the server responds `403` and no account is
-created. The first account is normally bootstrapped from
-`SYNCWIN_ADMIN_EMAIL`/`SYNCWIN_ADMIN_PASSWORD` on startup instead.
-
-**Request:**
-```json
-{
-  "email": "user@example.com",
-  "password": "securepassword"
-}
-```
-
-**Response:** `200 OK` (the server also sets `syncwin_session` and `syncwin_csrf` cookies)
-```json
-{
-  "token": "session-token",
-  "owner_id": "user-id",
-  "email": "user@example.com"
-}
-```
-
 ### `POST /api/auth/login`
 
-Log in with existing credentials.
+Exchange the dashboard access token for a session. The token is configured on
+the server with `SYNCWIN_ACCESS_TOKEN` (at least 32 characters); there is no
+registration and no password.
 
 **Request:**
 ```json
 {
-  "email": "user@example.com",
-  "password": "securepassword"
+  "token": "the-contents-of-SYNCWIN_ACCESS_TOKEN"
 }
 ```
 
@@ -104,10 +69,13 @@ Log in with existing credentials.
 ```json
 {
   "token": "session-token",
-  "owner_id": "user-id",
-  "email": "user@example.com"
+  "owner_id": "owner-id"
 }
 ```
+
+A wrong token is `401`. A server with no usable `SYNCWIN_ACCESS_TOKEN` answers
+`503` with a message naming that variable instead of pretending the token was
+wrong.
 
 ### `GET /api/auth/me`
 
@@ -121,40 +89,9 @@ shows the login screen and never falls back to an anonymous device list.
 **Response:** `200 OK`
 ```json
 {
-  "id": "user-id",
-  "email": "user@example.com",
-  "created_at": "2024-01-01T00:00:00Z"
+  "owner_id": "owner-id"
 }
 ```
-
-### `POST /api/auth/update-email`
-
-Update the current user's email.
-
-**Request:**
-```json
-{
-  "email": "newemail@example.com"
-}
-```
-
-**Response:** `200 OK`
-
-### `POST /api/auth/update-password`
-
-Change the current user's password.
-
-**Request:**
-```json
-{
-  "current_password": "oldpassword",
-  "new_password": "newpassword"
-}
-```
-
-**Response:** `204 No Content`
-
-All existing sessions are revoked after a password change.
 
 ### `POST /api/auth/logout`
 

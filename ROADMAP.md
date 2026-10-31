@@ -161,10 +161,10 @@ A funcionalidade P1 está concluída. A próxima etapa é uma nova priorização
 - [x] contrato de coleta explícito: `COLLECTION-CONTRACT.md` + `agent/internal/contract/contract.json` embutido no binário (fonte única das constantes, validada por testes)
 - [x] política local do agent (`~/.config/sync-win/policy.json`): o agent recusa comandos desabilitados localmente e reporta a recusa ao servidor — o servidor nunca força execução
 - [x] comandos com timeout e cap de saída; pacotes validados antes de executar
-- [x] dashboard account-first: tela inicial é login/criar conta; todo device é registrado sob a conta (`owner_id` = usuário autenticado), sem depender de identidade anônima do navegador; `GET /api/auth/me` restaura a sessão no carregamento
-- [x] cadastro público desabilitado por padrão (`SYNCWIN_ENABLE_REGISTRATION=false`); admin inicial criado no boot a partir de `SYNCWIN_ADMIN_EMAIL`/`SYNCWIN_ADMIN_PASSWORD` (senha existente nunca é sobrescrita); a opção de criar conta só aparece quando o registro é habilitado
+- [x] dashboard token-first: tela inicial pede o `SYNCWIN_ACCESS_TOKEN` do `.env`; todo device é registrado sob o owner único, sem depender de identidade anônima do navegador; `GET /api/auth/me` restaura a sessão no carregamento
+- [x] sem cadastro e sem contas: `SYNCWIN_ACCESS_TOKEN` (32+ caracteres) é a única credencial, lida do ambiente e nunca gravada; token ausente ou curto desabilita o login com `503` explícito
 - [x] instalador com passos numerados e verificação real de conexão (heartbeat) antes de declarar sucesso; falha imprime checklist acionável
-- [x] senhas armazenadas como Argon2id; tokens de sessão/device armazenados apenas como hash; dashboard usa cookie HttpOnly + CSRF; owner isolation strict
+- [x] tokens de sessão/device armazenados apenas como hash; dashboard usa cookie HttpOnly + CSRF; owner isolation strict
 - [x] tokens de enrollment: uso único, expiração em 15 minutos, vinculados ao owner
 - [x] verificação de integridade do binário via SHA-256 checksum no install
 - [x] Lynis security audit: agent runs `lynis audit system --cronjob`, parses report to structured JSON, stores in SQLite with full history. Dashboard shows hardening index gauge, warnings/suggestions, category breakdown

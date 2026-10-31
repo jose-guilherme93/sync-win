@@ -11,6 +11,25 @@ version, and a breaking change increases the major version.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-30
+
+### Changed
+
+- **The dashboard is opened with a token, not an account.** `SYNCWIN_ACCESS_TOKEN`
+  (32 characters or more, generated with `openssl rand -hex 24`) is now the only
+  credential. It is read from `.env`, compared in constant time against its
+  digest, and never written to the database; the sign-in screen is a single
+  field. There is no registration, no email, no password and no recovery flow.
+- **The sign-in screen is part of the dashboard.** It uses the same tokens as the
+  rest of the shell and the topology glow — a mint radial over the dot grid —
+  instead of the old blue card that belonged to no other screen.
+- A server without a usable token answers `503` naming `SYNCWIN_ACCESS_TOKEN`
+  rather than pretending the token was wrong, and agents keep syncing with their
+  own device tokens while the dashboard is locked.
+- `SYNCWIN_ENABLE_REGISTRATION`, `SYNCWIN_ADMIN_EMAIL`, `SYNCWIN_ADMIN_PASSWORD`
+  and `SYNCWIN_DEV_TOKEN` are gone. An existing install keeps its devices: the
+  single owner row and the sessions that reference it are reused.
+
 ## [0.15.3] - 2026-10-30
 
 ### Changed
