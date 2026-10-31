@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher, onMount, onDestroy } from 'svelte'
   import { formatRelative } from '../lib/format'
+  import Icon from './ui/Icon.svelte'
   import { eventDetail, eventIcon } from '../lib/notification-format'
   import { playNotificationSound, type NotificationSound } from '../lib/notification-sound'
 
@@ -78,14 +79,14 @@
   on:mouseleave={() => (paused = false)}
 >
   <button class="toast-hit" on:click={open} title="Open the device">
-    <span class="toast-icon">{icon(event.type)}</span>
+    <span class="toast-icon"><Icon name={icon(event.type)} size={15} /></span>
     <span class="toast-body">
       <strong>{event.hostname || event.device_id}</strong>
       <span>{eventDetail(event.message)}</span>
     </span>
   </button>
   <span class="toast-time">{timeAgo(event.created_at)}</span>
-  <button class="toast-close" on:click={dismiss} title="Dismiss">✕</button>
+  <button class="toast-close" on:click={dismiss} title="Dismiss" aria-label="Dismiss"><Icon name="x" size={13} /></button>
   <div class="toast-progress" style="width: {progress * 100}%"></div>
 </div>
 

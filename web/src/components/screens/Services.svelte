@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import Icon from '../ui/Icon.svelte'
   import { apiFetch, apiURL } from '../../lib/api'
   import { portIdentity, uniquePorts, type OpenPort as Port } from '../../lib/ports'
   import EmptyState from '../ui/EmptyState.svelte'
@@ -231,7 +232,7 @@
                appears when both cards failed and would be a second, duplicate
                button next to the ports one. -->
           <EmptyState
-            icon="⚠"
+            icon="alert"
             title="Could not load services"
             message={servicesError}
             actionLabel={error ? '' : 'Retry'}
@@ -241,12 +242,12 @@
           <p class="loading">Loading services…</p>
         {:else if services.length === 0}
           <EmptyState
-            icon="⚙"
+            icon="cog"
             title="No services reported"
             message="This device has not reported a systemd inventory, or it has no systemd."
           />
         {:else if filteredServices.length === 0}
-          <EmptyState icon="🔍" title="No match" message="Adjust the filter." />
+          <EmptyState icon="search" title="No match" message="Adjust the filter." />
         {:else}
           <ul class="list">
             {#each filteredServices as svc (svc.name)}
@@ -273,7 +274,7 @@
 
         {#if portsError}
           <EmptyState
-            icon="⚠"
+            icon="alert"
             title="Could not load ports"
             message={portsError}
             actionLabel={error ? '' : 'Retry'}
@@ -282,9 +283,9 @@
         {:else if ports.length === 0 && loading}
           <p class="loading">Loading ports…</p>
         {:else if ports.length === 0}
-          <EmptyState icon="🔌" title="No listening sockets" message="The agent found no sockets, or ss is not installed." />
+          <EmptyState icon="plug" title="No listening sockets" message="The agent found no sockets, or ss is not installed." />
         {:else if filteredPorts.length === 0}
-          <EmptyState icon="🔍" title="No match" message="Adjust the filter." />
+          <EmptyState icon="search" title="No match" message="Adjust the filter." />
         {:else}
           <ul class="ports">
             {#each filteredPorts as p (portIdentity(p))}
@@ -310,7 +311,7 @@
   <aside class="drawer" aria-label="Details">
     <header class="drawer-head">
       <h3>{selectedService ? 'Service' : 'Listening socket'}</h3>
-      <button class="close" on:click={closeDrawer} aria-label="Close details">✕</button>
+      <button class="close" on:click={closeDrawer} aria-label="Close details"><Icon name="x" size={13} /></button>
     </header>
 
     {#if selectedService}

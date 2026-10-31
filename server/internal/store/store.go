@@ -650,7 +650,7 @@ func (s *Store) migrateAddDeviceSettingsColumns(ctx context.Context) error {
 	for _, column := range []struct{ name, definition string }{
 		{"display_name", "TEXT NOT NULL DEFAULT ''"},
 		{"tags_json", "TEXT NOT NULL DEFAULT '[]'"},
-		{"collection_interval_seconds", "INTEGER NOT NULL DEFAULT 10"},
+		{"collection_interval_seconds", "INTEGER NOT NULL DEFAULT 2"},
 	} {
 		var count int
 		if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM pragma_table_info('devices') WHERE name=?", column.name).Scan(&count); err != nil {
@@ -796,7 +796,7 @@ func (s *Store) initSchema() error {
 		updated_at TEXT NOT NULL,
 		display_name TEXT NOT NULL DEFAULT '',
 		tags_json TEXT NOT NULL DEFAULT '[]',
-		collection_interval_seconds INTEGER NOT NULL DEFAULT 10,
+		collection_interval_seconds INTEGER NOT NULL DEFAULT 2,
 		updates_json TEXT NOT NULL DEFAULT '{"status":"not_reported","updates":[]}',
 		machine_id TEXT NOT NULL DEFAULT '',
 		-- The Docker container list is sampled slowly and is several kilobytes.
@@ -2043,90 +2043,69 @@ func verifyPassword(stored, password string) bool {
 	return false
 }
 
-// AuthenticateUser looks up a user by email and password.
-func (s *Store) AuthenticateUser(email, password string) (User, error) {
-	email = strings.TrimSpace(email)
-	if err := validateEmail(email); err != nil {
-		return User{}, errors.New("invalid credentials")
+// EnsureOwner returns the single owner account, creating it on first use.
+//
+// SyncWin has no public accounts: the dashboard is opened with the access token
+// from SYNCWIN_ACCESS_TOKEN, and every device belongs to this one owner. The
+// row is kept in the users table so device ownership, sessions and existing
+// installs keep working unchanged, and so upgrading in place does not orphan
+// devices that were enrolled under an earlier account.
+//
+// The stored password hash is unusable on purpose: a random secret is generated
+// here and thrown away, so no password can ever authenticate.
+func (s *Store) EnsureOwner() (User, error) {
+	if count, err := s.ownerCount(); err != nil {
+		return User{}, err
+	} else if count > 0 {
+		return s.oldestOwner()
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var u User
-	var created string
-	err := s.db.QueryRow("SELECT id, email, password_hash, created_at FROM users WHERE email = ?", email).Scan(&u.ID, &u.Email, &u.PasswordHash, &created)
-	if errors.Is(err, sql.ErrNoRows) {
-		return User{}, errors.New("invalid credentials")
+	secret, err := randomSecret()
+	if err != nil {
+		return User{}, err
+	}
+	user, err := s.CreateUser(ownerEmail, secret)
+	if errors.Is(err, ErrEmailTaken) {
+		return s.oldestOwner()
 	}
 	if err != nil {
 		return User{}, err
 	}
-	u.CreatedAt = textTime(created)
-	if !verifyPassword(u.PasswordHash, password) {
-		return User{}, errors.New("invalid credentials")
-	}
-	if strings.HasPrefix(u.PasswordHash, "s256$") {
-		u.PasswordHash = saltedHash(password)
-		if _, err := s.db.Exec("UPDATE users SET password_hash = ? WHERE id = ?", u.PasswordHash, u.ID); err != nil {
-			return User{}, err
-		}
-	}
-	return u, nil
+	return user, nil
 }
 
-// UserByEmail returns the account with the given email. The error is
-// sql.ErrNoRows when no such account exists.
-func (s *Store) UserByEmail(email string) (User, error) {
-	email = strings.TrimSpace(email)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var u User
-	var created string
-	err := s.db.QueryRow("SELECT id, email, password_hash, created_at FROM users WHERE email = ?", email).Scan(&u.ID, &u.Email, &u.PasswordHash, &created)
-	if err != nil {
-		return User{}, err
-	}
-	u.CreatedAt = textTime(created)
-	return u, nil
-}
+// ownerEmail is the internal address of the single owner row. It is never shown
+// in the dashboard and never used for sign-in.
+const ownerEmail = "owner@sync-win.local"
 
-// CountUsers returns how many accounts exist. It is used to detect a locked-out
-// deployment (registration disabled and no admin configured).
-func (s *Store) CountUsers() (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *Store) ownerCount() (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	var count int
-	if err := s.db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); err != nil {
+	if err := s.db.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM users").Scan(&count); err != nil {
 		return 0, err
 	}
 	return count, nil
 }
 
-// EnsureAdminUser creates the initial admin account from environment
-// configuration if it does not exist yet. An existing account is never
-// modified, so a password changed in the dashboard is preserved.
-func (s *Store) EnsureAdminUser(email, password string) (User, bool, error) {
-	email = strings.TrimSpace(email)
-	if err := validateEmail(email); err != nil {
-		return User{}, false, err
+func (s *Store) oldestOwner() (User, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var u User
+	var created string
+	row := s.db.QueryRowContext(context.Background(), "SELECT id, email, password_hash, created_at FROM users ORDER BY created_at ASC, id ASC LIMIT 1")
+	if err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &created); err != nil {
+		return User{}, err
 	}
-	if existing, err := s.UserByEmail(email); err == nil {
-		return existing, false, nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return User{}, false, err
+	u.CreatedAt = textTime(created)
+	return u, nil
+}
+
+func randomSecret() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
 	}
-	user, err := s.CreateUser(email, password)
-	if errors.Is(err, ErrEmailTaken) {
-		// Lost a race to a concurrent bootstrap; use the existing account.
-		existing, lookupErr := s.UserByEmail(email)
-		if lookupErr != nil {
-			return User{}, false, lookupErr
-		}
-		return existing, false, nil
-	}
-	if err != nil {
-		return User{}, false, err
-	}
-	return user, true, nil
+	return hex.EncodeToString(buf), nil
 }
 
 // CreateSession creates a new session for the given owner. Only a hash of the
@@ -2201,43 +2180,6 @@ func (s *Store) UserByID(id string) (*User, error) {
 	}
 	u.CreatedAt = textTime(created)
 	return &u, nil
-}
-
-// UpdateUserEmail changes the email for a user.
-func (s *Store) UpdateUserEmail(userID, email string) error {
-	email = strings.TrimSpace(email)
-	if err := validateEmail(email); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, err := s.db.Exec("UPDATE users SET email = ? WHERE id = ?", email, userID)
-	return err
-}
-
-// UpdateUserPassword changes the password for a user after verifying the current one.
-func (s *Store) UpdateUserPassword(userID, currentPassword, newPassword string) error {
-	if err := validatePassword(newPassword); err != nil {
-		return err
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var hash string
-	err := s.db.QueryRow("SELECT password_hash FROM users WHERE id = ?", userID).Scan(&hash)
-	if err != nil {
-		return err
-	}
-	if !verifyPassword(hash, currentPassword) {
-		return errors.New("invalid current password")
-	}
-	newHash := saltedHash(newPassword)
-	_, err = s.db.Exec("UPDATE users SET password_hash = ? WHERE id = ?", newHash, userID)
-	if err != nil {
-		return err
-	}
-	_, err = s.db.Exec("DELETE FROM sessions WHERE owner_id = ?", userID)
-	return err
 }
 
 // ListDevicesForOwner returns devices for a specific owner.
@@ -2492,10 +2434,12 @@ func normalizeDeviceSettings(settings DeviceSettings) (DeviceSettings, string, e
 	if utf8.RuneCountInString(settings.DisplayName) > 64 {
 		return DeviceSettings{}, "", errors.New("display name must be at most 64 characters")
 	}
+	// Two seconds is the floor: the live chart draws a one-minute window, and at
+	// ten seconds a change only had six chances to be seen in it.
 	switch settings.CollectionIntervalSeconds {
-	case 5, 10, 30, 60:
+	case 2, 5, 10, 30, 60:
 	default:
-		return DeviceSettings{}, "", errors.New("collection interval must be 5, 10, 30, or 60 seconds")
+		return DeviceSettings{}, "", errors.New("collection interval must be 2, 5, 10, 30, or 60 seconds")
 	}
 	if len(settings.Tags) > maxDeviceTags {
 		return DeviceSettings{}, "", fmt.Errorf("at most %d tags are allowed", maxDeviceTags)

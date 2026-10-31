@@ -4,11 +4,12 @@
 # The whole thing in one file. Pull the published image, no checkout required.
 #
 #   echo "SYNCWIN_SECRET_KEY=$(openssl rand -hex 32)" > .env
+#   echo "SYNCWIN_ACCESS_TOKEN=$(openssl rand -hex 24)" >> .env
 #   docker compose up -d
 #
-# Then open http://localhost:8080 and create your account.
+# Then open http://localhost:8080 and paste the access token.
 #
-# Everything is optional except SYNCWIN_SECRET_KEY. See the Configuration
+# Everything is optional except those two values. See the Configuration
 # section of README.md for the full list, and compose.dev.yaml if you want to
 # hack on the code with hot reload.
 #
@@ -40,15 +41,14 @@ services:
       SYNCWIN_SESSION_TTL_HOURS: "${SYNCWIN_SESSION_TTL_HOURS:-720}"
 
       # Open registration so the first account can be created from the browser.
-      # Once you have signed up, set SYNCWIN_ENABLE_REGISTRATION=false in .env
       # and `docker compose up -d` again: a public server with open
       # registration lets anyone create an account on your instance.
-      SYNCWIN_ENABLE_REGISTRATION: "${SYNCWIN_ENABLE_REGISTRATION:-true}"
+      # The dashboard is opened with this token. 32 characters or more;
+      # generate one with: openssl rand -hex 24
+      SYNCWIN_ACCESS_TOKEN: "${SYNCWIN_ACCESS_TOKEN:?SYNCWIN_ACCESS_TOKEN is required. Create it with: echo \"SYNCWIN_ACCESS_TOKEN=$$(openssl rand -hex 24)\" >> .env}"
 
       # Alternative to open registration: bootstrap the first account from the
       # environment. It is created once and never overwritten.
-      SYNCWIN_ADMIN_EMAIL: "${SYNCWIN_ADMIN_EMAIL:-}"
-      SYNCWIN_ADMIN_PASSWORD: "${SYNCWIN_ADMIN_PASSWORD:-}"
 
       # Mutating actions are opt-in per capability. The dashboard still shows
       # state with all of these off; only remote writes are gated.

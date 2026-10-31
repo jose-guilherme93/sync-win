@@ -11,6 +11,77 @@ version, and a breaking change increases the major version.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-30
+
+### Changed
+
+- **Docker images are manageable from the dashboard.** A new Images tab lists
+  every image with size, age and how many containers use it, pulls a reference,
+  shows the engine's own inspect payload, and removes an image (forced when a
+  container still uses it). Pull and remove need `allow_docker_images` on the
+  device; list and inspect only need `allow_docker_read`.
+- **The device charts open populated, and loading looks like loading.** The
+  live window used to wait for the poll to accumulate samples, so a device with
+  weeks of history in SQLite showed "no samples" for the first ten seconds; the
+  live window is now seeded from the database and the poll is layered on top.
+  While a chart's first fetch is in flight it shows a shimmering placeholder
+  instead of the empty message, and the fleet list does the same before the
+  first devices answer.
+- **Live behaves like a realtime stream, the way Beszel's one-minute chart
+  does.** Entering Live starts clean: the first sample appears at the right edge
+  and the last minute fills leftward as it arrives, with the axis anchored on the
+  newest sample so the line always touches the right edge. Live no longer
+  replays stored history or draws every point of the session squeezed into a
+  minute-wide axis. Its line is drawn with straight segments and a dot per
+  sample, so a change is visible at the sample where it happened instead of
+  being smoothed into a hill by the spline used on the wider ranges.
+- **Telemetry now lands every two seconds by default.** A one-minute live chart
+  at a ten-second cadence had six chances to show a change; the agent can report
+  as often as every two seconds, so a new device stores a sample every two
+  seconds and the agent adopts that cadence from the device settings. The
+  dashboard polls at that cadence only while the live window is open — every
+  other range reads stored history and does not need it. Choose 2, 5, 10, 30 or
+  60 seconds per device in Settings.
+- **The dashboard has no emoji.** Emoji in empty states, the user menu,
+  notifications, toasts and close buttons are replaced by the shared stroke icon
+  set in the project's mint, so a screen says the same thing in the same visual
+  language.
+- **A device's agent version is visible, and an outdated one says so.** The
+  header shows `agent 0.11.1 · update` when the device is behind the binary the
+  server ships. An older agent keeps working; the badge explains why a newer
+  panel can come up empty.
+- **Wireless radios are reported even when the kernel keeps no legacy stats.**
+  The collector read only `/proc/net/wireless`, which modern drivers leave empty,
+  so a laptop on Wi-Fi looked like a machine with no radio. The interface scan
+  (sysfs) now always reports the radio, with the signal from `iw` when it is
+  installed. Agent 0.11.2.
+- **A device is a screen of its own.** Home is now the whole fleet: the sidebar
+  carries Home, Alerts, Findings, Reports, Notifications and Settings, and never
+  a device menu — not even a disabled one. Opening a device hides the sidebar,
+  puts its identity and a `Home` back button in the header, and turns every
+  section into one horizontally scrollable tab row (hardware · system · access).
+  The redundant "Devices" entry is gone, because Home is that list.
+
+- **The dashboard is opened with a token, not an account.** `SYNCWIN_ACCESS_TOKEN`
+  (32 characters or more, generated with `openssl rand -hex 24`) is now the only
+  credential. It is read from `.env`, compared in constant time against its
+  digest, and never written to the database; the sign-in screen is a single
+  field. There is no registration, no email, no password and no recovery flow.
+- **The sign-in screen is part of the dashboard.** It uses the same tokens as the
+  rest of the shell and the topology glow — a mint radial over the dot grid —
+  instead of the old blue card that belonged to no other screen.
+- A server without a usable token answers `503` naming `SYNCWIN_ACCESS_TOKEN`
+  rather than pretending the token was wrong, and agents keep syncing with their
+  own device tokens while the dashboard is locked.
+- `SYNCWIN_ENABLE_REGISTRATION`, `SYNCWIN_ADMIN_EMAIL`, `SYNCWIN_ADMIN_PASSWORD`
+  and `SYNCWIN_DEV_TOKEN` are gone. An existing install keeps its devices: the
+  single owner row and the sessions that reference it are reused.
+- **The dashboard has a mark of its own.** A favicon, a 180 px app icon and a
+  sidebar/login lockup: an outlined node and a filled node joined by a transfer
+  path, mint on the dark surface. The mark is one SVG in `currentColor`, so the
+  same geometry serves the tab, the app shell and the README without a second
+  drawing.
+
 ## [0.15.2] - 2026-10-30
 
 ### Fixed

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
+  import Icon from '../ui/Icon.svelte'
   import { apiFetch, apiURL } from '../../lib/api'
   import { type SecurityPosture } from '../../lib/security-posture'
   import { portIdentity } from '../../lib/ports'
@@ -426,7 +427,7 @@
       <article class="card history">
         <header class="card-head"><h3>Audit history</h3><span class="count">{audits.length}</span></header>
         {#if audits.length === 0}
-          <EmptyState icon="🛡" title="No security audits yet" message={lynisAvailable ? 'Run an audit to create the first report.' : 'Install Lynis on the device first.'} />
+          <EmptyState icon="shield" title="No security audits yet" message={lynisAvailable ? 'Run an audit to create the first report.' : 'Install Lynis on the device first.'} />
         {:else}
           <ul class="audit-list">
             {#each audits as audit (audit.id)}
@@ -438,7 +439,7 @@
                     <span class="audit-sub">{audit.total_warnings} warnings · {audit.total_suggestions} suggestions</span>
                   </span>
                 </button>
-                <button class="del" title="Delete audit" aria-label="Delete audit" on:click={() => deleteAudit(audit.id)}>✕</button>
+                <button class="del" title="Delete audit" aria-label="Delete audit" on:click={() => deleteAudit(audit.id)}><Icon name="x" size={12} /></button>
               </li>
             {/each}
           </ul>
@@ -517,9 +518,9 @@
             </section>
           {/if}
         {:else if audits.length > 0}
-          <EmptyState icon="📄" title="Report unreadable" message="The stored report could not be parsed." />
+          <EmptyState icon="file" title="Report unreadable" message="The stored report could not be parsed." />
         {:else}
-          <EmptyState icon="🛡" title="No report selected" message="Run or select an audit to read its findings." />
+          <EmptyState icon="shield" title="No report selected" message="Run or select an audit to read its findings." />
         {/if}
       </article>
     </div>

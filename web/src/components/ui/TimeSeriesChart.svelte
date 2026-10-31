@@ -12,6 +12,7 @@
 </script>
 
 <script lang="ts">
+  import Skeleton from './Skeleton.svelte'
   import { afterUpdate, onMount, onDestroy } from 'svelte'
   import {
     Chart,
@@ -53,6 +54,14 @@
   export let rightFormat: ((value: number) => string) | null = null
   export let height = 240
   export let emptyMessage = 'No samples in this window yet.'
+  // While the first fetch is in flight the plot is unknown, not empty. Showing
+  // the empty message here is what made a device look data-less for the second
+  // or two a query takes.
+  export let loading = false
+  // Live plots are read second by second, not trend by trend: straight segments
+  // and a visible dot per sample show a change at the sample it happened,
+  // instead of a spline that rounds every peak into a hill.
+  export let smooth = true
   // Fixed span of the x axis. Without it a sparse window would still stretch
   // its few samples edge to edge, because the axis would fit the data.
   export let windowMs: number | null = null
@@ -118,12 +127,15 @@
         backgroundColor: areaFill(color),
         fill: true,
         borderWidth: 1.6,
-        pointRadius: 0,
+        pointRadius: smooth ? 0 : 1.8,
         pointHoverRadius: 2.5,
         pointHoverBorderWidth: 0,
         pointHitRadius: 12,
         spanGaps: false,
-        cubicInterpolationMode: 'monotone' as const,
+        cubicInterpolationMode: (smooth ? 'monotone' : 'default') as 'monotone' | 'default',
+        tension: smooth ? 0.3 : 0,
+        pointBackgroundColor: color,
+        pointBorderColor: color,
         stack: entry.stack,
         yAxisID: entry.axis === 'right' ? 'y1' : 'y',
         // Kept for the tooltip, which needs the series' own unit/format.
@@ -278,7 +290,16 @@
   <div class="canvas-wrap" style:height={`${height}px`}>
     <canvas bind:this={canvas} class:hidden={!hasData}></canvas>
     {#if !hasData}
-      <p class="empty">{emptyMessage}</p>
+      <!-- The placeholder sits over the canvas: the canvas stays mounted so the
+           chart instance survives the first sample, and a placeholder in normal
+           flow would start below it and be clipped away. -->
+      <div class="placeholder">
+        {#if loading}
+          <Skeleton variant="chart" />
+        {:else}
+          <p class="empty">{emptyMessage}</p>
+        {/if}
+      </div>
     {/if}
   </div>
 </div>
@@ -317,12 +338,16 @@
   .sep { padding: 0 0.1rem; }
 
   .canvas-wrap { position: relative; min-width: 0; }
+
+  .placeholder {
+    position: absolute;
+    inset: 0;
+    display: grid;
+  }
   canvas { width: 100% !important; height: 100% !important; }
   canvas.hidden { visibility: hidden; }
 
   .empty {
-    position: absolute;
-    inset: 0;
     display: grid;
     place-items: center;
     margin: 0;

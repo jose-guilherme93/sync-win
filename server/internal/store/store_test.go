@@ -485,33 +485,6 @@ func TestPasswordHashing(t *testing.T) {
 	if err == nil {
 		t.Fatalf("duplicate email must fail, got user %s", again.ID)
 	}
-	if _, err := store.AuthenticateUser("hash@example.com", "wrong password entirely"); err == nil {
-		t.Fatal("wrong password must fail")
-	}
-	authed, err := store.AuthenticateUser("hash@example.com", "correct horse battery staple")
-	if err != nil {
-		t.Fatalf("authenticate: %v", err)
-	}
-	if authed.ID != user.ID {
-		t.Fatalf("authenticated wrong user: %s", authed.ID)
-	}
-	if !strings.HasPrefix(authed.PasswordHash, "argon2id$") {
-		t.Fatalf("authenticated hash should use Argon2id, got %q", authed.PasswordHash)
-	}
-}
-
-func TestPasswordUpdateRejectsShortPassword(t *testing.T) {
-	store, err := NewStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("new store: %v", err)
-	}
-	user, err := store.CreateUser("short-update@example.com", "correct horse battery staple")
-	if err != nil {
-		t.Fatalf("create user: %v", err)
-	}
-	if err := store.UpdateUserPassword(user.ID, "correct horse battery staple", "short"); err == nil {
-		t.Fatal("short replacement password must be rejected")
-	}
 }
 
 func TestCompleteCommandScopedToDevice(t *testing.T) {
@@ -606,10 +579,6 @@ func TestLegacyJSONMigration(t *testing.T) {
 		if file.Filename == "bashrc" && file.Content != "newer\n" {
 			t.Fatalf("dedupe kept wrong version: %q", file.Content)
 		}
-	}
-	user, err := storeA.AuthenticateUser("legacy@example.com", "definitely-wrong")
-	if err == nil || user.ID != "" {
-		t.Fatal("migrated hash should not match a random password")
 	}
 	if _, ok := storeA.SessionOwner("nope"); ok {
 		t.Fatal("empty sessions table should not resolve tokens")

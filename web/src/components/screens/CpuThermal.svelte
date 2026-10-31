@@ -71,7 +71,7 @@
 
 <section class="cpu">
   {#if !hw}
-    <EmptyState icon="🧮" title="No telemetry yet" message="The agent has not reported CPU or thermal metrics for this device." />
+    <EmptyState icon="cpu" title="No telemetry yet" message="The agent has not reported CPU or thermal metrics for this device." />
   {:else}
     <div class="summary">
       <article class="stat">
@@ -128,7 +128,7 @@
         </span>
       </header>
       {#if coreCount === 0}
-        <EmptyState icon="🧩" title="Per-core usage not reported" message="The agent did not include cpu_core_usage in the last telemetry payload." />
+        <EmptyState icon="grid" title="Per-core usage not reported" message="The agent did not include cpu_core_usage in the last telemetry payload." />
       {:else}
         <div class="cores">
           {#each cores as usage, i}
@@ -183,7 +183,7 @@
         <span class="hint">{procs.length} of {hw.top_cpu_processes?.length ?? 0} shown</span>
       </header>
       {#if procs.length === 0}
-        <EmptyState icon="📋" title="No process snapshot" message="The agent did not report top CPU processes." />
+        <EmptyState icon="terminal" title="No process snapshot" message="The agent did not report top CPU processes." />
       {:else}
         <table class="procs">
           <thead><tr><th>PID</th><th>Process</th><th class="num">CPU</th><th class="num">RSS</th></tr></thead>

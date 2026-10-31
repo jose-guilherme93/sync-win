@@ -36,6 +36,9 @@ entries:
   - id: decisions/on-demand-dev
     path: decisions/on-demand-dev.md
     type: decision
+  - id: decisions/dashboard-access-token
+    path: decisions/dashboard-access-token.md
+    type: decision
   - id: decisions/installer-unit-templates
     path: decisions/installer-unit-templates.md
     type: decision
@@ -143,4 +146,7 @@ entries:
     type: session
   - id: sessions/261030-network-topology
     path: sessions/261030-network-topology.md
+    type: session
+  - id: sessions/261030-access-token
+    path: sessions/261030-access-token.md
     type: session

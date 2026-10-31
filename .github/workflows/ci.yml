@@ -148,6 +148,10 @@ jobs:
         run: |
           set -euo pipefail
           export SYNCWIN_SECRET_KEY=ci-validation-key-not-a-real-secret
+          # The dashboard token is required by both compose files: without it the
+          # stack would boot with no way in. Supply one here so the config check
+          # exercises the same required-variable path a deployment does.
+          export SYNCWIN_ACCESS_TOKEN=ci-validation-token-0123456789abcdef
 
           # Path A: build from source. The build section must still be present.
           docker compose -f compose.prod.yaml config | grep -q 'dockerfile: docker/Dockerfile.server'

@@ -38,12 +38,6 @@ DEV   := $(COMPOSE) -f $(DEV_FILE)
 PROD  := $(COMPOSE) -f $(PROD_FILE)
 LOCAL := $(COMPOSE) -f $(LOCAL_FILE)
 
-# Fixed development account. The dev stack bootstraps it from
-# SYNCWIN_ADMIN_EMAIL/SYNCWIN_ADMIN_PASSWORD and signs the dashboard in with
-# SYNCWIN_DEV_TOKEN; `make dev-account` only recreates it after a wiped database.
-DEMO_EMAIL    ?= demo@sync-win.local
-DEMO_PASSWORD ?= sync-win-demo-password
-
 # Optional Ed25519 public key embedded into the agent to authenticate updates.
 AGENT_LDFLAGS := $(if $(AGENT_UPDATE_PUBLIC_KEY),-ldflags "-X main.agentUpdatePublicKey=$(AGENT_UPDATE_PUBLIC_KEY)")
 
@@ -96,7 +90,8 @@ help: ## Show this help
 	@printf "\n$(C)Utilities$(N)\n"
 	@printf "  $(G)%-16s$(N) %s\n" "env"        "Create .env from .env.example with a generated secret"
 	@printf "  $(G)%-16s$(N) %s\n" "secret"     "Print a fresh SYNCWIN_SECRET_KEY"
-	@printf "  $(G)%-16s$(N) %s\n" "dev-account" "Create a local demo account (no default login exists)"
+	@printf "  $(G)%-16s$(N) %s\n" "token"      "Print a fresh SYNCWIN_ACCESS_TOKEN"
+	@printf "  $(G)%-16s$(N) %s\n" "dev-token"  "Sign in to the dev stack and print its access token"
 	@printf "  $(G)%-16s$(N) %s\n" "clean"      "Remove build artifacts"
 	@printf "  $(G)%-16s$(N) %s\n" "clean-dev"  "Remove dev data and volumes"
 	@printf "\nAgent version: $(G)$(SYNCWIN_AGENT_VERSION)$(N)\n"
@@ -319,24 +314,30 @@ env: ## Create .env from .env.example with a generated secret
 		cp .env.example .env; \
 		secret=$$(openssl rand -hex 32); \
 		sed -i "s|^SYNCWIN_SECRET_KEY=.*|SYNCWIN_SECRET_KEY=$$secret|" .env; \
-		printf "$(G)Created .env with a generated SYNCWIN_SECRET_KEY.$(N)\n"; \
+		token=$$(openssl rand -hex 24); \
+		sed -i "s|^SYNCWIN_ACCESS_TOKEN=.*|SYNCWIN_ACCESS_TOKEN=$$token|" .env; \
+		printf "$(G)Created .env with a generated secret and dashboard token.$(N)\n"; \
 	fi
 
 .PHONY: secret
 secret: ## Print a fresh SYNCWIN_SECRET_KEY
 	@openssl rand -hex 32
 
-.PHONY: dev-account
-dev-account: ## Recreate the fixed dev account (the dev stack normally bootstraps it)
-	@printf "$(C)Ensuring demo account $(DEMO_EMAIL) on http://localhost:%s$(N)\n" "$${DEV_HTTP_PORT:-8088}"
-	@curl -fsS -X POST "http://localhost:$${DEV_HTTP_PORT:-8088}/api/auth/login" \
-		-H 'Content-Type: application/json' \
-		-d "{\"email\":\"$(DEMO_EMAIL)\",\"password\":\"$(DEMO_PASSWORD)\"}" > /dev/null 2>&1 \
-		|| curl -fsS -X POST "http://localhost:$${DEV_HTTP_PORT:-8088}/api/auth/register" \
-			-H 'Content-Type: application/json' \
-			-d "{\"email\":\"$(DEMO_EMAIL)\",\"password\":\"$(DEMO_PASSWORD)\"}" > /dev/null 2>&1 \
-		|| { printf "$(Y)Failed.$(N) Is the dev stack running ('make dev-d')?\n"; exit 1; }
-	@printf "$(G)OK$(N) — sign in with $(G)$(DEMO_EMAIL)$(N) / $(G)$(DEMO_PASSWORD)$(N)\n"
+.PHONY: token
+token: ## Print a fresh SYNCWIN_ACCESS_TOKEN for .env
+	@openssl rand -hex 24
+
+.PHONY: dev-token
+dev-token: ## Check the dev stack responds and print its dashboard token
+	@token="$${SYNCWIN_ACCESS_TOKEN:-dev-access-token-0123456789abcdef}"; \
+	code=$$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+		"http://localhost:$${DEV_HTTP_PORT:-8088}/api/auth/login" \
+		-H 'Content-Type: application/json' -d "{\"token\":\"$$token\"}" || true); \
+	if [ "$$code" != "200" ]; then \
+		printf "$(Y)Sign-in failed (HTTP %s).$(N) Is the dev stack running ('make dev-d')?\n" "$$code"; \
+		exit 1; \
+	fi; \
+	printf "$(G)OK$(N) — dashboard token: $(G)%s$(N)\n" "$$token"
 
 .PHONY: clean
 clean: ## Remove build artifacts

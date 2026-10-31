@@ -3,6 +3,7 @@
   import StatusDot from '../ui/StatusDot.svelte'
   import { computedStatus, deviceLabel, type Device } from '../../lib/types'
   import { formatRelative } from '../../lib/format'
+  import { isAgentOutdated } from '../../lib/version'
   import { RANGES, DEFAULT_RANGE, type RangeId } from '../../lib/timerange'
 
   // The topbar answers "which device am I looking at, is it alive, and how
@@ -19,10 +20,22 @@
   export let accountInitial = '?'
   export let unreadCount = 0
   export let onOpenMobileNav: (() => void) | null = null
+  // Set while the device screen is open: the fleet is one click away and the
+  // sidebar is not on screen, so the way back has to be here.
+  export let onBack: (() => void) | null = null
+  // The version of the agent the server hands out. A device that is behind keeps
+  // working, but the screens that read newer fields come up empty, so the header
+  // says why instead of leaving the reader guessing.
+  export let shippedAgentVersion = ''
 </script>
 
 <header class="topbar">
-  {#if onOpenMobileNav}
+  {#if onBack}
+    <button class="back" on:click={onBack} aria-label="Back to the fleet">
+      <Icon name="chevron" size={14} />
+      <span>Home</span>
+    </button>
+  {:else if onOpenMobileNav}
     <button class="icon-btn mobile" on:click={onOpenMobileNav} aria-label="Open navigation">
       <Icon name="menu" size={18} />
     </button>
@@ -39,6 +52,17 @@
         {#if device.hardware?.operating_system}
           <span class="sep" aria-hidden="true">·</span>
           <span class="os" title={device.hardware.operating_system}>{device.hardware.operating_system}</span>
+        {/if}
+        {#if device.hardware?.agent_version}
+          <span class="sep" aria-hidden="true">·</span>
+          {#if isAgentOutdated(device.hardware.agent_version, shippedAgentVersion)}
+            <span
+              class="agent-outdated"
+              title={`Agent ${device.hardware.agent_version}. The server ships ${shippedAgentVersion}. The agent keeps syncing, but screens that read newer fields — the network map peers, for example — stay empty until it updates.`}
+            >agent {device.hardware.agent_version} · update</span>
+          {:else}
+            <span class="agent">agent {device.hardware.agent_version}</span>
+          {/if}
         {/if}
       </div>
     {:else}
@@ -119,6 +143,16 @@
     color: var(--text-faint);
   }
 
+  .agent,
+  .agent-outdated {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .agent-outdated {
+    color: var(--warn);
+    cursor: help;
+  }
+
   .os {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -186,6 +220,33 @@
   .refresh button.active {
     background: var(--accent-dim);
     color: var(--accent);
+  }
+
+  .back {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    height: 30px;
+    padding: 0 0.6rem 0 0.45rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--card-inset);
+    color: var(--text-muted);
+    font: inherit;
+    font-size: 0.76rem;
+    cursor: pointer;
+    flex: none;
+    transition: border-color var(--t-fast), color var(--t-fast);
+  }
+
+  .back:hover {
+    border-color: var(--border-strong);
+    color: var(--text);
+  }
+
+  /* The chevron glyph points right; the way home is left. */
+  .back :global(svg) {
+    transform: rotate(180deg);
   }
 
   .icon-btn {

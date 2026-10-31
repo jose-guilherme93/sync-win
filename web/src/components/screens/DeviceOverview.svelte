@@ -42,12 +42,20 @@
   let range: RangeId = DEFAULT_RANGE
   const unsubRange = selectedRange.subscribe((value) => (range = value))
   onDestroy(unsubRange)
+  // When Live was entered. The chart starts empty there and fills from the
+  // right with samples that arrive afterwards, the way a realtime stream
+  // behaves; samples the poll collected for another range are not replayed.
+  let liveStart = 0
   let historyRequest = 0
   let historyTimer: ReturnType<typeof setInterval> | null = null
 
   async function loadHistory() {
     const option = rangeById(range)
     if (option.id === 'live') {
+      // Live is a stream, not a query: it starts empty and each new sample
+      // enters at the right, exactly like Beszel's realtime chart. Prefilling it
+      // from the database drew a full minute at once and then left the line
+      // stranded in the middle of the axis.
       serverHistory = []
       historyWindow = null
       return
@@ -99,12 +107,40 @@
 
   $: if (device.id && range) scheduleHistory(range)
 
+  // Only a change of range starts a new live session. The device object is
+  // replaced on every poll, so keying the reset off this reactive block would
+  // restart the live window every few seconds and the chart would never fill.
+  let previousRange: RangeId = range
+  $: if (range !== previousRange) {
+    previousRange = range
+    if (range === 'live') liveStart = Date.now()
+  }
+
   onDestroy(() => {
     if (historyTimer) clearInterval(historyTimer)
   })
 
   $: isLive = rangeById(range).id === 'live'
-  $: points = isLive ? liveHistory : serverHistory
+  // The live chart is capped at the last 60 samples, which is one minute at the
+  // agent's reporting cadence. The axis ends at the newest sample, so the line
+  // always touches the right edge and the history grows leftward; without the
+  // cap the store would keep every sample of the session and the minute-wide
+  // axis would squash all of it.
+  $: livePoints = (() => {
+    if (liveHistory.length === 0) return []
+    const newest = Date.parse(liveHistory[liveHistory.length - 1].timestamp)
+    if (!Number.isFinite(newest)) return liveHistory
+    // The last minute of samples, anchored on the newest one. At the agent's
+    // ten-second cadence that is six points across a sixty-second axis.
+    return liveHistory.filter((point) => {
+      const at = Date.parse(point.timestamp)
+      return Number.isFinite(at) && at >= Math.max(newest - 60_000, liveStart)
+    })
+  })()
+  $: points = isLive ? livePoints : serverHistory
+  $: chartWindowEnd = isLive
+    ? (livePoints.length > 0 ? Date.parse(livePoints[livePoints.length - 1].timestamp) : null)
+    : (historyWindow?.to ?? null)
   $: timestamps = points.map((point) => point.timestamp)
 
   // Charts use the aligned arrays (gaps stay null); cards and sparklines use
@@ -220,9 +256,11 @@
         rightMax={100}
         height={360}
         windowMs={rangeById(range).ms}
-        windowEnd={historyWindow?.to ?? null}
+        windowEnd={chartWindowEnd}
+        smooth={!isLive}
+        loading={loadingHistory && points.length === 0}
         emptyMessage={isLive
-          ? 'The chart appears once at least two live samples have been collected.'
+          ? 'Waiting for the first live sample…'
           : 'No server-side samples exist for this window yet.'}
       />
     </article>
@@ -239,7 +277,9 @@
           leftFormat={formatRate}
           height={240}
           windowMs={rangeById(range).ms}
-          windowEnd={historyWindow?.to ?? null}
+          windowEnd={chartWindowEnd}
+          smooth={!isLive}
+          loading={loadingHistory && points.length === 0}
           emptyMessage="No network samples in this window."
         />
       </article>
@@ -255,7 +295,9 @@
           leftFormat={formatRate}
           height={240}
           windowMs={rangeById(range).ms}
-          windowEnd={historyWindow?.to ?? null}
+          windowEnd={chartWindowEnd}
+          smooth={!isLive}
+          loading={loadingHistory && points.length === 0}
           emptyMessage={isLive
             ? 'Disk I/O appears once two live samples have been collected.'
             : 'Disk I/O history is only kept in the live window; longer ranges aggregate CPU, memory, network and temperature.'}

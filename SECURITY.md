@@ -12,19 +12,18 @@ This document describes the security model, rules, and best practices for SyncWi
 
 ## Authentication
 
-### User accounts
+### Dashboard access token
 
-- Public self-registration is disabled by default. When disabled, `POST /api/auth/register` returns `403` and `GET /api/auth/config` reports `registration_enabled=false`; the dashboard hides the sign-up option.
-- The first account is bootstrapped on startup from `SYNCWIN_ADMIN_EMAIL`/`SYNCWIN_ADMIN_PASSWORD`. The environment password never overwrites an account that already exists, so a password changed in the dashboard is preserved.
-- Passwords are stored as salted Argon2id hashes (`argon2id$v=19$...`); legacy `s256$` hashes are upgraded after a successful login.
-- Passwords must contain 8–256 bytes.
-- The dashboard uses a random `syncwin_session` HttpOnly cookie. The raw session token is not persisted in the browser; a compatibility bearer token may be returned to non-browser clients.
+- There are no user accounts. The dashboard is opened with `SYNCWIN_ACCESS_TOKEN`, a single operator token read from the environment. It is at least 32 characters; a shorter or missing value leaves sign-in disabled and `POST /api/auth/login` answers `503` naming the variable.
+- The token is never written to the database. Sign-in compares SHA-256 digests in constant time, so the comparison does not leak length or prefix.
+- The token is exchanged for a random `syncwin_session` HttpOnly cookie. The raw session token is not persisted in the browser; a compatibility bearer token may be returned to non-browser clients.
 - Only a SHA-256 hash of each session token is stored server-side. Sessions expire after 30 days by default (`SYNCWIN_SESSION_TTL_HOURS`).
 - Cookie-authenticated state-changing requests require the `syncwin_csrf` cookie and matching `X-SYNCWIN-CSRF` header.
-- `POST /api/auth/logout` revokes the current session; changing a password revokes every session for the account.
+- `POST /api/auth/logout` revokes the current session. Rotating `SYNCWIN_ACCESS_TOKEN` and restarting invalidates every browser on its next request.
 - `GET /api/auth/me` validates the current session.
 - `X-SYNCWIN-Anonymous-ID`, `owner_id` query parameters, and client-supplied owner IDs are never accepted as authorization.
-- There is no role model: every authenticated account is a full operator. The product assumes a single operator (public registration is off by default). The one global, non-scoped setting and its consequence are described under *Application logging settings*.
+- The single owner row in the `users` table exists only as the owner id devices and sessions hang from. Its password hash is a discarded random secret and no password path can authenticate with it.
+- There is no role model: the token *is* the operator. The one global, non-scoped setting and its consequence are described under *Application logging settings*.
 
 ### Device tokens
 
@@ -98,10 +97,9 @@ after their controls are deployed and tested:
 - `SYNCWIN_ENABLE_LEGACY_INSTALL=false` — deprecated `/api/agent/install.sh` flow.
 - `SYNCWIN_ENABLE_REMOTE_MUTATIONS=false` — commands that can change agent-local state.
 - `SYNCWIN_ENABLE_DOCKER_MUTATIONS=false` — Docker lifecycle, exec, compose writes/up/down and prune operations.
-- `SYNCWIN_DEV_TOKEN` — dashboard sign-in for the development account. Ignored
-  unless `SYNCWIN_ENV=development`, and it never creates an account, so a
-  production server (which sets neither) has no token entry point. Never run a
-  reachable instance with `SYNCWIN_ENV=development`.
+- `SYNCWIN_ACCESS_TOKEN` — the dashboard credential. It has no fallback: without
+  it there is no way into the dashboard, and a short one is refused rather than
+  accepted. Generate with `openssl rand -hex 24` (or `make token`).
 
 `SYNCWIN_CORS_ALLOWED_ORIGIN` is empty by default. Set one exact browser origin
 only for a split development frontend; production same-origin deployments do
@@ -194,11 +192,11 @@ not need CORS.
 - Application logs, the audit and error views, and the log SSE stream are
   **server-wide**. The server writes most entries itself (startup, HTTP, agent,
   sync) and those rows carry no owner, so an owner-scoped viewer returned
-  nothing at all. Every authenticated account is an operator and sees the same
+  nothing at all. The access token is the operator and sees the same
   fleet-wide log; the Settings screen is an administration view, not per-account
   data. Device journal logs (`/api/devices/{id}/logs`) remain scoped to the
   device owner, and retention is global (the `log_settings` row). With public
-  registration enabled, treat the instance as trusted-admin-only — the same
+  who holds the token, treat the instance as trusted-admin-only — the same
   caveat as the logging settings below.
 
 ### Audit trail
@@ -211,7 +209,7 @@ not need CORS.
 
 - `GET`/`PUT /api/log-settings` control the server-wide persistence level, console level, and log retention.
 - The setting is **global, not per account**. The process runs one logger against one `logs` table, so a per-owner level would appear scoped while applying to every account's entries.
-- There is no role model, so any authenticated account may change it. That is acceptable under the documented single-operator assumption (registration disabled, one bootstrapped account). If public registration is enabled and more than one account exists, treat the server as trusted-admin-only or turn registration off (`SYNCWIN_ENABLE_REGISTRATION=false`, the default).
+- There is no role model, so whoever holds the dashboard token may change it. That is acceptable under the documented single-operator assumption (one token, no accounts).
 - Every change is audited (`log settings updated`). Invalid values are rejected with `400`; `AUDIT` and `FATAL` are not accepted as thresholds.
 
 ## Interactive remote access
@@ -305,7 +303,7 @@ StartLimitIntervalSec=0
 
 The server never stores:
 
-- passwords or reversible password data (only one-way Argon2id hashes are stored)
+- dashboard credentials (the access token lives only in the environment; sessions store a one-way hash)
 - private keys or certificates
 - browser credentials or cookies
 - KWallet data

@@ -222,12 +222,19 @@ func TestFetchCollectionInterval(t *testing.T) {
 		t.Fatalf("interval = %s, err = %v", got, err)
 	}
 
+	// A cadence this build does not know (here: faster than the fastest one it
+	// supports) falls back to the closest slower interval instead of failing the
+	// refresh every cycle.
 	invalid := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"collection_interval_seconds":45}`))
+		_, _ = w.Write([]byte(`{"collection_interval_seconds":1}`))
 	}))
 	defer invalid.Close()
-	if _, err := fetchCollectionInterval(invalid.URL, "device-1", "device-token"); err == nil {
-		t.Fatal("unsupported interval should be rejected")
+	got, err = fetchCollectionInterval(invalid.URL, "device-1", "device-token")
+	if err != nil {
+		t.Fatalf("unknown interval should fall back, got err = %v", err)
+	}
+	if got < 2*time.Second {
+		t.Fatalf("fallback interval = %s, want at least the fastest supported value", got)
 	}
 }
 

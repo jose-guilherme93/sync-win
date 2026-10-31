@@ -123,6 +123,7 @@
       <label>
         Collection interval
         <select bind:value={interval} disabled={loadingSettings || saving}>
+          <option value="2">2 s</option>
           <option value="5">5 s</option>
           <option value="10">10 s</option>
           <option value="30">30 s</option>

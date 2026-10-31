@@ -29,8 +29,7 @@
 # Requires: curl, jq, docker, and a running dev stack (`make dev-d`).
 # Defaults can be overridden:
 #   SYNCWIN_SERVER=http://localhost:8088
-#   SYNCWIN_EMAIL=demo@sync-win.local
-#   SYNCWIN_PASSWORD=sync-win-demo-password
+#   SYNCWIN_ACCESS_TOKEN=dev-access-token-0123456789abcdef
 #   AGENTS=2  IMAGE=alpine:3.24  MEMORY=64m  CPUS=0.25
 #   FULL_IMAGE=sync-win-test-device:24.04  FULL_MEMORY=256m  FULL_CPUS=0.5
 
@@ -41,8 +40,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 SERVER="${SYNCWIN_SERVER:-http://localhost:8088}"
-EMAIL="${SYNCWIN_EMAIL:-demo@sync-win.local}"
-PASSWORD="${SYNCWIN_PASSWORD:-sync-win-demo-password}"
+TOKEN="${SYNCWIN_ACCESS_TOKEN:-dev-access-token-0123456789abcdef}"
 
 AGENTS="${AGENTS:-2}"
 IMAGE="${IMAGE:-alpine:3.24}"
@@ -76,8 +74,7 @@ Usage:
 
 Environment overrides:
   SYNCWIN_SERVER   http://localhost:8088
-  SYNCWIN_EMAIL    demo@sync-win.local
-  SYNCWIN_PASSWORD sync-win-demo-password
+  SYNCWIN_ACCESS_TOKEN dev-access-token-0123456789abcdef
   AGENTS           2
   IMAGE            alpine:3.24
   MEMORY           64m
@@ -330,16 +327,14 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 JAR="$WORK/cookies.txt"
 
-# Sign in. The dev stack bootstraps this fixed account and injects
-# SYNCWIN_DEV_TOKEN; the same password still works through the normal form.
-login_body="$(jq -n --arg email "$EMAIL" --arg password "$PASSWORD" \
-    '{email: $email, password: $password}')"
+# Sign in with the dashboard token the dev stack is configured with.
+login_body="$(jq -n --arg token "$TOKEN" '{token: $token}')"
 login_code="$(curl -sS -c "$JAR" -o /dev/null -w '%{http_code}' \
     -X POST "$SERVER/api/auth/login" \
     -H 'Content-Type: application/json' \
     -d "$login_body")"
 if [ "$login_code" != "200" ]; then
-    die "sign-in as $EMAIL failed (HTTP $login_code). Run 'make dev-account' or set SYNCWIN_EMAIL/SYNCWIN_PASSWORD."
+    die "sign-in failed (HTTP $login_code). Set SYNCWIN_ACCESS_TOKEN to the dev stack's token."
 fi
 
 ARCH="$(uname -m)"
@@ -351,5 +346,5 @@ case "$MODE" in
     all) start_alpine; start_full ;;
 esac
 
-printf '\nTest devices ready. Sign in as %s; they appear after the first heartbeat.\n' "$EMAIL"
+printf '\nTest devices ready. They appear after the first heartbeat (sign in with the dashboard token).\n'
 printf 'Remove them with: %s down\n' "$0"

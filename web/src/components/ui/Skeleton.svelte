@@ -3,7 +3,11 @@
   // silhouette as the content it is standing in for, which stops the layout
   // from jumping when the data arrives.
   export let rows = 3
-  export let variant: 'cards' | 'list' | 'lines' = 'cards'
+  export let variant: 'cards' | 'list' | 'lines' | 'chart' = 'cards'
+  // Chart skeletons stand in for a plot: the shimmering bars read as "a series
+  // is loading" instead of "this device reported nothing", which is the
+  // difference between waiting and a wrong answer.
+  const CHART_BARS = [38, 52, 44, 61, 47, 70, 58, 66, 49, 74, 62, 55, 68, 51, 79, 64, 57, 71, 60, 83, 69, 63, 76, 58]
 </script>
 
 {#if variant === 'cards'}
@@ -25,6 +29,12 @@
         <div class="sk-line w70"></div>
         <div class="sk-line w90"></div>
       </div>
+    {/each}
+  </div>
+{:else if variant === 'chart'}
+  <div class="sk-chart" aria-hidden="true">
+    {#each CHART_BARS as value, i (i)}
+      <span class="sk-bar" style="height: {value}%"></span>
     {/each}
   </div>
 {:else}
@@ -80,6 +90,43 @@
 
   .sk-lines { display: grid; gap: 0.6rem; }
 
+  .sk-chart {
+    display: flex;
+    align-items: flex-end;
+    gap: 2.5%;
+    height: 100%;
+    min-height: 120px;
+    padding: 0 2%;
+    border-radius: var(--radius-sm);
+    background: repeating-linear-gradient(
+      180deg,
+      transparent 0,
+      transparent 24%,
+      rgba(148, 163, 184, 0.1) 25%
+    );
+  }
+
+  .sk-bar {
+    flex: 1;
+    min-width: 2px;
+    border-radius: 3px 3px 0 0;
+    background: linear-gradient(
+      180deg,
+      rgba(52, 211, 153, 0.2),
+      rgba(52, 211, 153, 0.05)
+    );
+    animation: sk-bar-shimmer 1.6s ease-in-out infinite;
+  }
+
+  .sk-bar:nth-child(3n) { animation-delay: 0.15s; }
+  .sk-bar:nth-child(4n) { animation-delay: 0.3s; }
+  .sk-bar:nth-child(5n) { animation-delay: 0.45s; }
+
+  @keyframes sk-bar-shimmer {
+    0%, 100% { opacity: 0.65; }
+    50% { opacity: 1; }
+  }
+
   .w40 { width: 40%; }
   .w60 { width: 60%; }
   .w70 { width: 70%; }
@@ -91,6 +138,7 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .sk-line { animation: none; }
+    .sk-line,
+    .sk-bar { animation: none; }
   }
 </style>

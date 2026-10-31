@@ -17,6 +17,7 @@
   import CleanupCard from './docker/CleanupCard.svelte'
   import ComposeCard from './docker/ComposeCard.svelte'
   import ContainerPanel from './docker/ContainerPanel.svelte'
+  import ImagesPanel from './docker/ImagesPanel.svelte'
   import ConfirmDialog from './ui/ConfirmDialog.svelte'
   import EmptyState from './ui/EmptyState.svelte'
   import Icon from './ui/Icon.svelte'
@@ -30,7 +31,7 @@
   // paint instead of after the Docker state request returns.
   export let hardware: HardwareStats | undefined = undefined
 
-  type View = 'containers' | 'compose' | 'cleanup'
+  type View = 'containers' | 'images' | 'compose' | 'cleanup'
   // stop/restart/kill/remove interrupt work; start and pause do not.
   const NEEDS_CONFIRM = new Set<DockerAction>(['stop', 'restart', 'kill', 'remove'])
 
@@ -283,6 +284,7 @@
       Containers <b>{loaded ? counts.total : (engine?.total ?? 0)}</b>
     </button>
     {#if engineAvailable}
+      <button class:active={view === 'images'} on:click={() => (view = 'images')}>Images</button>
       <button class:active={view === 'compose'} on:click={() => (view = 'compose')}>Compose</button>
       <button class:active={view === 'cleanup'} on:click={() => (view = 'cleanup')}>Cleanup</button>
     {/if}
@@ -358,7 +360,7 @@
 
       {#if !engineAvailable}
         <EmptyState
-          icon="🐳"
+          icon="box"
           title="Docker not detected"
           message="The agent could not reach /var/run/docker.sock on this device. Install Docker, or add the agent's user to the docker group, then scan again."
           actionLabel="Scan again"
@@ -368,12 +370,12 @@
         <div class="pad"><Skeleton variant="list" rows={5} /></div>
       {:else if loaded && containers.length === 0}
         <EmptyState
-          icon="📦"
+          icon="package"
           title="No containers"
           message="Docker is running on this device, but there are no containers — running or stopped."
         />
       {:else if filtered.length === 0}
-        <EmptyState icon="🔍" title="No match" message="Adjust the search or the state filter." />
+        <EmptyState icon="search" title="No match" message="Adjust the search or the state filter." />
       {:else}
         <ul class="rows">
           {#each filtered as container (container.id)}
@@ -411,6 +413,8 @@
         </ul>
       {/if}
     </article>
+  {:else if view === 'images'}
+    <ImagesPanel {deviceId} {authHeaders} active={view === 'images'} />
   {:else if view === 'compose'}
     <ComposeCard {deviceId} {authHeaders} onChanged={() => void refreshList()} />
   {:else}

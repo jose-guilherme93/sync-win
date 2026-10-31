@@ -136,8 +136,8 @@ func upsertDeviceInTx(tx *sql.Tx, device Device) error {
 		return err
 	}
 	interval := device.CollectionIntervalSeconds
-	if interval != 5 && interval != 10 && interval != 30 && interval != 60 {
-		interval = 10
+	if interval != 2 && interval != 5 && interval != 10 && interval != 30 && interval != 60 {
+		interval = 2
 	}
 	_, err = tx.Exec(
 		"INSERT OR REPLACE INTO devices ("+deviceColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",

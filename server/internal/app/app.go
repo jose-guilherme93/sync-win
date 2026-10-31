@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
@@ -62,18 +63,8 @@ type registerRequest struct {
 	UserID   string `json:"user_id"`
 }
 
-type authRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-}
-
-type updateEmailRequest struct {
-	Email string `json:"email"`
-}
-
-type updatePasswordRequest struct {
-	CurrentPassword string `json:"current_password"`
-	NewPassword     string `json:"new_password"`
+type accessTokenRequest struct {
+	Token string `json:"token"`
 }
 
 type syncRequest struct {
@@ -162,7 +153,11 @@ func Run() error {
 	dockerQueue := docker.NewQueue(30 * time.Second)
 	dockerBroadcaster := docker.NewBroadcaster()
 	flags := loadFeatureFlags()
-	bootstrapAdmin(dataStore, structLogger, flags.EnableRegistration)
+	if !flags.AccessTokenUsable() {
+		// Fail closed but keep running: devices sync against the API with their
+		// own tokens, so a misconfigured dashboard token must not stop the fleet.
+		structLogger.Warn(logging.CatSecurity, logging.EventAppStarted, flags.AccessTokenProblem, nil)
+	}
 	server := &Server{store: dataStore, logStore: logStore, log: structLogger, aggregator: aggregator, notifier: notifier, dockerQueue: dockerQueue, dockerBroadcaster: dockerBroadcaster, streamTickets: newStreamTicketStore(), rateLimiter: newRateLimiter(), tunnelHub: tunnel.NewHub(), flags: flags, trustProxy: envBool("SYNCWIN_TRUST_PROXY", false), logStreamInterval: time.Second}
 
 	// Logging settings are persisted so an operator's choice survives a
@@ -200,18 +195,13 @@ func Run() error {
 			"legacy_install":        flags.EnableLegacyInstall,
 			"remote_mutations":      flags.EnableRemoteMutations,
 			"docker_mutations":      flags.EnableDockerMutations,
-			"registration":          flags.EnableRegistration,
+			"access_token_set":      flags.AccessTokenUsable(),
 		})
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", server.handleHealth)
-	mux.HandleFunc("/api/auth/register", server.handleAuthRegister)
 	mux.HandleFunc("/api/auth/login", server.handleAuthLogin)
-	mux.HandleFunc("/api/auth/dev", server.handleAuthDev)
-	mux.HandleFunc("/api/auth/config", server.handleAuthConfig)
 	mux.HandleFunc("/api/auth/me", server.handleAuthMe)
-	mux.HandleFunc("/api/auth/update-email", server.handleAuthUpdateEmail)
-	mux.HandleFunc("/api/auth/update-password", server.handleAuthUpdatePassword)
 	mux.HandleFunc("/api/auth/logout", server.handleAuthLogout)
 	mux.HandleFunc("/api/sync-config", server.handleSyncConfig)
 	mux.HandleFunc("/api/agent/version", server.handleAgentVersion)
@@ -586,93 +576,46 @@ func readAgentVersion() string {
 	return "0.5.0"
 }
 
-// bootstrapAdmin creates the initial account from SYNCWIN_ADMIN_EMAIL and
-// SYNCWIN_ADMIN_PASSWORD when both are set. Public registration is disabled by
-// default, so this is how the first account comes to exist. An existing account
-// is never modified, so a password changed in the dashboard is preserved.
-func bootstrapAdmin(st *store.Store, logger *logging.Logger, registrationEnabled bool) {
-	email := strings.TrimSpace(os.Getenv("SYNCWIN_ADMIN_EMAIL"))
-	password := os.Getenv("SYNCWIN_ADMIN_PASSWORD")
-	if email == "" && password == "" {
-		if !registrationEnabled {
-			if count, err := st.CountUsers(); err == nil && count == 0 {
-				logger.Warn(logging.CatSecurity, logging.EventAppStarted,
-					"no accounts exist and registration is disabled; set SYNCWIN_ADMIN_EMAIL and SYNCWIN_ADMIN_PASSWORD (or enable SYNCWIN_ENABLE_REGISTRATION)", nil)
-			}
-		}
-		return
-	}
-	if email == "" || password == "" {
-		logger.Warn(logging.CatAuth, logging.EventAuthFailed,
-			"SYNCWIN_ADMIN_EMAIL and SYNCWIN_ADMIN_PASSWORD must both be set; skipping admin bootstrap", nil)
-		return
-	}
-	user, created, err := st.EnsureAdminUser(email, password)
-	if err != nil {
-		logger.Warn(logging.CatAuth, logging.EventAuthFailed, "admin bootstrap failed", map[string]any{"error": err.Error()})
-		return
-	}
-	if created {
-		logger.Audit(logging.CatAuth, logging.EventAuthSuccess, "admin account created", map[string]any{"user_id": user.ID, "email": user.Email})
-	}
-}
-
-func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-	if !s.flags.EnableRegistration {
-		s.writeError(w, http.StatusForbidden, errors.New("registration is disabled"))
-		return
-	}
-	if !s.allowRate(w, r, "auth-register", 10, time.Minute) {
-		return
-	}
-	var req authRequest
-	if !s.decodeBody(w, r, &req) {
-		return
-	}
-	user, err := s.store.CreateUser(req.Email, req.Password)
-	if err != nil {
-		s.log.Warn(logging.CatAuth, logging.EventAuthFailed, "registration failed", map[string]any{"email": req.Email, "error": err.Error()})
-		s.writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	s.log.Audit(logging.CatAuth, logging.EventAuthSuccess, "user registered", map[string]any{"user_id": user.ID, "email": req.Email})
-	s.writeAuth(w, r, user)
-}
-
-// handleAuthConfig exposes the public (unauthenticated) auth configuration the
-// dashboard needs before sign-in, currently whether self-registration is open.
-func (s *Server) handleAuthConfig(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]bool{"registration_enabled": s.flags.EnableRegistration})
-}
-
+// handleAuthLogin exchanges the dashboard access token for a session cookie.
+//
+// The token comes from SYNCWIN_ACCESS_TOKEN and is compared against its digest
+// so the timing does not depend on how much of the token a caller guessed. A
+// server without a usable token answers 503 naming the setting instead of
+// pretending the password was wrong.
 func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.flags.AccessTokenUsable() {
+		// Answer directly: writeError redacts 5xx messages, and this one names
+		// the exact setting an operator has to fix.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": s.flags.AccessTokenProblem})
+		return
+	}
 	if !s.allowRate(w, r, "auth-login", 10, time.Minute) {
 		return
 	}
-	var req authRequest
+	var req accessTokenRequest
 	if !s.decodeBody(w, r, &req) {
 		return
 	}
-	user, err := s.store.AuthenticateUser(req.Email, req.Password)
-	if err != nil {
-		s.log.Warn(logging.CatAuth, logging.EventAuthFailed, "login failed", map[string]any{"email": req.Email, "error": err.Error()})
-		s.writeError(w, http.StatusUnauthorized, err)
+	want := sha256.Sum256([]byte(s.flags.AccessToken))
+	got := sha256.Sum256([]byte(strings.TrimSpace(req.Token)))
+	if subtle.ConstantTimeCompare(want[:], got[:]) != 1 {
+		s.log.Warn(logging.CatAuth, logging.EventAuthFailed, "access token rejected", map[string]any{"remote": r.RemoteAddr})
+		s.writeError(w, http.StatusUnauthorized, errors.New("invalid access token"))
 		return
 	}
-	s.writeAuth(w, r, user)
+	owner, err := s.store.EnsureOwner()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	s.log.Audit(logging.CatAuth, logging.EventAuthSuccess, "dashboard session opened", map[string]any{"user_id": owner.ID})
+	s.writeAuth(w, r, owner)
 }
 
 func (s *Server) decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
@@ -710,7 +653,7 @@ func (s *Server) writeAuth(w http.ResponseWriter, r *http.Request, user store.Us
 	}
 	setCSRFCookie(w, r, csrfToken)
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"token": session.Token, "owner_id": user.ID, "email": user.Email})
+	_ = json.NewEncoder(w).Encode(map[string]string{"token": session.Token, "owner_id": user.ID})
 }
 
 // handleAuthMe validates an existing session so the dashboard can restore a
@@ -735,51 +678,7 @@ func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"owner_id": user.ID, "email": user.Email})
-}
-
-func (s *Server) handleAuthUpdateEmail(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-	ownerID, ok := s.requireSession(w, r)
-	if !ok {
-		return
-	}
-	var req updateEmailRequest
-	if !s.decodeBody(w, r, &req) {
-		return
-	}
-	if err := s.store.UpdateUserEmail(ownerID, req.Email); err != nil {
-		s.writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	s.log.Audit(logging.CatAuth, logging.EventAuthSuccess, "profile email updated", map[string]any{"user_id": ownerID, "new_email": req.Email})
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"email": req.Email})
-}
-
-func (s *Server) handleAuthUpdatePassword(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-	ownerID, ok := s.requireSession(w, r)
-	if !ok {
-		return
-	}
-	var req updatePasswordRequest
-	if !s.decodeBody(w, r, &req) {
-		return
-	}
-	if err := s.store.UpdateUserPassword(ownerID, req.CurrentPassword, req.NewPassword); err != nil {
-		s.writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	s.log.Audit(logging.CatAuth, logging.EventAuthSuccess, "profile password updated", map[string]any{"user_id": ownerID})
-	clearSessionCookie(w, r)
-	w.WriteHeader(http.StatusNoContent)
+	_ = json.NewEncoder(w).Encode(map[string]string{"owner_id": user.ID})
 }
 
 func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
@@ -3654,7 +3553,8 @@ func (s *Server) handleNotificationStream(w http.ResponseWriter, r *http.Request
 
 func dockerRequestIsReadOnly(reqType string) bool {
 	switch reqType {
-	case "list", "inspect", "stats", "logs", "compose_read", "compose_ps", "compose_logs":
+	case "list", "inspect", "stats", "logs", "image_list", "image_inspect",
+		"compose_read", "compose_ps", "compose_logs":
 		return true
 	default:
 		return false
@@ -3667,6 +3567,7 @@ func dockerRequestIsReadOnly(reqType string) bool {
 func validDockerRequestType(reqType string) bool {
 	switch reqType {
 	case "list", "inspect", "stats", "logs",
+		"image_list", "image_inspect", "image_pull", "image_remove",
 		"start", "stop", "restart", "kill", "remove", "pause", "unpause",
 		"exec",
 		"compose_read", "compose_write", "compose_up", "compose_down", "compose_ps", "compose_logs",

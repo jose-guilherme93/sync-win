@@ -159,7 +159,7 @@
 
     {#if visible.length === 0}
       <EmptyState
-        icon="✓"
+        icon="check"
         title={all.length === 0 ? 'All clear' : 'Nothing to show'}
         message={all.length === 0
           ? 'No device is currently reporting a problem.'

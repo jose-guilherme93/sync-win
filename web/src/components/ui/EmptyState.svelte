@@ -1,6 +1,9 @@
 <script lang="ts">
+  import Icon from './Icon.svelte'
+
   // Shared empty state so every screen answers the same two questions: what is
-  // missing, and what can the user do about it.
+  // missing, and what can the user do about it. The icon is a name from the
+  // shared stroke set, never an emoji: the panel keeps one visual language.
   export let title = 'Nothing here yet'
   export let message = ''
   export let actionLabel = ''
@@ -9,7 +12,7 @@
 </script>
 
 <div class="empty-state">
-  {#if icon}<div class="icon" aria-hidden="true">{icon}</div>{/if}
+  {#if icon}<div class="icon" aria-hidden="true"><Icon name={icon} size={26} /></div>{/if}
   <strong>{title}</strong>
   {#if message}<p>{message}</p>{/if}
   {#if actionLabel && onAction}
@@ -31,8 +34,10 @@
   }
 
   .icon {
-    font-size: 1.6rem;
-    opacity: 0.7;
+    display: grid;
+    place-items: center;
+    color: var(--accent);
+    opacity: 0.85;
   }
 
   strong {

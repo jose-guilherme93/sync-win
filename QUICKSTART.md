@@ -49,66 +49,29 @@ make dev     # dashboard http://localhost:5173 · api http://localhost:8088
 
 Run `make help` for the full target list.
 
-## 2. Create your account
+## 2. Open the dashboard
 
-The quick-start `compose.yaml` leaves registration **open** so you can sign up
-from the browser on first run:
-
-1. Open `http://localhost:8080`
-2. Choose **Create account** and pick an email and password (at least 8
-   characters)
-
-**Then close it again.** Edit `.env`:
+There is no account to create. The dashboard asks for the access token you put
+in `.env`:
 
 ```bash
-SYNCWIN_ENABLE_REGISTRATION=false
+SYNCWIN_ACCESS_TOKEN=...   # openssl rand -hex 24
 ```
 
-and apply it with `docker compose up -d`. While it stays open, anyone who can
-reach the server can create an account on your instance.
+Paste it on the sign-in screen and you are in. The token is the only credential:
+it is never stored in the database, it is compared against the environment on
+every sign-in, and changing it locks out every browser on its next request.
 
-### Prefer to bootstrap the first account instead
+The dev stack (`make dev`) skips that screen: `compose.dev.yaml` sets a fixed
+token (`dev-access-token-0123456789abcdef`) and hands the same value to the
+dashboard, so it signs in on boot. `make dev-token` prints it and verifies that
+sign-in answers `200`.
 
-Set these in `.env` before the first start and no sign-up is needed:
-
-```bash
-SYNCWIN_ENABLE_REGISTRATION=false
-SYNCWIN_ADMIN_EMAIL=you@example.com
-SYNCWIN_ADMIN_PASSWORD=at-least-8-chars
-```
-
-The account is created on boot only if it does not exist. The password in `.env`
-is **never** used to overwrite an existing account, so a password changed in the
-dashboard survives restarts.
-
-Accounts are stored in SQLite, at `sync-win.db` inside the `sync-win-data`
-volume (`./data-dev/sync-win.db` in development).
-
-### Development shortcut
-
-The dev stack (`make dev`) bootstraps a fixed account and signs the dashboard
-in automatically:
-
-```bash
-# Dashboard: http://localhost:5173
-# Account:   demo@sync-win.local / sync-win-demo-password
-```
-
-The sign-in screen is skipped because `compose.dev.yaml` injects
-`SYNCWIN_DEV_TOKEN` (and `VITE_DEV_TOKEN`); the server only honors it while
-`SYNCWIN_ENV=development`. The same account also works through the normal form,
-and `make dev-account` recreates it if the database was wiped.
-
-Or register through the API directly (only works when registration is enabled):
-
-```bash
-curl -X POST http://localhost:8080/api/auth/register \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"you@example.com","password":"at-least-8-chars"}'
-```
+Devices are unaffected by this: each agent keeps its own enrollment token, so a
+dashboard lockout never stops a fleet from syncing.
 
 The automated test suites (`make test`, `make test-race`, `npm run test`) need no
-account at all — they mock the API.
+token at all — they mock the API.
 
 ## 3. Install the agent on a Linux machine
 

@@ -346,7 +346,7 @@
 
 <section class="network">
   {#if !hw}
-    <EmptyState icon="🌐" title="No telemetry yet" message="The agent has not reported network counters for this device." />
+    <EmptyState icon="globe" title="No telemetry yet" message="The agent has not reported network counters for this device." />
   {:else}
     <button class="map-link" on:click={() => nav.setSection('topology')}>
       <span class="map-link-icon"><Icon name="topology" size={18} /></span>
@@ -428,7 +428,7 @@
         <p class="loading">Loading the traffic history…</p>
       {:else if !history || Object.keys(history.interfaces ?? {}).length === 0}
         <EmptyState
-          icon="📈"
+          icon="chart"
           title="No traffic history yet"
           message="The server keeps one sample per interface per minute. The chart fills as the device reports."
         />
@@ -464,7 +464,7 @@
       </header>
 
       {#if ifaces.length === 0}
-        <EmptyState icon="🌐" title="No interfaces reported" message="The agent found no network interface to report." />
+        <EmptyState icon="globe" title="No interfaces reported" message="The agent found no network interface to report." />
       {:else}
         <div class="ifaces">
           {#each (showVirtual ? ifaces : counted) as iface (iface.name)}
@@ -574,7 +574,7 @@
               <p class="foot-note">{routes.length - 12} more routes not shown</p>
             {/if}
           {:else}
-            <EmptyState icon="🧭" title="No routes reported" message="The agent could not read the routing table." />
+            <EmptyState icon="route" title="No routes reported" message="The agent could not read the routing table." />
           {/if}
         {/if}
       </article>
@@ -585,7 +585,7 @@
           <span class="hint">{health?.collected_at ? `updated ${ageOf(health.collected_at)}` : 'no data'}</span>
         </header>
         {#if !health}
-          <EmptyState icon="🩺" title="No packet data" message="The agent has not reported the TCP and socket counters yet." />
+          <EmptyState icon="pulse" title="No packet data" message="The agent has not reported the TCP and socket counters yet." />
         {:else}
           <div class="health-grid">
             <div class="health-cell">
@@ -632,7 +632,7 @@
           <span class="hint">{neighbors.length} on the segment</span>
         </header>
         {#if neighbors.length === 0}
-          <EmptyState icon="👥" title="No neighbours seen" message="The neighbour table is empty or could not be read." />
+          <EmptyState icon="users" title="No neighbours seen" message="The neighbour table is empty or could not be read." />
         {:else}
           <table class="socks">
             <thead>
@@ -670,7 +670,7 @@
           <p class="loading">Loading sockets…</p>
         {:else if topExposed.length === 0}
           <EmptyState
-            icon="🔌"
+            icon="plug"
             title={exposure.total === 0 ? 'No listening sockets' : 'Nothing reachable from outside'}
             message={exposure.total === 0
               ? 'The agent reports no socket in the listening state.'
@@ -707,19 +707,19 @@
           <span class="hint">{wireless.length} radio{wireless.length === 1 ? '' : 's'}</span>
         </header>
         {#if wireless.length === 0}
-          <EmptyState icon="📶" title="No wireless radios" message="The device reports no wireless interface." />
+          <EmptyState icon="wifi" title="No wireless radios" message="The interface scan found no wireless device on this machine. A container or a server without a radio never reports one." />
         {:else}
           <div class="wireless">
             {#each wireless as link (link.interface)}
               <div class="wl">
                 <span class="wl-name mono">{link.interface}</span>
-                <span class="wl-signal {signalTone(link.signal_dbm)}">{link.signal_dbm} dBm</span>
+                <span class="wl-signal {signalTone(link.signal_dbm)}">{link.signal_dbm ? `${link.signal_dbm} dBm` : 'signal not reported'}</span>
                 <span class="wl-quality">quality {link.quality ?? '—'}</span>
-                <span class="wl-noise">noise {link.noise_dbm ?? '—'}</span>
+                <span class="wl-noise">noise {link.noise_dbm ? `${link.noise_dbm} dBm` : '—'}</span>
               </div>
             {/each}
           </div>
-          <p class="foot-note">The agent is unprivileged, so the SSID, the channel and the bitrate are not readable.</p>
+          <p class="foot-note">The radio itself is read from sysfs; the numbers come from the kernel's wireless statistics or from <code>iw</code> when it is installed. SSID, channel and bitrate need root.</p>
         {/if}
       </article>
 
@@ -729,7 +729,7 @@
           <span class="hint">{tunnels.length} tunnel{tunnels.length === 1 ? '' : 's'}</span>
         </header>
         {#if tunnels.length === 0}
-          <EmptyState icon="🛣️" title="No tunnels" message="The device reports no VPN or overlay interface." />
+          <EmptyState icon="route" title="No tunnels" message="The device reports no VPN or overlay interface." />
         {:else}
           <table class="socks">
             <thead>

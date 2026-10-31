@@ -53,12 +53,10 @@ describe('App enrollment token', () => {
   it('requests an enrollment token exactly once when sign-in fails to provide one', async () => {
     render(App)
 
-    const email = await screen.findByPlaceholderText('you@example.com')
-    const password = screen.getByPlaceholderText('At least 8 characters')
-    await fireEvent.input(email, { target: { value: 'a@b.com' } })
-    await fireEvent.input(password, { target: { value: 'password123' } })
+    const token = await screen.findByPlaceholderText('At least 32 characters')
+    await fireEvent.input(token, { target: { value: '0123456789abcdef0123456789abcdef' } })
 
-    const form = screen.getByRole('button', { name: 'Sign in' }).closest('form')
+    const form = screen.getByRole('button', { name: 'Unlock' }).closest('form')
     if (!form) throw new Error('sign-in form not found')
     await fireEvent.submit(form)
 

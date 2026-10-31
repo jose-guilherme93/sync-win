@@ -4,10 +4,12 @@
   import NotificationToast from './components/NotificationToast.svelte'
   import { addTelemetryPoint, resetTelemetry } from './lib/telemetry-store'
   import { apiFetch, apiURL, serverBase } from './lib/api'
-  import { devToken, signInWithDevToken } from './lib/dev-auth'
+  import { autoToken } from './lib/auto-auth'
   import { formatRelative, formatAbsolute } from './lib/format'
   import Sidebar from './components/shell/Sidebar.svelte'
   import Topbar from './components/shell/Topbar.svelte'
+  import DeviceTabs from './components/shell/DeviceTabs.svelte'
+  import Logo from './components/ui/Logo.svelte'
   import Home from './components/screens/Home.svelte'
   import DeviceOverview from './components/screens/DeviceOverview.svelte'
   import Alerts from './components/screens/Alerts.svelte'
@@ -29,7 +31,7 @@
   import DeviceSettings from './components/screens/DeviceSettings.svelte'
   import AppSettings from './components/screens/AppSettings.svelte'
   import Notifications from './components/screens/Notifications.svelte'
-  import { nav, type Section } from './lib/router'
+  import { nav, DEVICE_SCOPED, type Section } from './lib/router'
   import { selectedRange, DEFAULT_RANGE, type RangeId } from './lib/timerange'
   import { mergeDeviceDetail } from './lib/device'
   import type { AppInfo, Device, HardwareStats } from './lib/types'
@@ -38,6 +40,7 @@
   import { generateInsights } from './lib/insights'
   import { loadNotificationPrefs, notificationPrefs, resetNotificationPrefs, shouldToast } from './lib/notification-prefs'
   import { eventDetail, eventIcon } from './lib/notification-format'
+  import Icon from './components/ui/Icon.svelte'
   import { unlockNotificationAudio } from './lib/notification-sound'
 
 
@@ -74,7 +77,11 @@
   // device look stale. The topbar range now only controls how often the charts
   // refetch their history.
   let currentRange: RangeId = DEFAULT_RANGE
+  // Fleet polling while no device is open. Once a device screen is up the poll
+  // follows the agent's reporting cadence instead, which is what gives the live
+  // chart its detail inside a one-minute window.
   const DEVICE_POLL_MS = 10000
+  const DEVICE_LIVE_POLL_MS = 2000
   const MAX_POLL_MS = 60000
   const PANEL_REFRESH_MS = 60000
   // Top processes, Docker containers and the security posture only exist in
@@ -122,15 +129,15 @@
   let authReady = false
   let authToken = ''
   let authVersion = 0 // prevents stale restoreSession from overwriting fresh login
-  let email = ''
-  let password = ''
-  let authMode: 'login' | 'register' = 'login'
-  let registrationEnabled = false
+  let accessToken = ''
+  let authBusy = false
+  // Version of the agent binary this server hands out, used only to explain a
+  // device whose screens are empty because its agent predates a collector.
+  let shippedAgentVersion = ''
   let authError = ''
   let sessionExpired = false
-  let accountEmail = ''
 
-  $: signedIn = Boolean(ownerIdentity && accountEmail)
+  $: signedIn = Boolean(ownerIdentity)
 
   let selectedFile: PreferenceFile | null = null
   let selectedDeviceId = ''
@@ -169,6 +176,14 @@
     mobileNavOpen = false
   }
 
+  // Leaving the device screen returns to the fleet. The device is deselected on
+  // purpose: the fleet list is where you pick the next one, and keeping a
+  // hidden selection made the sidebar look like it belonged to it.
+  function goHome() {
+    nav.clearDevice()
+    mobileNavOpen = false
+  }
+
   // Device-scoped sidebar sections map onto the tabs the device page already
   // renders, so the two navigations cannot disagree.
   $: deviceTabForSection = ({
@@ -183,7 +198,7 @@
     security: 'security'
   } as Record<string, string>)[navState.section] || null
 
-  $: isDeviceSection = Boolean(navState.deviceId) && navState.section !== 'home' && navState.section !== 'devices' && navState.section !== 'alerts' && navState.section !== 'findings' && navState.section !== 'reports' && navState.section !== 'configuration' && navState.section !== 'notifications'
+  $: isDeviceSection = Boolean(navState.deviceId) && DEVICE_SCOPED.has(navState.section)
 
   // Only the overview still uses the shared telemetry cards. Every other
   // device section now has a dedicated screen, so nothing else falls through.
@@ -236,11 +251,6 @@
   let userMenuOpen = false
   let bellOpen = false
   let addDeviceOpen = false
-  let profileEmail = ''
-  let profileCurrentPassword = ''
-  let profileNewPassword = ''
-  let profileSaving = false
-  let profileError = ''
   const authHeaders = (token: string): Record<string, string> => (token ? { Authorization: `Bearer ${token}` } : {})
   $: ownerHeaders = authHeaders(authToken)
   $: normalizedInstallServer = (() => {
@@ -270,27 +280,16 @@
     requestEnrollmentToken()
   }
 
-  // Public self-registration is disabled by default on the server. The auth
-  // gate only offers "Create account" when the server explicitly allows it.
-  async function loadAuthConfig() {
-    try {
-      const response = await apiFetch(apiURL('/api/auth/config'))
-      if (!response.ok) return
-      const payload = await response.json()
-      registrationEnabled = Boolean(payload.registration_enabled)
-      if (!registrationEnabled) authMode = 'login'
-    } catch {
-      // Fail closed: keep registration hidden if the config cannot be read.
-    }
-  }
-
-  // The dashboard is account-first: every device belongs to the signed-in
-  // account. The bearer token is kept only in memory; the HttpOnly session
-  // cookie is the durable browser credential.
+  // The dashboard is token-first: every device belongs to the single owner.
+  // The bearer token is kept only in memory; the HttpOnly session cookie is the
+  // durable browser credential.
   async function restoreSession() {
     const storedToken = localStorage.getItem('sync-win-auth-token') || ''
     const storedOwner = localStorage.getItem('sync-win-owner-id') || ''
-    const storedEmail = localStorage.getItem('sync-win-account-email') || ''
+    // A 401 only means "expired" when this browser actually had a session. A
+    // first visit also gets a 401 from /api/auth/me, and telling a new user
+    // their session expired before they ever signed in is a lie.
+    const hadLocalSession = Boolean(storedToken || storedOwner)
     const myVersion = ++authVersion
     if (storedToken) localStorage.removeItem('sync-win-auth-token')
 
@@ -299,13 +298,11 @@
       // token from persistent storage immediately.
       authToken = storedToken
       ownerIdentity = storedOwner
-      accountEmail = storedEmail
       loadCachedDevices()
     }
-    // The dev stack injects a fixed token. Exchange it for a normal session
-    // cookie before deciding whether to show the sign-in screen; a refusal
-    // falls through to the account flow rather than pretending to be signed in.
-    if (devToken) await signInWithDevToken()
+    // The dev stack injects the dashboard token, so the sign-in screen is only
+    // seen when a real server asks for it.
+    if (autoToken) await submitAccessToken(autoToken, false)
     authReady = true
 
     try {
@@ -316,10 +313,8 @@
       if (response.ok) {
         const payload = await response.json()
         ownerIdentity = payload.owner_id
-        accountEmail = payload.email
         authToken = ''
         localStorage.setItem('sync-win-owner-id', ownerIdentity)
-        localStorage.setItem('sync-win-account-email', accountEmail)
         loadCachedDevices()
         void connectNotifSSE()
         void loadDevices(false)
@@ -328,16 +323,15 @@
         disconnectNotifSSE()
         authToken = ''
         ownerIdentity = ''
-        accountEmail = ''
         devices = []
         lastDevicesJson = ''
         resetAccountState()
-        sessionExpired = true
+        sessionExpired = hadLocalSession
       }
     } catch {
       // A network outage must not discard a still-valid local session. The
       // next poll will retry the cookie-backed session.
-      if (storedOwner && storedEmail) {
+      if (storedOwner) {
         void loadDevices(false)
         void connectNotifSSE()
       }
@@ -419,8 +413,20 @@
   function clearAccountStorage() {
     localStorage.removeItem('sync-win-auth-token')
     localStorage.removeItem('sync-win-owner-id')
-    localStorage.removeItem('sync-win-account-email')
     localStorage.removeItem(`sync-win-devices-${ownerIdentity}`)
+  }
+
+  // The server advertises the version of the agent it serves. Reading it once
+  // per page load is enough: it only changes when the image changes.
+  async function loadShippedAgentVersion() {
+    try {
+      const response = await apiFetch(apiURL('/api/agent/version'))
+      if (!response.ok) return
+      const payload = await response.json()
+      if (typeof payload?.version === 'string') shippedAgentVersion = payload.version
+    } catch {
+      // A missing version only costs the badge; never the page.
+    }
   }
 
   async function loadDevices(showLoading = false) {
@@ -485,7 +491,12 @@
     if (selectedDeviceId && Date.now() - lastDetailLoad >= DETAIL_REFRESH_MS) {
       void loadDeviceDetail(selectedDeviceId)
     }
-    schedulePoll(Math.min(DEVICE_POLL_MS * 2 ** Math.min(consecutiveFailures, 4), MAX_POLL_MS))
+    // Only the live window needs the fast poll: every other range reads stored
+    // history and its resolution is minutes, so polling it every two seconds
+    // would be load for nothing.
+    const liveView = isDeviceSection && currentRange === 'live'
+    const base = liveView ? DEVICE_LIVE_POLL_MS : DEVICE_POLL_MS
+    schedulePoll(Math.min(base * 2 ** Math.min(consecutiveFailures, 4), MAX_POLL_MS))
   }
 
   function schedulePoll(delay: number) {
@@ -1097,39 +1108,51 @@
     }
   }
 
-  async function submitAuth() {
+  // submitAccessToken exchanges the dashboard token for a session cookie. The
+  // token itself is never stored: it lives in the server's environment, and the
+  // browser only keeps the resulting session.
+  async function submitAccessToken(token: string, announce = true): Promise<boolean> {
+    const value = token.trim()
+    if (value.length < 32) {
+      authError = 'The access token is 32 characters or more.'
+      return false
+    }
+    authBusy = true
+    authError = ''
     try {
-      authError = ''
-      if (authMode === 'register' && !registrationEnabled) {
-        authError = 'Registration is disabled.'
-        return
-      }
-      const response = await apiFetch(apiURL(`/api/auth/${authMode}`), {
+      const response = await apiFetch(apiURL('/api/auth/login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password })
+        body: JSON.stringify({ token: value })
       })
       const payload = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(payload.error || `Request failed (${response.status})`)
+      if (!response.ok) throw new Error(payload.error || `Sign in failed (${response.status})`)
       // Bump auth version so any in-flight restoreSession auth/me won't overwrite us
       authVersion++
       authToken = ''
       ownerIdentity = payload.owner_id
-      accountEmail = payload.email
       sessionExpired = false
       localStorage.removeItem('sync-win-auth-token')
       localStorage.setItem('sync-win-owner-id', ownerIdentity)
-      localStorage.setItem('sync-win-account-email', accountEmail)
       devices = []
       lastDevicesJson = ''
-      password = ''
+      accessToken = ''
       disconnectNotifSSE()
       connectNotifSSE()
-      notify(`Signed in as ${accountEmail}`)
+      if (announce) notify('Signed in.')
       await loadDevices(true)
+      return true
     } catch (err) {
       authError = err instanceof Error ? err.message : 'Could not reach the server'
+      return false
+    } finally {
+      authBusy = false
     }
+  }
+
+  async function submitAuth(event: SubmitEvent) {
+    event.preventDefault()
+    await submitAccessToken(accessToken)
   }
 
   // resetAccountState clears everything derived from the signed-in account so a
@@ -1158,7 +1181,6 @@
     clearAccountStorage()
     disconnectNotifSSE()
     authToken = ''
-    accountEmail = ''
     ownerIdentity = ''
     devices = []
     lastDevicesJson = ''
@@ -1170,63 +1192,10 @@
 
   function toggleUserMenu() {
     userMenuOpen = !userMenuOpen
-    if (userMenuOpen) {
-      profileEmail = accountEmail
-      profileCurrentPassword = ''
-      profileNewPassword = ''
-      profileError = ''
-    }
   }
 
   function closeUserMenu() {
     userMenuOpen = false
-  }
-
-  async function updateProfileEmail() {
-    if (!profileEmail || profileEmail === accountEmail) return
-    profileSaving = true
-    profileError = ''
-    try {
-      const response = await apiFetch(apiURL(`/api/auth/update-email`), {
-        method: 'POST',
-        headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: profileEmail })
-      })
-      const payload = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(payload.error || `Request failed (${response.status})`)
-      accountEmail = payload.email
-      localStorage.setItem('sync-win-account-email', accountEmail)
-      profileEmail = accountEmail
-      notify('Email updated.')
-    } catch (err) {
-      profileError = err instanceof Error ? err.message : 'Could not update email'
-    } finally {
-      profileSaving = false
-    }
-  }
-
-  async function updateProfilePassword() {
-    if (!profileCurrentPassword || !profileNewPassword) return
-    profileSaving = true
-    profileError = ''
-    try {
-      const response = await apiFetch(apiURL(`/api/auth/update-password`), {
-        method: 'POST',
-        headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ current_password: profileCurrentPassword, new_password: profileNewPassword })
-      })
-      if (!response.ok) {
-        const payload = await response.json().catch(() => ({}))
-        throw new Error(payload.error || `Request failed (${response.status})`)
-      }
-      profileCurrentPassword = ''
-      profileNewPassword = ''
-      notify('Password updated.')
-    } catch (err) {
-      profileError = err instanceof Error ? err.message : 'Could not update password'
-    } finally {
-      profileSaving = false
-    }
   }
 
   // The application logs live in the fleet-wide Settings screen, which is the
@@ -1441,8 +1410,8 @@
   }
 
   onMount(() => {
-    void loadAuthConfig()
     void restoreSession()
+    void loadShippedAgentVersion()
     // Browsers keep an AudioContext suspended until a user gesture. Unlock it
     // on the first interaction so the first notification is not silent.
     const unlockAudio = () => {
@@ -1482,55 +1451,60 @@
 
 <svelte:window on:keydown={handleWindowKeydown} />
 
-<div class="page" class:full={signedIn}>
+<div class="page" class:full={signedIn} class:gate={!signedIn}>
   {#if !authReady}
     <div class="auth-gate">
       <div class="auth-card">
-        <p class="eyebrow">SyncWin</p>
+        <div class="auth-brand"><Logo size={30} /><span>SyncWin</span></div>
         <h1>Connecting…</h1>
       </div>
     </div>
   {:else if !signedIn}
     <div class="auth-gate">
       <div class="auth-card" role="dialog" aria-labelledby="auth-gate-title">
-        <p class="eyebrow">SyncWin</p>
-        <h1 id="auth-gate-title">{authMode === 'login' ? 'Sign in' : 'Create your account'}</h1>
-        <p class="gate-hint">Every device and agent install is registered under your account. Sign in first — then copy the install command to your Linux machines.</p>
-        {#if sessionExpired && authMode === 'login'}
+        <div class="auth-brand"><Logo size={30} /><span>SyncWin</span></div>
+        <h1 id="auth-gate-title">Unlock the dashboard</h1>
+        <p class="gate-hint">Paste the access token from your server's environment. It is the only way in, and it never leaves the server.</p>
+        {#if sessionExpired}
           <p class="error-inline">Your session expired. Sign in again to see your devices.</p>
         {/if}
         {#if authError}
           <p class="error-inline">{authError}</p>
         {/if}
-        <form class="auth-modal-fields" on:submit|preventDefault={submitAuth}>
-          <label>Email<input bind:value={email} type="email" autocomplete="email" placeholder="you@example.com" required /></label>
-          <label>Password<input bind:value={password} type="password" autocomplete={authMode === 'login' ? 'current-password' : 'new-password'} placeholder="At least 8 characters" minlength={8} required /></label>
-          <button type="submit">{authMode === 'login' ? 'Sign in' : 'Create account'}</button>
-          {#if registrationEnabled}
-            <button type="button" class="secondary" on:click={() => (authMode = authMode === 'login' ? 'register' : 'login')}>
-              {authMode === 'login' ? 'New here? Create account' : 'Already have an account? Sign in'}
-            </button>
-          {/if}
+        <form class="auth-modal-fields" on:submit={submitAuth}>
+          <label>Access token
+            <input
+              bind:value={accessToken}
+              type="password"
+              autocomplete="current-password"
+              spellcheck="false"
+              autocapitalize="off"
+              placeholder="At least 32 characters"
+              minlength={32}
+              required
+            />
+          </label>
+          <button type="submit" disabled={authBusy}>{authBusy ? 'Unlocking…' : 'Unlock'}</button>
         </form>
       </div>
     </div>
   {:else}
-  <div class="app-shell">
-    {#if mobileNavOpen}
-      <div class="nav-scrim" role="presentation" on:click={() => (mobileNavOpen = false)}></div>
+  <div class="app-shell" class:device={isDeviceSection}>
+    {#if !isDeviceSection}
+      {#if mobileNavOpen}
+        <div class="nav-scrim" role="presentation" on:click={() => (mobileNavOpen = false)}></div>
+      {/if}
+      <div class="sidebar-wrap" class:open={mobileNavOpen}>
+        <Sidebar
+          {devices}
+          activeSection={navState.section}
+          collapsed={sidebarCollapsed}
+          onNavigate={navigateTo}
+          onAddDevice={openAddDevice}
+          onToggleCollapse={toggleSidebar}
+        />
+      </div>
     {/if}
-    <div class="sidebar-wrap" class:open={mobileNavOpen}>
-      <Sidebar
-        {devices}
-        selectedId={navState.deviceId}
-        activeSection={navState.section}
-        collapsed={sidebarCollapsed}
-        onSelectDevice={selectDevice}
-        onNavigate={navigateTo}
-        onAddDevice={openAddDevice}
-        onToggleCollapse={toggleSidebar}
-      />
-    </div>
     <div class="main-col">
       <Topbar
         device={isDeviceSection ? modalDevice : null}
@@ -1541,10 +1515,16 @@
         onOpenSearch={openGlobalSearch}
         onOpenNotifications={toggleBell}
         onOpenUserMenu={toggleUserMenu}
-        accountInitial={accountEmail.charAt(0).toUpperCase()}
+        accountInitial="S"
+        shippedAgentVersion={shippedAgentVersion}
         unreadCount={notifEvents.length}
-        onOpenMobileNav={() => (mobileNavOpen = true)}
+        onOpenMobileNav={isDeviceSection ? null : () => (mobileNavOpen = true)}
+        onBack={isDeviceSection ? goHome : null}
       />
+
+      {#if isDeviceSection}
+        <DeviceTabs active={navState.section} onPick={navigateTo} />
+      {/if}
 
       <!-- Popovers for the topbar buttons. They live here rather than inside
            Topbar because they need App-level state (notifications, profile
@@ -1568,7 +1548,7 @@
                 {#each notifEvents.slice(-5) as e (e.id)}
                   <button class="bell-item bell-{e.type}" on:click={() => openNotifDevice(e)}>
                     <div class="bell-item-top">
-                      <span class="bell-item-icon">{eventIcon(e.type)}</span>
+                      <span class="bell-item-icon"><Icon name={eventIcon(e.type)} size={14} /></span>
                       <span class="bell-item-host">{e.hostname || e.device_id}</span>
                       <span class="bell-item-time">{timeAgo(e.created_at, now)}</span>
                     </div>
@@ -1590,46 +1570,23 @@
         <div class="shell-popover user-menu-wrapper" role="presentation" on:click|stopPropagation on:keydown|stopPropagation>
           <div class="user-dropdown">
             <div class="dropdown-header">
-              <div class="avatar-large">{accountEmail.charAt(0).toUpperCase()}</div>
+              <div class="avatar-large">S</div>
               <div>
-                <div class="dropdown-email">{accountEmail}</div>
+                <div class="dropdown-email">SyncWin</div>
                 <div class="dropdown-devices">{devices.length} device{devices.length !== 1 ? 's' : ''}</div>
               </div>
             </div>
             <div class="dropdown-divider"></div>
             <button class="dropdown-item" on:click={openSettings}>
-              <span class="dropdown-icon">⚙</span> Settings
+              <span class="dropdown-icon"><Icon name="cog" size={14} /></span> Settings
             </button>
             <button class="dropdown-item" on:click={openAppLogs}>
-              <span class="dropdown-icon">📋</span> Logs
+              <span class="dropdown-icon"><Icon name="terminal" size={14} /></span> Logs
             </button>
             <button class="dropdown-item" on:click={openNotifications}>
-              <span class="dropdown-icon">🔔</span> Notifications
+              <span class="dropdown-icon"><Icon name="bell" size={14} /></span> Notifications
             </button>
             <div class="dropdown-divider"></div>
-            <div class="dropdown-profile">
-              <h4>Profile</h4>
-              {#if profileError}<p class="error-inline">{profileError}</p>{/if}
-              <form class="profile-form" on:submit|preventDefault={updateProfileEmail}>
-                <label>Email
-                  <input type="email" bind:value={profileEmail} placeholder={accountEmail} />
-                </label>
-                <button type="submit" disabled={profileSaving || profileEmail === accountEmail}>
-                  {profileSaving ? 'Saving...' : 'Update email'}
-                </button>
-              </form>
-              <form class="profile-form" on:submit|preventDefault={updateProfilePassword}>
-                <label>Current password
-                  <input type="password" bind:value={profileCurrentPassword} autocomplete="current-password" />
-                </label>
-                <label>New password
-                  <input type="password" bind:value={profileNewPassword} minlength={8} autocomplete="new-password" />
-                </label>
-                <button type="submit" disabled={profileSaving || !profileNewPassword || !profileCurrentPassword}>
-                  {profileSaving ? 'Saving...' : 'Change password'}
-                </button>
-              </form>
-            </div>
             <div class="dropdown-divider"></div>
             <button class="dropdown-item danger" on:click={signOut}>
               Sign out
@@ -1704,7 +1661,7 @@
           {:else if navState.section === 'notifications'}
             <Notifications {devices} authHeaders={ownerHeaders} unread={notifEvents} onSelect={selectDevice} onMarkedRead={handleNotifMarkedRead} />
           {:else}
-            <Home {devices} onSelect={selectDevice} onAdd={openAddDevice} onAlerts={() => nav.setSection('alerts')} />
+            <Home {devices} {loading} onSelect={selectDevice} onAdd={openAddDevice} onAlerts={() => nav.setSection('alerts')} />
           {/if}
         </div>
       </main>

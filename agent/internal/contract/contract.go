@@ -125,6 +125,7 @@ type Contract struct {
 		OutputCapBytes           int64    `json:"output_cap_bytes"`
 		DockerLogsMaxTail        int      `json:"docker_logs_max_tail"`
 		DockerExecTimeoutSeconds int      `json:"docker_exec_timeout_seconds"`
+		DockerPullTimeoutSeconds int      `json:"docker_pull_timeout_seconds"`
 		PolicyPath               string   `json:"policy_path"`
 		LegacyPolicyPath         string   `json:"legacy_policy_path"`
 		PolicyDefaults           struct {
@@ -140,6 +141,7 @@ type Contract struct {
 			AllowDockerExec       bool `json:"allow_docker_exec"`
 			AllowDockerPrune      bool `json:"allow_docker_prune"`
 			AllowDockerCompose    bool `json:"allow_docker_compose"`
+			AllowDockerImages     bool `json:"allow_docker_images"`
 			AllowRemoteAccess     bool `json:"allow_remote_access"`
 			CommandTimeoutSeconds int  `json:"command_timeout_seconds"`
 		} `json:"policy_defaults"`
@@ -220,6 +222,16 @@ func (c *Contract) DockerExecTimeout() time.Duration {
 	seconds := c.Commands.DockerExecTimeoutSeconds
 	if seconds <= 0 {
 		seconds = 30
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+// DockerPullTimeout is the deadline for one image pull. A first pull of a large
+// image takes minutes; the dashboard command has its own, longer timeout.
+func (c *Contract) DockerPullTimeout() time.Duration {
+	seconds := c.Commands.DockerPullTimeoutSeconds
+	if seconds <= 0 {
+		seconds = 600
 	}
 	return time.Duration(seconds) * time.Second
 }

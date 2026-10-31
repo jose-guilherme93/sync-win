@@ -42,16 +42,10 @@ services:
       # Dev defaults it on so `make dev` can exercise remote access without an
       # env dance; production compose leaves it false.
       SYNCWIN_ENABLE_REMOTE_ACCESS: "${SYNCWIN_ENABLE_REMOTE_ACCESS:-true}"
-      # The dev stack keeps public registration on so `make dev-account` and
-      # manual sign-ups work locally. Production defaults to false.
-      SYNCWIN_ENABLE_REGISTRATION: "${SYNCWIN_ENABLE_REGISTRATION:-true}"
-      SYNCWIN_ADMIN_EMAIL: "${SYNCWIN_ADMIN_EMAIL:-demo@sync-win.local}"
-      SYNCWIN_ADMIN_PASSWORD: "${SYNCWIN_ADMIN_PASSWORD:-sync-win-demo-password}"
-      # Fixed development sign-in. The token is only honored while
-      # SYNCWIN_ENV=development, and production compose sets neither variable,
-      # so it cannot become a way in outside dev. The account above is
-      # bootstrapped on first start and is never overwritten.
-      SYNCWIN_DEV_TOKEN: "${SYNCWIN_DEV_TOKEN:-sync-win-dev-token}"
+      # The dashboard token for this stack. It is the same credential the sign-in
+      # screen asks for; the dev web bundle also carries it so `make dev` opens
+      # signed in. Any 32+-character string works here.
+      SYNCWIN_ACCESS_TOKEN: "${SYNCWIN_ACCESS_TOKEN:-dev-access-token-0123456789abcdef}"
       # Comma-separated allowlist. The Vite dev server is reachable as both
       # localhost and 127.0.0.1, which the browser treats as distinct origins;
       # listing one of them made the other fail CORS on login.
@@ -96,8 +90,8 @@ services:
       # Still used by the install command shown in the dashboard, which has to
       # point the agent at an address reachable from outside the browser.
       VITE_API_BASE: "http://${DEV_HOST:-localhost}:${DEV_HTTP_PORT:-8088}"
-      # Development-only sign-in token, exposed to the SPA at build time.
-      VITE_DEV_TOKEN: "${SYNCWIN_DEV_TOKEN:-sync-win-dev-token}"
+      # Same credential, handed to the SPA so the dashboard signs in on boot.
+      VITE_ACCESS_TOKEN: "${SYNCWIN_ACCESS_TOKEN:-dev-access-token-0123456789abcdef}"
     volumes:
       - ./web:/app
       - web_node_modules:/app/node_modules

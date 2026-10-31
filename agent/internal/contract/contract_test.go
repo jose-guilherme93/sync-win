@@ -22,8 +22,13 @@ func TestLoadEmbeddedContract(t *testing.T) {
 	for _, seconds := range c.Telemetry.IntervalSecondsAllowed {
 		allowedIntervals[seconds] = true
 	}
-	if !allowedIntervals[c.Telemetry.IntervalSecondsDefault] || len(allowedIntervals) != 4 {
+	// The list is the accepted set, not a fixed size: the live chart needs a
+	// cadence fast enough to show variation inside a one-minute window.
+	if !allowedIntervals[c.Telemetry.IntervalSecondsDefault] || len(allowedIntervals) < 4 {
 		t.Fatal("telemetry interval defaults and allowed values are incomplete")
+	}
+	if c.Telemetry.IntervalSecondsDefault > 5 {
+		t.Fatal("the default telemetry interval must stay at five seconds or faster for the live chart")
 	}
 	if !c.Collection.RejectedContentRules.BinaryOrInvalidUTF8 || len(c.Collection.RejectedContentRules.SecretPatterns) == 0 {
 		t.Fatal("rejection rules incomplete")
@@ -193,6 +198,7 @@ func TestDurationHelpers(t *testing.T) {
 			OutputCapBytes           int64    `json:"output_cap_bytes"`
 			DockerLogsMaxTail        int      `json:"docker_logs_max_tail"`
 			DockerExecTimeoutSeconds int      `json:"docker_exec_timeout_seconds"`
+			DockerPullTimeoutSeconds int      `json:"docker_pull_timeout_seconds"`
 			PolicyPath               string   `json:"policy_path"`
 			LegacyPolicyPath         string   `json:"legacy_policy_path"`
 			PolicyDefaults           struct {
@@ -208,6 +214,7 @@ func TestDurationHelpers(t *testing.T) {
 				AllowDockerExec       bool `json:"allow_docker_exec"`
 				AllowDockerPrune      bool `json:"allow_docker_prune"`
 				AllowDockerCompose    bool `json:"allow_docker_compose"`
+				AllowDockerImages     bool `json:"allow_docker_images"`
 				AllowRemoteAccess     bool `json:"allow_remote_access"`
 				CommandTimeoutSeconds int  `json:"command_timeout_seconds"`
 			} `json:"policy_defaults"`

@@ -33,8 +33,7 @@ API_PORT="${DEV_HTTP_PORT:-8088}"
 BASE="http://localhost:${WEB_PORT}"
 API="http://localhost:${API_PORT}"
 
-EMAIL="${SYNCWIN_EMAIL:-demo@sync-win.local}"
-PASSWORD="${SYNCWIN_PASSWORD:-sync-win-demo-password}"
+TOKEN="${SYNCWIN_ACCESS_TOKEN:-dev-access-token-0123456789abcdef}"
 # A stable hostname and machine id make re-runs adopt the device record instead
 # of adding another e2e-laptop row to the dev database on every run.
 HOSTNAME="${E2E_HOSTNAME:-e2e-laptop}"
@@ -206,7 +205,7 @@ curl -fsS -o /dev/null "${BASE}/" || { echo "dashboard not reachable at ${BASE};
 # anything new.
 LOGIN=$(curl -fsS -c "${COOKIES}" -X POST "${BASE}/api/auth/login" \
   -H 'Content-Type: application/json' \
-  -d "{\"email\":\"${EMAIL}\",\"password\":\"${PASSWORD}\"}")
+  -d "{\"token\":\"${TOKEN}\"}")
 check "signed in as the development account" "${LOGIN}" "owner_id"
 
 # enroll-token and enroll take the token in the "token" field, not
@@ -351,10 +350,10 @@ sleep 1
 timeout 60 agent-browser open "${BASE}/" --args "--no-sandbox" >/dev/null
 sleep 3
 
-# The dev stack injects SYNCWIN_DEV_TOKEN / VITE_DEV_TOKEN, so the dashboard
-# trades it for a session cookie and renders the fleet directly. Seeing the
-# sign-in form here means one of those variables is missing from the stack.
-SIGN_IN_FORM=$(unquote "$(eval_js "document.querySelector('input[type=email]') ? 'FORM' : 'SKIPPED'")")
+# The dev stack injects SYNCWIN_ACCESS_TOKEN / VITE_ACCESS_TOKEN, so the
+# dashboard trades it for a session cookie and renders the fleet directly.
+# Seeing the sign-in form means one of those variables is missing from the stack.
+SIGN_IN_FORM=$(unquote "$(eval_js "document.querySelector('input[name=access-token], input[type=password]') ? 'FORM' : 'SKIPPED'")")
 check "dev stack signs in without the login screen" "${SIGN_IN_FORM}" "SKIPPED"
 SIGNED=$(wait_for "Fleet" "document.body.textContent.includes('Fleet') ? 'Fleet' : document.body.textContent.slice(0,60)" 10)
 check "signed in" "${SIGNED}" "Fleet"
@@ -369,10 +368,14 @@ ROW=$(eval_js "(()=>{const r=[...document.querySelectorAll('.devices li')].find(
 check "fleet row clicked" "${ROW}" "CLICKED"
 sleep 3
 
-# Every device-scoped item is disabled until a device is selected. If this fails
-# the dashboard is unusable for per-device work, which is most of it.
-SCOPED=$(eval_js "(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.textContent.trim()==='Services');return b?(b.disabled?'DISABLED':'ENABLED'):'MISSING';})()")
-check "Services nav enabled after selecting a device" "${SCOPED}" "ENABLED"
+# A device is a place of its own: the fleet sidebar goes away and every section
+# becomes a tab in one horizontal row.
+SIDEBAR_GONE=$(eval_js "document.querySelector('.sidebar') ? 'STILL-THERE' : 'GONE'")
+check "fleet sidebar hidden on the device screen" "${SIDEBAR_GONE}" "GONE"
+TABS=$(eval_js "document.querySelectorAll(\"nav[aria-label='Device sections'] button\").length")
+check "device tab row rendered" "${TABS}" "15"
+ACTIVE_TAB=$(eval_js "(()=>{const a=document.querySelector(\"nav[aria-label='Device sections'] [aria-current=page]\");return a?a.textContent.trim():'NONE';})()")
+check "Overview is the tab a device opens on" "${ACTIVE_TAB}" "Overview"
 
 # ---------------------------------------------------------------------------
 section "Services screen"
@@ -486,8 +489,8 @@ section "Every sidebar section renders"
 # section is visited and checked for two failure modes that type-checking cannot
 # catch: the screen rendering nothing at all, and a section that is reachable in
 # the sidebar but throws or blanks out at runtime.
-FLEET_SECTIONS=("Home" "Devices" "Alerts" "Findings" "Reports" "Notifications")
-DEVICE_SECTIONS=("Overview" "CPU & Thermal" "Memory" "Storage" "Network" "All sensors" \
+FLEET_SECTIONS=("Home" "Alerts" "Findings" "Reports" "Notifications")
+DEVICE_SECTIONS=("Overview" "CPU & Thermal" "Memory" "Storage" "Network" "Topology" "Sensors" \
                  "Docker" "Processes" "Services" "Packages" "Logs" "Security" \
                  "Remote access" "Settings")
 
@@ -530,8 +533,43 @@ for nav in "${FLEET_SECTIONS[@]}"; do
   sweep_section "${nav}" "${nav}" 40
 done
 
+# Device sections are tabs, not sidebar entries: click the tab inside the device
+# screen so a screen that only renders from the old menu is caught.
+sweep_tab() {
+  local label="$1"
+  local result
+  result=$(unquote "$(eval_js "(()=>{const b=[...document.querySelectorAll(\"nav[aria-label='Device sections'] button\")].find(x=>x.textContent.trim()===${label@Q});if(!b)return 'MISSING';b.click();return 'CLICKED';})()")")
+  if [ "${result}" != "CLICKED" ]; then
+    fail "tab '${label}' reachable" "${result}"
+    return
+  fi
+  sleep 2
+  local body
+  body=$(unquote "$(panel_text)")
+  if [ "${body}" = "EMPTY" ] || [ -z "${body}" ]; then
+    fail "tab '${label}' renders content" "panel was empty after clicking '${label}'"
+    return
+  fi
+  if [ "${#body}" -lt 60 ]; then
+    fail "tab '${label}' renders content" "only ${#body} chars: ${body}"
+    return
+  fi
+  ok "tab '${label}' renders (${#body} chars)"
+}
+
+# The fleet sweep ends on Notifications, so return to the fleet list before
+# reopening the device for the tab sweep.
+click_text 'Home' >/dev/null
+sleep 2
+REOPEN=$(eval_js "(()=>{const r=[...document.querySelectorAll('.devices li')].find(x=>x.textContent.includes(${HOSTNAME@Q}));if(!r)return 'MISSING';const b=r.querySelector('button');if(!b)return 'NO-BUTTON';b.click();return 'CLICKED';})()")
+RECLICK=$(unquote "${REOPEN}")
+if [ "${RECLICK}" != "CLICKED" ]; then
+  fail "device reopened for the tab sweep" "${RECLICK}"
+fi
+sleep 2
+
 for nav in "${DEVICE_SECTIONS[@]}"; do
-  sweep_section "${nav}" "${nav}" 60
+  sweep_tab "${nav}"
 done
 
 # Distinct sections that render byte-identical panels are the known debt in
@@ -614,7 +652,11 @@ sleep 2
 PROCESS_SORT=$(eval_js "(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.textContent.trim()==='By CPU');return b?'PRESENT':'ABSENT';})()")
 check "processes screen exposes a sort control" "$(unquote "${PROCESS_SORT}")" "PRESENT"
 
-# Alerts: the reset control appears only when a filter is active.
+# Alerts: the reset control appears only when a filter is active. It is fleet
+# navigation, so leave the device screen first — the sidebar is not on screen
+# there and "Alerts" would match nothing.
+click_text 'Home' >/dev/null
+sleep 2
 click_text 'Alerts' >/dev/null
 sleep 2
 ALERTS_RESET=$(eval_js "(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.textContent.trim()==='All');return b?'PRESENT':'ABSENT';})()")
@@ -625,7 +667,12 @@ else
 fi
 
 # Storage: this screen is documented as honest about missing SMART data. It must
-# name the missing endpoint rather than showing a fake health row.
+# name the missing endpoint rather than showing a fake health row. The Alerts
+# detour closed the device, so go back to the fleet list and reopen it.
+click_text 'Home' >/dev/null
+sleep 2
+eval_js "(()=>{const r=[...document.querySelectorAll('.devices li')].find(x=>x.textContent.includes(${HOSTNAME@Q}));if(!r)return 'MISSING';const b=r.querySelector('button');if(!b)return 'NO-BUTTON';b.click();return 'CLICKED';})()" >/dev/null
+sleep 2
 click_text 'Storage' >/dev/null
 sleep 2
 STORAGE_TEXT=$(unquote "$(eval_js "(()=>{const m=document.querySelector('main')||document.body;return m.innerText.replace(/\s+/g,' ');})()")")
@@ -731,8 +778,10 @@ TOPBAR_STATUS=$(unquote "$(eval_js "document.querySelector('.topbar .status-dot 
 check "topbar reports online after selection" "${TOPBAR_STATUS}" "online"
 
 # The Overview has no vitals row: CPU, memory and disk live in the Performance
-# chart and its legend. Assert the chart's CPU series instead of a card.
-click_text 'Live' >/dev/null
+# chart and its legend. Assert the chart's CPU series instead of a card. The
+# window is a stored one on purpose: Live starts empty and fills from the right,
+# so its legend is legitimately absent until the first sample lands.
+click_text '1h' >/dev/null
 sleep 2
 CPU_BEFORE=$(unquote "$(eval_js "document.querySelector('.legend-item')?.textContent.replace(/\s+/g,' ').trim() || ''")")
 if [[ "${CPU_BEFORE}" == *"CPU"* ]]; then

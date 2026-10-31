@@ -395,30 +395,105 @@ button.kpi:hover {
   font-size: 0.68rem;
 }
 
+/* Entry gate. It is the only screen a signed-out user sees, so it carries the
+   same tokens as the shell instead of the legacy blue chrome: the topology
+   glow (mint radial over a faint dot grid) sits behind a card, and the primary
+   action is the accent button used elsewhere. */
 .auth-gate {
-  min-height: calc(100vh - 3rem);
+  min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 2rem 1rem;
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(40rem 27rem at 50% 43%, rgba(52, 211, 153, 0.22), rgba(52, 211, 153, 0.07) 52%, transparent 76%),
+    radial-gradient(72rem 48rem at 50% 46%, rgba(52, 211, 153, 0.10), transparent 70%),
+    radial-gradient(circle at 1px 1px, rgba(148, 163, 184, 0.09) 1px, transparent 0);
+  background-size: auto, auto, 32px 32px;
+  background-repeat: no-repeat, no-repeat, repeat;
 }
 
 .auth-card {
-  width: min(26rem, 100%);
-  background: rgba(15, 23, 42, 0.85);
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  border-radius: 14px;
-  padding: 1.4rem 1.5rem 1.5rem;
+  position: relative;
+  width: min(25rem, 100%);
+  background: rgba(17, 17, 19, 0.94);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.5rem 1.5rem 1.35rem;
+  box-shadow:
+    0 30px 80px -30px rgba(0, 0, 0, 0.9),
+    0 0 80px -34px rgba(52, 211, 153, 0.5);
 }
 
 .auth-card h1 {
-  margin: 0.2rem 0 0.4rem;
-  font-size: 1.25rem;
+  margin: 0.55rem 0 0.35rem;
+  font-size: 1.3rem;
+  letter-spacing: -0.01em;
+  color: var(--text-bright);
+}
+
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--accent);
+}
+
+.auth-brand span {
+  color: var(--text-bright);
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.auth-card input {
+  background: var(--card-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+}
+
+.auth-card input::placeholder {
+  color: var(--offline);
+}
+
+.auth-card input:focus {
+  outline: none;
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.12);
+}
+
+.auth-card button[type='submit'] {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.9rem;
+  font-weight: 650;
+}
+
+.auth-card button[type='submit']:hover:not(:disabled) {
+  background: #3ee0a5;
+}
+
+.auth-card button.secondary {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  font-weight: 500;
+}
+
+.auth-card button.secondary:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
 }
 
 .gate-hint {
-  margin: 0 0 0.9rem;
-  color: #94a3b8;
+  margin: 0 0 1.1rem;
+  color: var(--text-muted);
   font-size: 0.78rem;
+  line-height: 1.5;
 }
 
 .show-more {
@@ -2402,6 +2477,13 @@ button.secondary {
    fixed-height row of sidebar + main, and only .content scrolls. The .page.full
    modifier removes the max-width that would otherwise squeeze the sidebar. */
 .page.full {
+  max-width: none;
+  padding: 0;
+}
+
+/* The gate owns the whole viewport: no page gutter, no legacy body gradient
+   showing through at the edges. */
+.page.gate {
   max-width: none;
   padding: 0;
 }

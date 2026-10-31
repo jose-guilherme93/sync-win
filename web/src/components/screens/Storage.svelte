@@ -55,7 +55,7 @@
 
 <section class="storage">
   {#if !hw}
-    <EmptyState icon="💾" title="No telemetry yet" message="The agent has not reported disk metrics for this device." />
+    <EmptyState icon="disk" title="No telemetry yet" message="The agent has not reported disk metrics for this device." />
   {:else}
     <div class="summary">
       <article class="stat">
@@ -86,7 +86,7 @@
         <span class="hint">sorted by size · {formatBytes(usedBytes)} of {formatBytes(totalBytes)} used</span>
       </header>
       {#if disks.length === 0}
-        <EmptyState icon="💾" title="No partitions reported" message="The agent did not report any filesystem with a non-zero size." />
+        <EmptyState icon="disk" title="No partitions reported" message="The agent did not report any filesystem with a non-zero size." />
       {:else}
         <div class="parts">
           {#each disks as disk (disk.mount)}

@@ -494,7 +494,7 @@
   {#if loading && entries.length === 0}
     <div class="muted pad">Loading…</div>
   {:else if entries.length === 0}
-    <EmptyState icon="📋" title="No log entries" message="Nothing matches these filters. Widen the window or clear the search." />
+    <EmptyState icon="terminal" title="No log entries" message="Nothing matches these filters. Widen the window or clear the search." />
   {:else}
     <ul class="log-list">
       {#each entries as entry (entry.id)}

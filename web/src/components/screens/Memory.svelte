@@ -61,7 +61,7 @@
 
 <section class="mem">
   {#if !hw}
-    <EmptyState icon="🧠" title="No telemetry yet" message="The agent has not reported memory metrics for this device." />
+    <EmptyState icon="memory" title="No telemetry yet" message="The agent has not reported memory metrics for this device." />
   {:else}
     <div class="summary">
       <article class="stat">
@@ -132,7 +132,7 @@
         <span class="hint">{procs.length} shown · {formatBytes(procsRss)} RSS combined</span>
       </header>
       {#if procs.length === 0}
-        <EmptyState icon="📋" title="No process snapshot" message="The agent did not report top memory processes." />
+        <EmptyState icon="terminal" title="No process snapshot" message="The agent did not report top memory processes." />
       {:else}
         <table class="procs">
           <thead><tr><th>PID</th><th>Process</th><th class="num">RSS</th><th class="num">Share</th></tr></thead>

@@ -17,7 +17,7 @@ The project is built around three main components:
    - serves the web dashboard from the same origin (no CORS)
    - proxies Docker management commands to agents via command queue
    - brokers opt-in interactive remote sessions: it issues a one-time session ticket and relays bytes between a browser terminal and the agent's outbound tunnel, never naming a host or port
-   - manages user accounts with session-based auth (HttpOnly cookie/CSRF for dashboard, bearer compatibility for API clients)
+   - gates the dashboard with a single access token from the environment (`SYNCWIN_ACCESS_TOKEN`, 32+ characters), exchanged for a session (HttpOnly cookie/CSRF for the dashboard, bearer compatibility for API clients)
    - dispatches notifications via pluggable providers (Telegram, webhook, inbox)
    - never executes arbitrary commands on clients
 
@@ -37,10 +37,10 @@ The project is built around three main components:
 
 3. Web dashboard
    - Svelte 5 + TypeScript 6 + Vite 8 + Chart.js 4
-   - account-first: sign in / create account entry screen
-   - shows a dense fleet list with online state, last-seen time and inline CPU/RAM/disk percentage meters; detailed telemetry charts live on the device Overview
+   - token-first: a single access-token screen, configured only through the server's `.env`
+   - Home is the fleet: a dense list with online state, last-seen time and inline CPU/RAM/disk percentage meters. The sidebar carries fleet and administration navigation only — never a device menu, not even a disabled one
    - device Overview: axis-labelled Performance/Network/Disk I/O charts whose legends show last/average/min/max for every series, plus load and cores, storage, interfaces, top processes and system facts
-   - device screens rendered inline by the shell: Overview, CPU & Thermal, Memory, Storage, Network, Topology (the interactive network map), All sensors, Services (services and ports side by side with a detail drawer), Docker, Security (audit history plus host posture), Processes, Packages, Logs, Remote access, Settings
+   - opening a device leaves the fleet: the sidebar is hidden, the device header shows identity plus a `Home` back button, and the 15 sections become one horizontally scrollable tab row (hardware · system · access) rendered by `shell/DeviceTabs.svelte`: Overview, CPU & Thermal, Memory, Storage, Network, Topology (the interactive network map), Sensors, Docker, Processes, Services (services and ports side by side with a detail drawer), Packages, Logs, Security (audit history plus host posture), Remote access, Settings
    - Docker container management (list, start/stop/restart/kill/remove, exec, compose, prune)
    - Remote access screen: tabbed SSH terminal (xterm.js, up to six concurrent sessions, tabs named by the running program) and a scrollable recent-session audit; device actions live in Settings → Maintenance
    - Lynis security audit: run audit, read the stored report (hardening index, warnings/suggestions/categories) and history; host posture (public listeners, pending updates, failed units)
@@ -195,9 +195,9 @@ have a non-empty signature file and an embedded public key.
 - Keep the agent focused on explicit file collection and sync operations.
 - The contract (`COLLECTION-CONTRACT.md` + `agent/internal/contract/contract.json`) is the single source of truth for what the agent collects and sends.
 - Use the Makefile for environment work: `make dev` (containers, server hot-reload + web HMR, data in `data-dev/`), `make prod` (containers, built image, data in `data/`), `make help` for the rest.
-- The dev stack signs itself in: `compose.dev.yaml` bootstraps `demo@sync-win.local` / `sync-win-demo-password` and injects `SYNCWIN_DEV_TOKEN` and `VITE_DEV_TOKEN`, which the dashboard exchanges for a normal session cookie. The server ignores the token unless `SYNCWIN_ENV=development` and it never creates an account. Never run a reachable instance with `SYNCWIN_ENV=development`.
+- The dev stack signs itself in: `compose.dev.yaml` sets `SYNCWIN_ACCESS_TOKEN` (a fixed `dev-access-token-0123456789abcdef`) and passes the same value to the dashboard as `VITE_ACCESS_TOKEN`, which exchanges it for a normal session cookie. `make dev-token` prints the token and checks that sign-in answers `200`.
 - `make dev-agents` starts two 64 MB Alpine containers running the real agent against the dev stack, so the dashboard has devices reporting telemetry without a VM per device. `make dev-agents-full` adds one privileged Ubuntu systemd container with journald, apt, nginx, Lynis, the host Docker socket, sshd and a `devuser` account with the remote-access helper, which is what exercises Services, Logs, Packages, Security, Docker and real Remote access sessions. `make dev-agents-down` removes them; the device records stay.
-- `compose.yaml` is the stack a new user copies from the README: it pulls the published image and needs only `SYNCWIN_SECRET_KEY`. Keep it dependency-free — no checkout, no build, no other required variable.
+- `compose.yaml` is the stack a new user copies from the README: it pulls the published image and needs only `SYNCWIN_SECRET_KEY` and `SYNCWIN_ACCESS_TOKEN`. Keep it dependency-free — no checkout, no build, no other required variable.
 - `compose.prod.yaml` is for deploying from a checkout; `compose.dev.yaml` is for working on the code.
 
 ## Parallel agents
@@ -338,7 +338,7 @@ Use the most direct command for the module being changed.
 
 ## Security rules
 
-- Public self-registration is disabled by default (`SYNCWIN_ENABLE_REGISTRATION=false`); the first account is bootstrapped from `SYNCWIN_ADMIN_EMAIL`/`SYNCWIN_ADMIN_PASSWORD` on startup and never overwritten.
+- The dashboard has no accounts and no registration: `SYNCWIN_ACCESS_TOKEN` (32+ characters) is the only credential, read from the environment and never stored. A missing or short token leaves sign-in disabled with a `503` naming the variable, while agents keep syncing with their own device tokens.
 - Never execute arbitrary shell commands remotely. The single exception is the
   opt-in remote-access tunnel: dual-gated by `SYNCWIN_ENABLE_REMOTE_ACCESS` and
   the device's `allow_remote_access`, with the agent dialing its own loopback.
