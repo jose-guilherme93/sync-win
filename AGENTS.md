@@ -136,19 +136,27 @@ sync-win/
 ## Commit and release convention
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
-The `Release` workflow derives the version automatically from a **successful CI
-run on `main`** (`feat` = minor, `fix`/anything else = patch,
-`feat!`/`BREAKING CHANGE` = major). It triggers on CI completion, not on the
-push, so a red build cannot publish an image or a tag. `main` is protected:
-every change arrives through a pull request with all CI checks required,
-administrators included. Never bump versions or create tags by hand — use the
-right commit type instead.
 
-Every release also needs a written section in `CHANGELOG.md` for the version the
-workflow will compute (last tag + the Conventional Commits bump). The Release
-workflow reads that section, uses it as the GitHub Release body and fails before
-publishing the image when it is missing or empty. Do not rely on GitHub's
-generated "Full Changelog" notes.
+**release-please decides the version.** `.github/workflows/release-please.yml`
+reads the commits on `main` and keeps one open pull request containing the next
+version in `version.txt` and `.release-please-manifest.json`, plus a
+`CHANGELOG.md` section written from the commit subjects (`feat` = minor,
+`fix`/anything else = patch, `feat!`/`BREAKING CHANGE` = major).
+
+Merging that pull request is what decides a release. `.github/workflows/release.yml`
+then runs on the CI completion for that merge, publishes the image **before** it
+creates the tag, and opens the GitHub release with the section release-please
+wrote. It only acts when the manifest is ahead of the newest tag, so an ordinary
+merge is a no-op.
+
+- Never bump `version.txt`, the manifest or a tag by hand.
+- Never write the changelog section for a release by hand: release-please owns
+  that file, and a hand-written heading is a merge conflict waiting to happen.
+- `main` is protected: every change arrives through a pull request with all CI
+  checks required, administrators included.
+- Release Please opens its PR with `RELEASE_PLEASE_TOKEN` when that secret is
+  set. With the default token GitHub does not run workflows on the PR, so CI
+  would never report and a protected `main` could not merge it.
 
 ## Distribution
 
