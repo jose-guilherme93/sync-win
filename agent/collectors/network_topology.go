@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // NetworkRoute is one entry of the routing table.
@@ -96,7 +97,7 @@ func CollectNetworkTopology(ifaces []NetworkInterface, limits TopologyLimits) Ne
 	topology.Routes = capList(dedupeRoutes(readRoutes()), limits.MaxRoutes)
 	topology.DNS, topology.SearchDomains = readResolvConf()
 	topology.Neighbors = capList(readNeighbors(), limits.MaxNeighbors)
-	topology.Wireless = capList(readWireless(), limits.MaxWireless)
+	topology.Wireless = capList(mergeWireless(readWireless(), ifaces, iwSignalDBM), limits.MaxWireless)
 	topology.Tunnels = capList(tunnelsFrom(ifaces), limits.MaxTunnels)
 
 	for _, route := range topology.Routes {
@@ -399,9 +400,66 @@ func readIPv6Neighbors(path string) []NetworkNeighbor {
 	return neighbors
 }
 
-// readWireless reads the radio quality of every wireless interface.
+// readWireless reads the legacy radio statistics file.
 func readWireless() []WirelessLink {
 	return readWirelessFrom("/proc/net/wireless")
+}
+
+// mergeWireless completes the legacy statistics with every wireless interface
+// the interface scan found.
+//
+// /proc/net/wireless belongs to the Wireless Extensions. On a driver that only
+// speaks nl80211 the file exists and is empty, so a laptop that is on Wi-Fi
+// looked exactly like a machine with no radio at all: the dashboard said "no
+// wireless radios" while the link was up. The interface scan does not depend on
+// the legacy API (it reads sysfs), so an interface it classified as wireless is
+// reported even when the kernel gives no numbers for it. The signal comes from
+// `iw` when that tool is installed; without it the row still exists, with a
+// zero signal that the dashboard renders as "not reported" rather than "0 dBm".
+func mergeWireless(procLinks []WirelessLink, ifaces []NetworkInterface, signal func(string) (int, bool)) []WirelessLink {
+	links := append([]WirelessLink(nil), procLinks...)
+	seen := make(map[string]bool, len(links))
+	for _, link := range links {
+		seen[link.Interface] = true
+	}
+	for _, iface := range ifaces {
+		if iface.Kind != IfaceKindWifi || seen[iface.Name] {
+			continue
+		}
+		link := WirelessLink{Interface: iface.Name}
+		if signal != nil {
+			if dbm, ok := signal(iface.Name); ok {
+				link.SignalDBM = dbm
+			}
+		}
+		links = append(links, link)
+	}
+	return links
+}
+
+// iwSignalDBM reads the signal out of `iw dev <iface> link`. iw talks nl80211,
+// so it answers on the drivers that no longer fill /proc/net/wireless.
+func iwSignalDBM(iface string) (int, bool) {
+	output, available, err := commandOutputWithTimeout(2*time.Second, "iw", "dev", iface, "link")
+	if !available || err != nil {
+		return 0, false
+	}
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "signal:") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		value, err := strconv.ParseFloat(fields[1], 64)
+		if err != nil {
+			continue
+		}
+		return int(value), true
+	}
+	return 0, false
 }
 
 // readWirelessFrom reads a wireless statistics file.

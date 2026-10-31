@@ -184,3 +184,53 @@ func TestIsUsableGateway(t *testing.T) {
 		t.Error("a real gateway was rejected")
 	}
 }
+
+// A modern driver fills no legacy statistics, but the interface is still there.
+// Reporting "no wireless radios" for a machine that is on Wi-Fi was the bug this
+// guards against.
+func TestMergeWirelessKeepsInterfacesWithoutLegacyStats(t *testing.T) {
+	ifaces := []NetworkInterface{
+		{Name: "eth0", Kind: IfaceKindPhysical},
+		{Name: "wlp3s0", Kind: IfaceKindWifi},
+	}
+
+	links := mergeWireless(nil, ifaces, func(name string) (int, bool) {
+		if name != "wlp3s0" {
+			t.Fatalf("signal asked for %q, want only the wireless interface", name)
+		}
+		return -52, true
+	})
+
+	if len(links) != 1 {
+		t.Fatalf("links = %d, want 1", len(links))
+	}
+	if links[0].Interface != "wlp3s0" || links[0].SignalDBM != -52 {
+		t.Errorf("wireless = %+v, want wlp3s0 at -52 dBm", links[0])
+	}
+}
+
+func TestMergeWirelessKeepsLegacySignalsAndDoesNotDuplicate(t *testing.T) {
+	proc := []WirelessLink{{Interface: "wlan0", SignalDBM: -60, Quality: 70, NoiseDBM: -256}}
+	ifaces := []NetworkInterface{{Name: "wlan0", Kind: IfaceKindWifi}}
+
+	links := mergeWireless(proc, ifaces, func(string) (int, bool) {
+		t.Fatal("signal must not be read for an interface the kernel already reported")
+		return 0, false
+	})
+
+	if len(links) != 1 || links[0].SignalDBM != -60 {
+		t.Fatalf("links = %+v, want the legacy row untouched", links)
+	}
+}
+
+func TestMergeWirelessWithoutToolStillReportsTheRadio(t *testing.T) {
+	ifaces := []NetworkInterface{{Name: "wlp3s0", Kind: IfaceKindWifi}}
+
+	links := mergeWireless(nil, ifaces, func(string) (int, bool) { return 0, false })
+	if len(links) != 1 {
+		t.Fatalf("links = %d, want 1 even when iw is missing", len(links))
+	}
+	if links[0].SignalDBM != 0 {
+		t.Errorf("signal = %d, want 0 (not reported)", links[0].SignalDBM)
+	}
+}
