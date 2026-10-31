@@ -1587,9 +1587,8 @@
               <span class="dropdown-icon"><Icon name="bell" size={14} /></span> Notifications
             </button>
             <div class="dropdown-divider"></div>
-            <div class="dropdown-divider"></div>
             <button class="dropdown-item danger" on:click={signOut}>
-              Sign out
+              <span class="dropdown-icon"><Icon name="logout" size={14} /></span> Sign out
             </button>
           </div>
         </div>
