@@ -2081,7 +2081,7 @@ func (s *Store) ownerCount() (int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var count int
-	if err := s.db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); err != nil {
+	if err := s.db.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM users").Scan(&count); err != nil {
 		return 0, err
 	}
 	return count, nil
@@ -2092,7 +2092,7 @@ func (s *Store) oldestOwner() (User, error) {
 	defer s.mu.RUnlock()
 	var u User
 	var created string
-	row := s.db.QueryRow("SELECT id, email, password_hash, created_at FROM users ORDER BY created_at ASC, id ASC LIMIT 1")
+	row := s.db.QueryRowContext(context.Background(), "SELECT id, email, password_hash, created_at FROM users ORDER BY created_at ASC, id ASC LIMIT 1")
 	if err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &created); err != nil {
 		return User{}, err
 	}

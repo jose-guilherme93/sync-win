@@ -178,7 +178,7 @@ func TestAuthMe(t *testing.T) {
 // once no matter how many logins happen.
 func TestAccessTokenRejectsWrongToken(t *testing.T) {
 	s := newTestServer(t)
-	for _, body := range []string{`{"token":"wrong"}` , `{"token":""}`, `{}`} {
+	for _, body := range []string{`{"token":"wrong"}`, `{"token":""}`, `{}`} {
 		req := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
