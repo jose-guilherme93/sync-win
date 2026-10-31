@@ -280,7 +280,7 @@ lint: ## Run Go and web linters
 # lint` rather than an optional extra.
 GOLANGCI_VERSION := v2.14.0
 # Diff base for the "new issues only" check, matching the CI action.
-LINT_BASE ?= origin/main
+LINT_BASE ?= origin/develop
 
 .PHONY: lint-go
 lint-go: ## Run golangci-lint exactly as CI does (server and agent)
@@ -297,7 +297,7 @@ lint-all: lint lint-go ## Full local lint, matching CI and go vet
 .PHONY: fix-lint-base
 fix-lint-base: ## Report the commit lint should diff against
 	@git fetch origin --quiet
-	@printf 'LINT_BASE=%s\n' "$$(git merge-base origin/main HEAD)"
+	@printf 'LINT_BASE=%s\n' "$$(git merge-base origin/develop HEAD)"
 
 .PHONY: fmt
 fmt: ## Format Go sources
