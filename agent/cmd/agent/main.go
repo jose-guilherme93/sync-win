@@ -981,7 +981,7 @@ func fetchCollectionInterval(serverURL, deviceID, deviceToken string) (time.Dura
 			return time.Duration(seconds) * time.Second, nil
 		}
 	}
-	// An agent built before a cadence was added cannot honour it. Falling back to
+	// An agent built before a cadence was added cannot honor it. Falling back to
 	// the closest slower interval keeps the device reporting instead of failing
 	// the settings refresh on every cycle; the next agent update picks it up.
 	best := 0

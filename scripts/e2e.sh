@@ -778,8 +778,10 @@ TOPBAR_STATUS=$(unquote "$(eval_js "document.querySelector('.topbar .status-dot 
 check "topbar reports online after selection" "${TOPBAR_STATUS}" "online"
 
 # The Overview has no vitals row: CPU, memory and disk live in the Performance
-# chart and its legend. Assert the chart's CPU series instead of a card.
-click_text 'Live' >/dev/null
+# chart and its legend. Assert the chart's CPU series instead of a card. The
+# window is a stored one on purpose: Live starts empty and fills from the right,
+# so its legend is legitimately absent until the first sample lands.
+click_text '1h' >/dev/null
 sleep 2
 CPU_BEFORE=$(unquote "$(eval_js "document.querySelector('.legend-item')?.textContent.replace(/\s+/g,' ').trim() || ''")")
 if [[ "${CPU_BEFORE}" == *"CPU"* ]]; then
