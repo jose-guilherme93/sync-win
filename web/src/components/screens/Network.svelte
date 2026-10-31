@@ -28,6 +28,8 @@
   } from '../../lib/network'
   import EmptyState from '../ui/EmptyState.svelte'
   import NetworkInspector from '../network/NetworkInspector.svelte'
+  import DashboardLayout from '../ui/DashboardLayout.svelte'
+  import type { PanelDefinition } from '../../lib/dashboard-layout'
   import type { HealthSample } from '../../lib/network-health'
   import Icon from '../ui/Icon.svelte'
   import MiniSparkline from '../ui/MiniSparkline.svelte'
@@ -94,6 +96,20 @@
 
   // One drawer serves every stat tile. Its samples live only while this screen
   // is mounted, so a device nobody is looking at pays nothing for them.
+  // Panels the operator can reorder, resize and hide. The ids are stable: they
+  // are the keys of the layout kept in localStorage.
+  const PANELS: PanelDefinition[] = [
+    { id: 'vitals', label: 'Vitals', defaultSpan: 12 },
+    { id: 'traffic', label: 'Traffic by interface', defaultSpan: 12 },
+    { id: 'interfaces', label: 'Interfaces', defaultSpan: 12 },
+    { id: 'ip', label: 'IP configuration', defaultSpan: 6 },
+    { id: 'health', label: 'Packet health', defaultSpan: 6 },
+    { id: 'neighbours', label: 'Neighbours', defaultSpan: 6 },
+    { id: 'exposure', label: 'Exposure', defaultSpan: 6 },
+    { id: 'wireless', label: 'Wireless', defaultSpan: 6 },
+    { id: 'tunnels', label: 'Tunnels and firewall', defaultSpan: 6 }
+  ]
+
   let lens: NetworkLens | null = null
   let healthSamples: HealthSample[] = []
   let healthDeviceId = ''
@@ -379,6 +395,8 @@
       </span>
       <span class="map-link-arrow" aria-hidden="true">→</span>
     </button>
+    {#snippet panelBody(id: string)}
+      {#if id === 'vitals'}
     <div class="summary">
       <button type="button" class="stat" on:click={() => (lens = 'download')} aria-label="Inspect download">
         <span class="label">Download</span>
@@ -428,7 +446,7 @@
         </span>
       </button>
     </div>
-
+      {:else if id === 'traffic'}
     <article class="card">
       <header class="card-head">
         <h2>Traffic by interface</h2>
@@ -472,7 +490,7 @@
         </p>
       {/if}
     </article>
-
+      {:else if id === 'interfaces'}
     <article class="card">
       <header class="card-head">
         <h2>Interfaces</h2>
@@ -560,8 +578,7 @@
         </div>
       {/if}
     </article>
-
-    <div class="split">
+      {:else if id === 'ip'}
       <article class="card">
         <header class="card-head">
           <h2>IP configuration</h2>
@@ -601,7 +618,7 @@
           {/if}
         {/if}
       </article>
-
+      {:else if id === 'health'}
       <article class="card">
         <header class="card-head">
           <h2>Packet health</h2>
@@ -646,9 +663,7 @@
           </div>
         {/if}
       </article>
-    </div>
-
-    <div class="split">
+      {:else if id === 'neighbours'}
       <article class="card">
         <header class="card-head">
           <h2>Neighbours</h2>
@@ -681,7 +696,7 @@
           {/if}
         {/if}
       </article>
-
+      {:else if id === 'exposure'}
       <article class="card">
         <header class="card-head">
           <h2>Exposure</h2>
@@ -721,9 +736,7 @@
           <p class="foot-note">The full socket inventory lives in the Services screen.</p>
         {/if}
       </article>
-    </div>
-
-    <div class="split">
+      {:else if id === 'wireless'}
       <article class="card">
         <header class="card-head">
           <h2>Wireless</h2>
@@ -745,7 +758,7 @@
           <p class="foot-note">The radio itself is read from sysfs; the numbers come from the kernel's wireless statistics or from <code>iw</code> when it is installed. SSID, channel and bitrate need root.</p>
         {/if}
       </article>
-
+      {:else if id === 'tunnels'}
       <article class="card">
         <header class="card-head">
           <h2>Tunnels and firewall</h2>
@@ -778,8 +791,10 @@
           <p class="foot-note">The agent runs unprivileged: the rules are not readable, only the state of the service.</p>
         {/if}
       </article>
-    </div>
+      {/if}
+    {/snippet}
 
+    <DashboardLayout screen="network" definitions={PANELS} panel={panelBody} />
     {#if lens}
       <NetworkInspector
         {lens}
