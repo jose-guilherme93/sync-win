@@ -5,9 +5,11 @@ workflow reads the section matching the version it is about to publish and uses
 it as the GitHub Release body. A missing or empty section stops the release
 before the image is built, so a tag always carries written notes.
 
-The next version is the last tag plus the Conventional Commits bump:
+Versions are decided by release-please: it reads the Conventional Commits on
+`main` and opens a pull request with the next version and the section below.
 `feat:` increases the minor version, everything else increases the patch
-version, and a breaking change increases the major version.
+version, and a breaking change increases the major version. Merging that pull
+request publishes the image and creates the tag.
 
 ## [0.16.1](https://github.com/jose-guilherme93/sync-win/compare/v0.16.0...v0.16.1) (2026-10-31)
 
