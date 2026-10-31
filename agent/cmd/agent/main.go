@@ -243,8 +243,10 @@ func runDockerRequestPoller(ctx context.Context, serverURL, deviceID, deviceToke
 
 func dockerRequestAllowed(policy localPolicy, reqType string) bool {
 	switch reqType {
-	case "list", "inspect", "stats", "logs":
+	case "list", "inspect", "stats", "logs", "image_list", "image_inspect":
 		return policy.AllowDockerRead
+	case "image_pull", "image_remove":
+		return policy.AllowDockerImages
 	case "start", "stop", "restart", "kill", "remove", "pause", "unpause":
 		return policy.AllowDockerLifecycle
 	case "exec":
@@ -396,6 +398,42 @@ func executeDockerRequest(req dockerRequest) dockerResult {
 
 	case "compose_logs":
 		output, err := collectors.DockerComposeLogs(req.Target)
+		if err != nil {
+			return dockerResult{"failed", err.Error()}
+		}
+		return dockerResult{"completed", output}
+
+	case "image_list":
+		images, err := collectors.DockerImages()
+		if err != nil {
+			return dockerResult{"failed", err.Error()}
+		}
+		if images == nil {
+			images = []collectors.DockerImage{}
+		}
+		data, err := json.Marshal(images)
+		if err != nil {
+			return dockerResult{"failed", err.Error()}
+		}
+		return dockerResult{"completed", string(data)}
+
+	case "image_inspect":
+		detail, err := collectors.DockerImageInspect(req.Target)
+		if err != nil {
+			return dockerResult{"failed", err.Error()}
+		}
+		return dockerResult{"completed", detail}
+
+	case "image_pull":
+		output, err := collectors.DockerImagePull(req.Target, syncwinContract.DockerPullTimeout())
+		if err != nil {
+			return dockerResult{"failed", err.Error()}
+		}
+		return dockerResult{"completed", output}
+
+	case "image_remove":
+		force := req.Payload == "force"
+		output, err := collectors.DockerImageRemove(req.Target, force)
 		if err != nil {
 			return dockerResult{"failed", err.Error()}
 		}
@@ -632,7 +670,7 @@ func cmdDaemon(args []string) {
 	serverURL := fs.String("server", "http://localhost:8080", "server URL")
 	deviceID := fs.String("device-id", "", "device ID")
 	deviceToken := fs.String("device-token", "", "device token")
-	interval := fs.Duration("interval", 10*time.Second, "telemetry interval")
+	interval := fs.Duration("interval", time.Duration(syncwinContract.Telemetry.IntervalSecondsDefault)*time.Second, "telemetry interval")
 	preferenceInterval := fs.Duration("preference-interval", time.Duration(syncwinContract.PreferencesSync.IntervalSecondsDefault)*time.Second, "preference sync interval")
 	appsInterval := fs.Duration("apps-interval", time.Duration(syncwinContract.AppsInventory.RefreshIntervalSeconds)*time.Second, "application inventory interval")
 	systemInterval := fs.Duration("system-interval", time.Duration(syncwinContract.SystemInventory.RefreshIntervalSeconds)*time.Second, "systemd unit and listening port inventory interval")
@@ -937,10 +975,26 @@ func fetchCollectionInterval(serverURL, deviceID, deviceToken string) (time.Dura
 	if err := json.Unmarshal(body, &settings); err != nil {
 		return 0, fmt.Errorf("decode device settings: %w", err)
 	}
-	for _, seconds := range syncwinContract.Telemetry.IntervalSecondsAllowed {
+	allowed := syncwinContract.Telemetry.IntervalSecondsAllowed
+	for _, seconds := range allowed {
 		if settings.CollectionIntervalSeconds == seconds {
 			return time.Duration(seconds) * time.Second, nil
 		}
+	}
+	// An agent built before a cadence was added cannot honour it. Falling back to
+	// the closest slower interval keeps the device reporting instead of failing
+	// the settings refresh on every cycle; the next agent update picks it up.
+	best := 0
+	for _, seconds := range allowed {
+		if seconds > settings.CollectionIntervalSeconds && (best == 0 || seconds < best) {
+			best = seconds
+		}
+	}
+	if best == 0 && len(allowed) > 0 {
+		best = allowed[len(allowed)-1]
+	}
+	if best > 0 {
+		return time.Duration(best) * time.Second, nil
 	}
 	return 0, fmt.Errorf("server returned unsupported collection interval %d seconds", settings.CollectionIntervalSeconds)
 }
@@ -2171,6 +2225,7 @@ type localPolicy struct {
 	AllowDockerExec       bool   `json:"allow_docker_exec"`
 	AllowDockerPrune      bool   `json:"allow_docker_prune"`
 	AllowDockerCompose    bool   `json:"allow_docker_compose"`
+	AllowDockerImages     bool   `json:"allow_docker_images"`
 	AllowRemoteAccess     bool   `json:"allow_remote_access"`
 	SSHUser               string `json:"ssh_user,omitempty"`
 	CommandTimeoutSeconds int    `json:"command_timeout_seconds"`
@@ -2192,6 +2247,7 @@ func loadLocalPolicy() localPolicy {
 		AllowDockerExec:       defaults.AllowDockerExec,
 		AllowDockerPrune:      defaults.AllowDockerPrune,
 		AllowDockerCompose:    defaults.AllowDockerCompose,
+		AllowDockerImages:     defaults.AllowDockerImages,
 		AllowRemoteAccess:     defaults.AllowRemoteAccess,
 		CommandTimeoutSeconds: defaults.CommandTimeoutSeconds,
 	}
@@ -2282,6 +2338,7 @@ func policyDefaultsMap() map[string]any {
 		"allow_docker_exec":       d.AllowDockerExec,
 		"allow_docker_prune":      d.AllowDockerPrune,
 		"allow_docker_compose":    d.AllowDockerCompose,
+		"allow_docker_images":     d.AllowDockerImages,
 		"allow_remote_access":     d.AllowRemoteAccess,
 		"command_timeout_seconds": d.CommandTimeoutSeconds,
 	}

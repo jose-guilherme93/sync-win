@@ -15,8 +15,10 @@ import {
   friendlyDockerError,
   normalizeDockerState,
   parseContainerList,
+  parseImageList,
   type DockerCommandResult,
   type DockerContainer,
+  type DockerImage,
   type DockerState
 } from './docker'
 
@@ -211,4 +213,49 @@ export function openDockerStream(deviceId: string, handlers: DockerStreamHandler
     source?.close()
     source = null
   }
+}
+
+// ---- Images -------------------------------------------------------------
+
+export async function fetchImageList(
+  deviceId: string,
+  options: DockerRequestOptions = {}
+): Promise<DockerImage[]> {
+  // A first `docker images` on a busy host can take a few seconds; the default
+  // deadline is enough, but the timeout is left to the caller's options.
+  const result = await runDockerCommand(deviceId, 'image_list', '', '', options)
+  return parseImageList(result.message)
+}
+
+export async function pullImage(
+  deviceId: string,
+  reference: string,
+  options: DockerRequestOptions = {}
+): Promise<string> {
+  // A pull runs until the layer download finishes, so it gets its own, much
+  // longer budget than a lifecycle action.
+  const result = await runDockerCommand(deviceId, 'image_pull', reference, '', {
+    timeoutMs: 15 * 60_000,
+    ...options
+  })
+  return result.message ?? ''
+}
+
+export async function removeImage(
+  deviceId: string,
+  reference: string,
+  force = false,
+  options: DockerRequestOptions = {}
+): Promise<string> {
+  const result = await runDockerCommand(deviceId, 'image_remove', reference, force ? 'force' : '', options)
+  return result.message ?? ''
+}
+
+export async function inspectImage(
+  deviceId: string,
+  reference: string,
+  options: DockerRequestOptions = {}
+): Promise<string> {
+  const result = await runDockerCommand(deviceId, 'image_inspect', reference, '', options)
+  return result.message ?? ''
 }

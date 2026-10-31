@@ -650,7 +650,7 @@ func (s *Store) migrateAddDeviceSettingsColumns(ctx context.Context) error {
 	for _, column := range []struct{ name, definition string }{
 		{"display_name", "TEXT NOT NULL DEFAULT ''"},
 		{"tags_json", "TEXT NOT NULL DEFAULT '[]'"},
-		{"collection_interval_seconds", "INTEGER NOT NULL DEFAULT 10"},
+		{"collection_interval_seconds", "INTEGER NOT NULL DEFAULT 2"},
 	} {
 		var count int
 		if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM pragma_table_info('devices') WHERE name=?", column.name).Scan(&count); err != nil {
@@ -796,7 +796,7 @@ func (s *Store) initSchema() error {
 		updated_at TEXT NOT NULL,
 		display_name TEXT NOT NULL DEFAULT '',
 		tags_json TEXT NOT NULL DEFAULT '[]',
-		collection_interval_seconds INTEGER NOT NULL DEFAULT 10,
+		collection_interval_seconds INTEGER NOT NULL DEFAULT 2,
 		updates_json TEXT NOT NULL DEFAULT '{"status":"not_reported","updates":[]}',
 		machine_id TEXT NOT NULL DEFAULT '',
 		-- The Docker container list is sampled slowly and is several kilobytes.
@@ -2434,10 +2434,12 @@ func normalizeDeviceSettings(settings DeviceSettings) (DeviceSettings, string, e
 	if utf8.RuneCountInString(settings.DisplayName) > 64 {
 		return DeviceSettings{}, "", errors.New("display name must be at most 64 characters")
 	}
+	// Two seconds is the floor: the live chart draws a one-minute window, and at
+	// ten seconds a change only had six chances to be seen in it.
 	switch settings.CollectionIntervalSeconds {
-	case 5, 10, 30, 60:
+	case 2, 5, 10, 30, 60:
 	default:
-		return DeviceSettings{}, "", errors.New("collection interval must be 5, 10, 30, or 60 seconds")
+		return DeviceSettings{}, "", errors.New("collection interval must be 2, 5, 10, 30, or 60 seconds")
 	}
 	if len(settings.Tags) > maxDeviceTags {
 		return DeviceSettings{}, "", fmt.Errorf("at most %d tags are allowed", maxDeviceTags)

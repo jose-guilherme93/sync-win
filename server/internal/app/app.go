@@ -3553,7 +3553,8 @@ func (s *Server) handleNotificationStream(w http.ResponseWriter, r *http.Request
 
 func dockerRequestIsReadOnly(reqType string) bool {
 	switch reqType {
-	case "list", "inspect", "stats", "logs", "compose_read", "compose_ps", "compose_logs":
+	case "list", "inspect", "stats", "logs", "image_list", "image_inspect",
+		"compose_read", "compose_ps", "compose_logs":
 		return true
 	default:
 		return false
@@ -3566,6 +3567,7 @@ func dockerRequestIsReadOnly(reqType string) bool {
 func validDockerRequestType(reqType string) bool {
 	switch reqType {
 	case "list", "inspect", "stats", "logs",
+		"image_list", "image_inspect", "image_pull", "image_remove",
 		"start", "stop", "restart", "kill", "remove", "pause", "unpause",
 		"exec",
 		"compose_read", "compose_write", "compose_up", "compose_down", "compose_ps", "compose_logs",

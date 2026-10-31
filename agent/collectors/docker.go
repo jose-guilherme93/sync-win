@@ -9,17 +9,22 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 )
 
 const (
-	dockerSocketPath       = "/var/run/docker.sock"
-	dockerRequestTimeout   = 30 * time.Second
+	dockerSocketPath     = "/var/run/docker.sock"
+	dockerRequestTimeout = 30 * time.Second
+	// A first pull of a large image takes minutes; this is the deadline for the
+	// request itself, not for the dashboard command, which has its own timeout.
+	dockerPullTimeout      = 10 * time.Minute
 	maxDockerResponseBytes = 1 << 20
 	maxDockerOutputBytes   = 64 << 10
 )
@@ -1213,3 +1218,186 @@ func shouldSkipComposePath(path string) bool {
 	}
 	return false
 }
+
+// DockerImage is one image in the local store, reduced to what the dashboard
+// shows. Tags stay a list: an image built twice under two names is one blob
+// with two ways to refer to it, and hiding that makes "why is this still taking
+// space" unanswerable.
+type DockerImage struct {
+	ID         string   `json:"id"`
+	RepoTags   []string `json:"repo_tags"`
+	RepoDigest string   `json:"repo_digest,omitempty"`
+	SizeBytes  int64    `json:"size_bytes"`
+	CreatedAt  int64    `json:"created_at"`
+	Containers int64    `json:"containers"`
+}
+
+// dockerImagesResponse is the subset of GET /images/json that is decoded.
+type dockerImagesResponse struct {
+	ID          string   `json:"Id"`
+	RepoTags    []string `json:"RepoTags"`
+	RepoDigests []string `json:"RepoDigests"`
+	Size        int64    `json:"Size"`
+	Created     int64    `json:"Created"`
+	Containers  int64    `json:"Containers"`
+}
+
+// DockerImages lists the images on the device.
+func DockerImages() ([]DockerImage, error) {
+	data, status, err := dockerRequest("GET", "/images/json", nil)
+	if err != nil {
+		return nil, err
+	}
+	if status >= 400 {
+		return nil, fmt.Errorf("docker images returned %d: %s", status, capDockerOutput(string(data)))
+	}
+	var raw []dockerImagesResponse
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("unmarshal images: %w", err)
+	}
+	images := make([]DockerImage, 0, len(raw))
+	for _, item := range raw {
+		image := DockerImage{
+			ID:         item.ID,
+			RepoTags:   item.RepoTags,
+			SizeBytes:  item.Size,
+			CreatedAt:  item.Created,
+			Containers: item.Containers,
+		}
+		if image.RepoTags == nil {
+			// A dangling image has no tag at all; an empty list keeps the JSON
+			// shape stable for the dashboard.
+			image.RepoTags = []string{}
+		}
+		if len(item.RepoDigests) > 0 {
+			image.RepoDigest = item.RepoDigests[0]
+		}
+		images = append(images, image)
+	}
+	// Newest first: the image that was just pulled is the one being looked for.
+	sort.Slice(images, func(i, j int) bool { return images[i].CreatedAt > images[j].CreatedAt })
+	return images, nil
+}
+
+// DockerImageInspect returns the engine's own description of an image.
+func DockerImageInspect(ref string) (string, error) {
+	if err := validateImageRef(ref); err != nil {
+		return "", err
+	}
+	data, status, err := dockerRequest("GET", "/images/"+url.PathEscape(ref)+"/json", nil)
+	if err != nil {
+		return "", err
+	}
+	if status >= 400 {
+		return "", fmt.Errorf("docker image inspect returned %d: %s", status, capDockerOutput(string(data)))
+	}
+	return capDockerOutput(string(data)), nil
+}
+
+// DockerImagePull downloads an image reference. Docker streams progress as
+// newline-delimited JSON, may report a failure inside a 200 response, and a
+// first pull of a large image takes minutes, so it gets its own deadline.
+func DockerImagePull(ref string, timeout time.Duration) (string, error) {
+	name, tag, err := splitImageRef(ref)
+	if err != nil {
+		return "", err
+	}
+	if timeout <= 0 {
+		timeout = dockerPullTimeout
+	}
+	query := "fromImage=" + url.QueryEscape(name)
+	if tag != "" {
+		query += "&tag=" + url.QueryEscape(tag)
+	}
+	data, status, err := dockerRequestWithTimeout("POST", "/images/create?"+query, nil, timeout)
+	if err != nil {
+		return "", err
+	}
+	if status >= 400 {
+		return "", fmt.Errorf("docker pull returned %d: %s", status, capDockerOutput(string(data)))
+	}
+	last := ""
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var message struct {
+			Status string `json:"status"`
+			Error  string `json:"error"`
+		}
+		if err := json.Unmarshal([]byte(line), &message); err != nil {
+			continue
+		}
+		if message.Error != "" {
+			return "", fmt.Errorf("docker pull failed: %s", message.Error)
+		}
+		if message.Status != "" {
+			last = message.Status
+		}
+	}
+	if last == "" {
+		last = "pulled " + ref
+	}
+	return capDockerOutput(last), nil
+}
+
+// DockerImageRemove deletes an image reference from the local store.
+func DockerImageRemove(ref string, force bool) (string, error) {
+	if err := validateImageRef(ref); err != nil {
+		return "", err
+	}
+	path := "/images/" + url.PathEscape(ref)
+	if force {
+		path += "?force=1"
+	}
+	data, status, err := dockerRequest("DELETE", path, nil)
+	if err != nil {
+		return "", err
+	}
+	if status >= 400 {
+		return "", fmt.Errorf("docker image remove returned %d: %s", status, capDockerOutput(string(data)))
+	}
+	return capDockerOutput(string(data)), nil
+}
+
+// validateImageRef bounds and shapes an image reference before it is put in a
+// URL path. It accepts a name, an optional tag and an optional digest, which is
+// everything `docker pull` accepts.
+func validateImageRef(ref string) error {
+	_, _, err := splitImageRef(ref)
+	return err
+}
+
+// splitImageRef separates a reference into the name and tag Docker's pull
+// endpoint expects. A registry with a port contains a colon before the last
+// slash, so the tag split looks for the last colon after the last slash.
+func splitImageRef(ref string) (string, string, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" || len(ref) > 255 {
+		return "", "", fmt.Errorf("invalid image reference")
+	}
+	if strings.Contains(ref, "@") {
+		if !imageDigestPattern.MatchString(ref) {
+			return "", "", fmt.Errorf("invalid image reference")
+		}
+		return ref, "", nil
+	}
+	name, tag := ref, ""
+	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
+		name, tag = ref[:i], ref[i+1:]
+	}
+	if !imageNamePattern.MatchString(name) {
+		return "", "", fmt.Errorf("invalid image reference")
+	}
+	if tag != "" && !imageTagPattern.MatchString(tag) {
+		return "", "", fmt.Errorf("invalid image tag")
+	}
+	return name, tag, nil
+}
+
+var (
+	imageNamePattern   = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,254}$`)
+	imageTagPattern    = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$`)
+	imageDigestPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/-]*@sha256:[a-f0-9]{64}$`)
+)

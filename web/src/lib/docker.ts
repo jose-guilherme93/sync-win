@@ -559,3 +559,64 @@ export function filterLogLines(text: string, query: string): string {
     .filter((line) => line.toLowerCase().includes(needle))
     .join('\n')
 }
+
+// ---- Images -------------------------------------------------------------
+//
+// The engine's image list, reduced to what the screen shows. A tag is the
+// address a container refers to; the ID is the blob. Keeping both makes
+// "two tags, one 1.2 GB layer" visible instead of surprising.
+
+export type DockerImage = {
+  id: string
+  repo_tags: string[]
+  repo_digest?: string
+  size_bytes: number
+  /** Unix seconds, from the engine. */
+  created_at: number
+  /** Containers currently using this image. */
+  containers: number
+}
+
+export function normalizeImages(raw: unknown): DockerImage[] {
+  if (!Array.isArray(raw)) return []
+  const images: DockerImage[] = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const value = item as Record<string, unknown>
+    const tags = Array.isArray(value.repo_tags)
+      ? value.repo_tags.filter((tag): tag is string => typeof tag === 'string' && tag !== '<none>:<none>')
+      : []
+    images.push({
+      id: typeof value.id === 'string' ? value.id : '',
+      repo_tags: tags,
+      repo_digest: typeof value.repo_digest === 'string' && value.repo_digest ? value.repo_digest : undefined,
+      size_bytes: typeof value.size_bytes === 'number' ? value.size_bytes : 0,
+      created_at: typeof value.created_at === 'number' ? value.created_at : 0,
+      containers: typeof value.containers === 'number' ? value.containers : 0
+    })
+  }
+  return images
+}
+
+export function parseImageList(message: string | undefined): DockerImage[] {
+  if (!message || !message.trim()) return []
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(message)
+  } catch {
+    throw new Error('The device returned an unreadable image list')
+  }
+  if (!Array.isArray(parsed)) throw new Error('The device returned an unexpected image list')
+  return normalizeImages(parsed)
+}
+
+/** The shortest, most useful name for an image: its first tag, or the id. */
+export function imageLabel(image: DockerImage): string {
+  if (image.repo_tags.length > 0) return image.repo_tags[0]
+  return image.id.replace(/^sha256:/, '').slice(0, 12)
+}
+
+/** A short, stable id for the row key and the detail header. */
+export function shortImageId(image: DockerImage): string {
+  return image.id.replace(/^sha256:/, '').slice(0, 12)
+}
