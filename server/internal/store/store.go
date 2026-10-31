@@ -220,6 +220,9 @@ type HardwareStats struct {
 	CPUCoreUsage       []float64         `json:"cpu_core_usage,omitempty"`
 	TopCPUProcesses    []ProcessInfo     `json:"top_cpu_processes,omitempty"`
 	TopMemProcesses    []ProcessInfo     `json:"top_mem_processes,omitempty"`
+	StoppedProcesses   []ProcessInfo     `json:"stopped_processes,omitempty"`
+	ZombieProcesses    []ProcessInfo     `json:"zombie_processes,omitempty"`
+	ProcessSummary     *ProcessSummary   `json:"process_summary,omitempty"`
 	DockerAvailable    bool              `json:"docker_available"`
 	DockerContainers   []DockerContainer `json:"docker_containers,omitempty"`
 	// True only when the agent actually listed containers on this sample. The
@@ -249,10 +252,28 @@ type DiskPartition struct {
 }
 
 type ProcessInfo struct {
-	PID         int     `json:"pid"`
-	Name        string  `json:"name"`
-	CPUPercent  float64 `json:"cpu_percent"`
-	MemRSSBytes uint64  `json:"mem_rss_bytes"`
+	PID            int     `json:"pid"`
+	PPID           int     `json:"ppid,omitempty"`
+	Name           string  `json:"name"`
+	User           string  `json:"user,omitempty"`
+	State          string  `json:"state,omitempty"`
+	CPUPercent     float64 `json:"cpu_percent"`
+	MemRSSBytes    uint64  `json:"mem_rss_bytes"`
+	MemVirtBytes   uint64  `json:"mem_virt_bytes,omitempty"`
+	Threads        int     `json:"threads,omitempty"`
+	ElapsedSeconds int64   `json:"elapsed_seconds,omitempty"`
+	Command        string  `json:"command,omitempty"`
+}
+
+type ProcessSummary struct {
+	Total     int `json:"total"`
+	Running   int `json:"running"`
+	Sleeping  int `json:"sleeping"`
+	DiskSleep int `json:"disk_sleep"`
+	Stopped   int `json:"stopped"`
+	Zombie    int `json:"zombie"`
+	Other     int `json:"other"`
+	Threads   int `json:"threads"`
 }
 
 type DeviceLog struct {

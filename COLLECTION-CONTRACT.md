@@ -117,7 +117,7 @@ reportado quando um canal `hwmon` tem label de rail de CPU (`Vcore`, `CPU`,
 `VDDCR`, `SVI`) e leitura na faixa plausível de 0,4–2,5 V; caso contrário é
 omitido em vez de exibir um rail de 12 V como se fosse tensão de core.
 
-Campos adicionais coletados: `battery_percent`, `battery_status`, `network_ifaces[]` (inclui `rx_errors`/`tx_errors`), `disk_partitions[]`, `swap_used_bytes`/`swap_total_bytes`, `cpu_core_usage[]`, `top_cpu_processes[]`/`top_mem_processes[]`, `docker_available`/`docker_containers[]`, `lynis_available` e `logs[]`. `power_watts` é a potência instantânea real (watts), não a porcentagem da bateria.
+Campos adicionais coletados: `battery_percent`, `battery_status`, `network_ifaces[]` (inclui `rx_errors`/`tx_errors`), `disk_partitions[]`, `swap_used_bytes`/`swap_total_bytes`, `cpu_core_usage[]`, `top_cpu_processes[]`/`top_mem_processes[]`/`stopped_processes[]`/`zombie_processes[]`/`process_summary`, `docker_available`/`docker_containers[]`, `lynis_available` e `logs[]`. `power_watts` é a potência instantânea real (watts), não a porcentagem da bateria.
 
 ### Taxas de rede são agregadas pelo agente
 
@@ -173,9 +173,37 @@ Os peers são ordenados com os online primeiro e cortados em `max_overlay_peers`
 
 A topologia de LAN é passiva: a tabela ARP/NDP só contém dispositivos com os quais esta máquina trocou tráfego. O agent não faz ping sweep nem varredura de portas; a tela diz isso explicitamente em vez de apresentar o vizinho como a rede inteira.
 
-### Porcentagem de CPU de processos é um delta
+### Process snapshot: top consumers e estados de problema
 
-`top_cpu_processes[].cpu_percent` e `top_mem_processes[].cpu_percent` são a **porcentagem consumida na janela entre dois ciclos**, calculada como delta de jiffies (`utime + stime`) dividido pelo tempo decorrido e pelo número de CPUs lógicas, com limite de 0 a 100. Não são o total acumulado desde o início do processo. O primeiro ciclo e PIDs recém-surgidos reportam `0` porque não há delta a apurar. `top_mem_processes[]` carrega a mesma porcentagem normalizada, não um contador bruto de jiffies.
+O payload carrega quatro listas e um resumo do estado de **todos** os processos:
+
+| Campo | Limite | Conteúdo |
+|---|---|---|
+| `top_cpu_processes[]` | 20 | maiores consumidores de CPU na janela |
+| `top_mem_processes[]` | 20 | maiores RSS (a mesma CPU normalizada) |
+| `stopped_processes[]` | 10 | estado `T`/`t`, mais antigos primeiro |
+| `zombie_processes[]` | 10 | estado `Z`, mais antigos primeiro |
+| `process_summary` | — | `total`, `running`, `sleeping`, `disk_sleep`, `stopped`, `zombie`, `other`, `threads` de todos os processos |
+
+Cada linha reportada carrega `pid`, `ppid`, `name`, `user`, `state`,
+`cpu_percent`, `mem_rss_bytes`, `mem_virt_bytes`, `threads`,
+`elapsed_seconds` e `command` (truncado em 200 caracteres). Os caps vivem em
+`processes` no `contract.json`.
+
+Custo fixo: **uma leitura de `/proc/<pid>/stat` por processo** — o `comm`, o
+RSS e o estado vêm do mesmo arquivo. Só as linhas reportadas pagam por
+`/proc/<pid>/status` (uid) e `/proc/<pid>/cmdline`, e `/etc/passwd` é lido uma
+vez por ciclo. É mais barato que a coleta anterior, que lia `comm`, `status` e
+`stat` de todo processo, e ainda entrega muito mais contexto.
+
+**CPU é delta e é participação na máquina**: `cpu_percent` é a porcentagem
+consumida na janela entre dois ciclos, delta de jiffies (`utime + stime`)
+dividido pelo tempo decorrido e pelo número de CPUs lógicas, limitada a 0–100.
+Um core saturado em uma máquina de quatro cores lê 25%; `threads` é reportado
+separadamente para que um processo multithread não pareça pequeno. O primeiro
+ciclo e PIDs novos reportam `0` porque não há delta. O total em
+`process_summary` cobre a máquina inteira, então a UI nunca deve apresentar as
+listas como se fossem todos os processos.
 
 ### Logs de journal (`logs[]`)
 

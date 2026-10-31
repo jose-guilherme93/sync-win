@@ -157,6 +157,12 @@
       "rationale": "The topology travels with the system inventory, on the slow cadence. The caps bound the payload a device with a large routing table or a busy segment can push. The agent reads only what an unprivileged user can read: the routing table, the resolver configuration, the neighbour table, the radio quality, the tunnel interfaces and the Tailscale local API socket (which is world readable on a default install). Firewall rules, WireGuard keys and other overlay daemons are out of reach without root, so only what the daemon exposes is reported. An overlay the daemon refuses to describe is sent with an error instead of an empty peer list."
     }
   },
+  "processes": {
+    "max_top": 20,
+    "max_problem": 10,
+    "max_cmdline_chars": 200,
+    "rationale": "The agent reads one /proc/<pid>/stat per process (no extra pass for comm/status) and enriches only the reported top consumers and problem states with user, command, threads and age. This keeps the per-cycle cost lower than the old three-file read while making the Processes tab diagnosable."
+  },
   "preferences_sync": {
     "interval_seconds_default": 300,
     "state_path": "~/.local/state/sync-win/agent-state.json"

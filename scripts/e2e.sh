@@ -317,7 +317,31 @@ cat > "${WORK}/telemetry.json" <<'JSON'
      "used_bytes": 64424509440, "free_bytes": 42949672960, "used_percent": 60}
   ],
   "load_average": "0.42",
-  "uptime_seconds": 86400
+  "uptime_seconds": 86400,
+  "process_summary": {
+    "total": 140, "running": 2, "sleeping": 132, "disk_sleep": 0,
+    "stopped": 1, "zombie": 1, "other": 4, "threads": 260
+  },
+  "top_cpu_processes": [
+    {"pid": 100, "ppid": 1, "name": "nginx", "user": "www-data", "state": "R",
+     "cpu_percent": 12.5, "mem_rss_bytes": 10485760, "mem_virt_bytes": 52428800,
+     "threads": 4, "elapsed_seconds": 3600, "command": "nginx: worker process"}
+  ],
+  "top_mem_processes": [
+    {"pid": 200, "ppid": 1, "name": "postgres", "user": "postgres", "state": "S",
+     "cpu_percent": 2.0, "mem_rss_bytes": 1073741824, "mem_virt_bytes": 2147483648,
+     "threads": 12, "elapsed_seconds": 7200, "command": "postgres -D /var/lib/postgresql"}
+  ],
+  "stopped_processes": [
+    {"pid": 300, "ppid": 250, "name": "backup.sh", "user": "alice", "state": "T",
+     "cpu_percent": 0, "mem_rss_bytes": 1048576, "threads": 1,
+     "elapsed_seconds": 600, "command": "/bin/bash /home/alice/backup.sh"}
+  ],
+  "zombie_processes": [
+    {"pid": 400, "ppid": 1, "name": "old-proc", "user": "bob", "state": "Z",
+     "cpu_percent": 0, "mem_rss_bytes": 0, "threads": 1,
+     "elapsed_seconds": 120, "command": "[old-proc]"}
+  ]
 }
 JSON
 TELEMETRY=$(curl -fsS -o /dev/null -w '%{http_code}' -X POST "${BASE}/api/devices/${DEVICE_ID}/telemetry" \
@@ -644,13 +668,16 @@ check "package source filter narrows to one source" "${PACKAGES_SOURCE}" "has-vi
 eval_js "(()=>{const s=[...document.querySelectorAll('select')].find(x=>x.getAttribute('aria-label')==='Filter by source');s.value='all';s.dispatchEvent(new Event('change',{bubbles:true}));return 'RESET';})()" >/dev/null
 sleep 1
 
-# Processes: sort controls must exist and switch the ordering.
+# Processes: the table headers sort, the state filters exist, and the full
+# machine tally is separate from the reported rows.
 click_text 'Processes' >/dev/null
 sleep 2
-# The controls read "By CPU" / "By memory"; the active-state class is hashed by
-# Svelte, so matching on class names does not work.
-PROCESS_SORT=$(eval_js "(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.textContent.trim()==='By CPU');return b?'PRESENT':'ABSENT';})()")
+PROCESS_SORT=$(eval_js "(()=>{const b=[...document.querySelectorAll('th button')].find(x=>x.textContent.includes('CPU'));return b?'PRESENT':'ABSENT';})()")
 check "processes screen exposes a sort control" "$(unquote "${PROCESS_SORT}")" "PRESENT"
+PROCESS_STATES=$(eval_js "(()=>{const b=[...document.querySelectorAll('.filters button')].find(x=>x.textContent.includes('Stopped'));return b?'PRESENT':'ABSENT';})()")
+check "processes screen exposes state filters" "$(unquote "${PROCESS_STATES}")" "PRESENT"
+PROCESS_TALLY=$(eval_js "(()=>{const t=[...document.querySelectorAll('.tile')].find(x=>x.textContent.includes('Total'));return t?'PRESENT':'ABSENT';})()")
+check "processes screen shows the whole-machine tally" "$(unquote "${PROCESS_TALLY}")" "PRESENT"
 
 # Alerts: the reset control appears only when a filter is active. It is fleet
 # navigation, so leave the device screen first — the sidebar is not on screen

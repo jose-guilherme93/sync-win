@@ -68,10 +68,43 @@ type DiskPartition struct {
 	UsedPercent float64 `json:"used_percent"`
 }
 
-// ProcessInfo holds top process resource usage.
+// ProcessInfo is one diagnosable process row. The agent enriches only the
+// reported rows (top consumers and problem states); the counts in
+// ProcessSummary cover every process on the machine.
 type ProcessInfo struct {
-	PID        int     `json:"pid"`
-	Name       string  `json:"name"`
-	CPUPercent float64 `json:"cpu_percent"`
-	MemRSS     uint64  `json:"mem_rss_bytes"`
+	PID            int     `json:"pid"`
+	PPID           int     `json:"ppid,omitempty"`
+	Name           string  `json:"name"`
+	User           string  `json:"user,omitempty"`
+	State          string  `json:"state,omitempty"`
+	CPUPercent     float64 `json:"cpu_percent"`
+	MemRSS         uint64  `json:"mem_rss_bytes"`
+	MemVirt        uint64  `json:"mem_virt_bytes,omitempty"`
+	Threads        int     `json:"threads,omitempty"`
+	ElapsedSeconds int64   `json:"elapsed_seconds,omitempty"`
+	Command        string  `json:"command,omitempty"`
+}
+
+// ProcessSummary counts every process seen in /proc by state. It is what stops
+// a top-ten list from being mistaken for the whole machine.
+type ProcessSummary struct {
+	Total     int `json:"total"`
+	Running   int `json:"running"`
+	Sleeping  int `json:"sleeping"`
+	DiskSleep int `json:"disk_sleep"`
+	Stopped   int `json:"stopped"`
+	Zombie    int `json:"zombie"`
+	Other     int `json:"other"`
+	Threads   int `json:"threads"`
+}
+
+// ProcessSnapshot is one collection cycle: the diagnosable rows plus the full
+// state tally. Stopped and zombie processes get their own lists so a busy
+// machine cannot crowd them out of the top consumers.
+type ProcessSnapshot struct {
+	ByCPU   []ProcessInfo
+	ByMem   []ProcessInfo
+	Stopped []ProcessInfo
+	Zombies []ProcessInfo
+	Summary ProcessSummary
 }

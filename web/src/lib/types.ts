@@ -46,6 +46,9 @@ export type HardwareStats = {
   battery_status?: string
   top_cpu_processes?: ProcessInfo[]
   top_mem_processes?: ProcessInfo[]
+  stopped_processes?: ProcessInfo[]
+  zombie_processes?: ProcessInfo[]
+  process_summary?: ProcessSummary
   docker_available?: boolean
   docker_info?: DockerInfo
   docker_containers?: DockerContainer[]
@@ -248,9 +251,28 @@ export type NetworkHistory = {
 
 export type ProcessInfo = {
   pid: number
+  ppid?: number
   name: string
+  user?: string
+  state?: string
   cpu_percent: number
   mem_rss_bytes: number
+  mem_virt_bytes?: number
+  threads?: number
+  elapsed_seconds?: number
+  command?: string
+}
+
+// Counts every process on the device, not just the reported rows.
+export type ProcessSummary = {
+  total: number
+  running: number
+  sleeping: number
+  disk_sleep: number
+  stopped: number
+  zombie: number
+  other: number
+  threads: number
 }
 
 export type DockerInfo = {

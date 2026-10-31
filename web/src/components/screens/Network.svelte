@@ -10,6 +10,7 @@
     NetworkSection
   } from '../../lib/types'
   import { portIdentity, uniquePorts, type OpenPort as Port } from '../../lib/ports'
+  import type { NetworkLens } from '../../lib/network'
   import {
     conntrackUsage,
     countedInterfaces,
@@ -26,6 +27,8 @@
     uncountedInterfaces
   } from '../../lib/network'
   import EmptyState from '../ui/EmptyState.svelte'
+  import NetworkInspector from '../network/NetworkInspector.svelte'
+  import type { HealthSample } from '../../lib/network-health'
   import Icon from '../ui/Icon.svelte'
   import MiniSparkline from '../ui/MiniSparkline.svelte'
   import { nav } from '../../lib/router'
@@ -89,6 +92,13 @@
   let lastStamp = ''
   let seriesDeviceId = ''
 
+  // One drawer serves every stat tile. Its samples live only while this screen
+  // is mounted, so a device nobody is looking at pays nothing for them.
+  let lens: NetworkLens | null = null
+  let healthSamples: HealthSample[] = []
+  let healthDeviceId = ''
+  let liveStamps: string[] = []
+
   let historyTimer: ReturnType<typeof setInterval> | null = null
   let topologyTimer: ReturnType<typeof setInterval> | null = null
 
@@ -101,6 +111,9 @@
     totalRx = []
     totalTx = []
     lastStamp = ''
+    healthSamples = []
+    liveStamps = []
+    lens = null
   }
   $: resetSeries(device.id)
 
@@ -117,6 +130,15 @@
   $: virtualIfaces = uncountedInterfaces(ifaces)
   $: health = hw?.network_health
   $: healthNote = healthSummary(health)
+  $: if (device.id !== healthDeviceId) {
+    healthDeviceId = device.id
+    healthSamples = []
+  }
+  // The counters the inspector turns into rates. Guarding on collected_at keeps
+  // a re-render from inventing a sample the agent never sent.
+  $: if (health?.collected_at && healthSamples.at(-1)?.at !== health.collected_at) {
+    healthSamples = [...healthSamples, { at: health.collected_at, health }].slice(-MAX_SAMPLES)
+  }
 
   // The agent sums the counted interfaces. The fallback exists for an agent
   // that reports no rate at all, and it must not sum the container plumbing.
@@ -149,6 +171,7 @@
     lastStamp = hw.collected_at
     totalRx = push(totalRx, totalRxRate)
     totalTx = push(totalTx, totalTxRate)
+    liveStamps = push(liveStamps, hw.collected_at)
     const next: Record<string, { rx: number[]; tx: number[] }> = {}
     for (const iface of ifaces) {
       const prev = ifaceSeries[iface.name] || { rx: [], tx: [] }
@@ -160,7 +183,7 @@
     ifaceSeries = next
   }
 
-  function push(series: number[], value: number): number[] {
+  function push<T>(series: T[], value: T): T[] {
     const out = [...series, value]
     return out.length > MAX_SAMPLES ? out.slice(out.length - MAX_SAMPLES) : out
   }
@@ -357,32 +380,32 @@
       <span class="map-link-arrow" aria-hidden="true">→</span>
     </button>
     <div class="summary">
-      <article class="stat">
+      <button type="button" class="stat" on:click={() => (lens = 'download')} aria-label="Inspect download">
         <span class="label">Download</span>
         <span class="value">{formatRate(totalRxRate)}</span>
         <MiniSparkline series={totalRx} color="var(--chart-2)" height={26} label="Download rate" />
         <span class="sub">{formatBytes(counted.reduce((n, i) => n + i.rx_bytes, 0))} since boot</span>
-      </article>
-      <article class="stat">
+      </button>
+      <button type="button" class="stat" on:click={() => (lens = 'upload')} aria-label="Inspect upload">
         <span class="label">Upload</span>
         <span class="value">{formatRate(totalTxRate)}</span>
         <MiniSparkline series={totalTx} color="var(--chart-5)" height={26} label="Upload rate" />
         <span class="sub">{formatBytes(counted.reduce((n, i) => n + i.tx_bytes, 0))} since boot</span>
-      </article>
-      <article class="stat">
+      </button>
+      <button type="button" class="stat" on:click={() => (lens = 'peak')} aria-label="Inspect peak">
         <span class="label">Peak · {RANGES.find((r) => r.id === range)?.label}</span>
         <span class="value">{formatRate(peak.value)}</span>
         <span class="sub">
           {direction === 'rx' ? 'download' : 'upload'} · {peak.at ? clockOf(peak.at) : 'no data'}
           {#if peakOther.value > 0}· other direction {formatRate(peakOther.value)}{/if}
         </span>
-      </article>
-      <article class="stat">
+      </button>
+      <button type="button" class="stat" on:click={() => (lens = 'links')} aria-label="Inspect links">
         <span class="label">Links</span>
         <span class="value">{upCount}<small> / {counted.length} up</small></span>
         <span class="sub">{kindSummary || 'no link reported'}</span>
-      </article>
-      <article class="stat" class:stat-crit={healthNote.tone === 'crit'} class:stat-warn={healthNote.tone === 'warn'}>
+      </button>
+      <button type="button" class="stat" class:stat-crit={healthNote.tone === 'crit'} class:stat-warn={healthNote.tone === 'warn'} on:click={() => (lens = 'health')} aria-label="Inspect packet health">
         <span class="label">Stack health</span>
         <span class="value value-sm">{healthNote.title}</span>
         <span class="sub">
@@ -395,15 +418,15 @@
             no packet counters reported
           {/if}
         </span>
-      </article>
-      <article class="stat" class:stat-warn={exposure.exposed > 0}>
+      </button>
+      <button type="button" class="stat" class:stat-warn={exposure.exposed > 0} on:click={() => (lens = 'exposure')} aria-label="Inspect exposure">
         <span class="label">Reachable from the network</span>
         <span class="value">{exposure.exposed}<small> / {exposure.total} sockets</small></span>
         <span class="sub">
           {defaultGateway ? `gateway ${defaultGateway}` : 'no gateway reported'}
           {#if dnsServers.length}· {dnsServers.length} resolver{dnsServers.length === 1 ? '' : 's'}{/if}
         </span>
-      </article>
+      </button>
     </div>
 
     <article class="card">
@@ -757,6 +780,24 @@
       </article>
     </div>
 
+    {#if lens}
+      <NetworkInspector
+        {lens}
+        {device}
+        {healthSamples}
+        {history}
+        rangeLabel={RANGES.find((r) => r.id === range)?.label ?? range}
+        {ports}
+        {portsLoaded}
+        {portsError}
+        {topology}
+        {ifaceSeries}
+        {liveStamps}
+        onClose={() => (lens = null)}
+        onNavigate={(section) => nav.setSection(section)}
+      />
+    {/if}
+
     <p class="screen-foot">
       {totalBytes > 0 ? `${formatBytes(totalBytes)} through the counted links since boot · ` : ''}
       {totalErrors > 0 ? `${totalErrors} errors · ` : ''}
@@ -791,7 +832,9 @@
     display: grid; gap: 0.25rem; align-content: start;
     padding: 0.8rem 0.9rem; background: var(--card);
     border: 1px solid var(--border); border-radius: var(--radius);
+    color: inherit; font: inherit; text-align: left; cursor: pointer;
   }
+  .stat:hover { border-color: var(--border-strong); }
   .stat .value { font-size: 1.45rem; }
   .stat .value small { font-size: 0.8rem; color: var(--text-muted); font-weight: 400; }
   .stat .value-sm { font-size: 0.95rem; line-height: 1.3; }
