@@ -9,6 +9,14 @@ The next version is the last tag plus the Conventional Commits bump:
 `feat:` increases the minor version, everything else increases the patch
 version, and a breaking change increases the major version.
 
+## [0.16.1](https://github.com/jose-guilherme93/sync-win/compare/v0.16.0...v0.16.1) (2026-10-31)
+
+
+### Bug Fixes
+
+* **web:** the account and notification menus could not open ([eb7868b](https://github.com/jose-guilherme93/sync-win/commit/eb7868b33c9b095a1a2fe5c94a14209a42d76905))
+* **web:** the account and notification menus could not open ([7305545](https://github.com/jose-guilherme93/sync-win/commit/730554587446588aec7485199c0ac1cbe39c2232))
+
 ## [Unreleased]
 
 ## [0.16.0] - 2026-10-30
