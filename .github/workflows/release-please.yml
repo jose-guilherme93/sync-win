@@ -1,0 +1,54 @@
+# =============================================================================
+# release-please — decide the version, write the changelog, open the PR
+# =============================================================================
+# Release Please reads Conventional Commits on main and keeps one open pull
+# request that contains:
+#
+#   - the next version in version.txt and .release-please-manifest.json
+#   - a CHANGELOG.md section for that version, written from the commit subjects
+#
+# Merging that PR is what "decides" a release. It does not tag or publish
+# anything: `skip-github-release` is on, so tagging stays in release.yml, which
+# publishes the image BEFORE it creates the tag. Release Please owning the tag
+# would invert that order and could advertise a version whose image does not
+# exist yet.
+#
+# ORDER OF EVENTS
+#   1. a normal PR merges        -> release-please opens/updates the release PR
+#   2. the release PR merges     -> CI runs on main, then release.yml sees the
+#                                   manifest ahead of the last tag and publishes
+#
+# TOKEN
+#   The default GITHUB_TOKEN cannot trigger workflows, so CI would never run on
+#   the release PR and a protected main could not merge it. Set a fine-grained
+#   personal access token with Contents, Issues and Pull requests (read/write) as
+#   RELEASE_PLEASE_TOKEN. Without it the PR is still opened, but you would have
+#   to push a commit to it by hand to make CI run.
+# =============================================================================
+name: release-please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          # Tagging and publishing belong to release.yml, after the image is in
+          # the registry. See the header.
+          skip-github-release: true

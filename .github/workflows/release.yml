@@ -1,14 +1,15 @@
 # =============================================================================
-# Release — version, publish image, then tag
+# Release — publish image, then tag
 # =============================================================================
-# A successful CI run on main creates the next version from Conventional
-# Commits. The workflow triggers on the CI completion, not on the push, so a
-# red main can never publish an image or a tag:
+# The version is decided by release-please (see release-please.yml), which keeps
+# one open pull request with the next version in .release-please-manifest.json
+# and a CHANGELOG section written from the commit subjects. Merging that PR is
+# the decision; this workflow only carries it out, and only when the manifest is
+# ahead of the newest tag.
 #
-#   feat: ...                      -> minor  (0.1.0 -> 0.2.0)
-#   fix: ... / chore: ... / etc.   -> patch  (0.2.0 -> 0.2.1)
-#   feat!: ... / BREAKING CHANGE:  -> major  (0.2.0 -> 1.0.0)
-#
+# A successful CI run on main is the trigger, not the push, so a red main can
+# never publish an image or a tag. A merge that does not change the manifest is
+# a no-op here.
 # The image is published to Docker Hub, which is where users pull from, and
 # mirrored to GitHub Container Registry. GHCR needs no credentials at all (the
 # automatic GITHUB_TOKEN is enough), so the mirror is what keeps a release from
@@ -38,18 +39,9 @@ on:
     workflows: ["CI"]
     types: [completed]
     branches: [main]
+  # Emergency lever: publish the version the manifest already names, without
+  # waiting for a release PR merge. It never invents a version.
   workflow_dispatch:
-    inputs:
-      bump:
-        description: "Version bump (auto follows Conventional Commits)"
-        required: false
-        default: auto
-        type: choice
-        options:
-          - auto
-          - patch
-          - minor
-          - major
 
 permissions:
   contents: write   # create the git tag and the GitHub Release
@@ -80,53 +72,30 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 0
 
-      - name: Compute next version
+      - name: Read the version release-please decided
         id: version
-        env:
-          FORCED_BUMP: ${{ inputs.bump }}
         run: |
           set -euo pipefail
-          last="$(git tag --list 'v*' --sort=-v:refname | head -n1)"
-          [ -z "$last" ] && last="v0.0.0"
-
-          base="${last#v}"
-          IFS='.' read -r major minor patch <<< "$base"
-          major=${major:-0}; minor=${minor:-0}; patch=${patch:-0}
-
-          if git rev-parse -q --verify "refs/tags/${last}" >/dev/null 2>&1; then
-            range="${last}..HEAD"
-          else
-            range="HEAD"
+          if [ ! -f .release-please-manifest.json ]; then
+            echo "::error::.release-please-manifest.json is missing; release-please owns the version now."
+            exit 1
           fi
-          messages="$(git log "$range" --pretty=format:'%s%n%b')"
-
-          bump="patch"
-          if printf '%s\n' "$messages" | grep -qE '(BREAKING CHANGE:|^[a-zA-Z]+(\([^)]*\))?!:)'; then
-            bump="major"
-          elif printf '%s\n' "$messages" | grep -qE '^feat(\([^)]*\))?:'; then
-            bump="minor"
+          version="$(python3 -c 'import json; print(json.load(open(".release-please-manifest.json"))["."])')"
+          if [ -z "${version}" ]; then
+            echo "::error::the manifest has no version for the repository root."
+            exit 1
           fi
-          if [ -n "${FORCED_BUMP:-}" ] && [ "${FORCED_BUMP}" != "auto" ]; then
-            bump="${FORCED_BUMP}"
-          fi
-
-          case "$bump" in
-            major) major=$((major + 1)); minor=0; patch=0 ;;
-            minor) minor=$((minor + 1)); patch=0 ;;
-            *)     patch=$((patch + 1)) ;;
-          esac
-
-          version="${major}.${minor}.${patch}"
           tag="v${version}"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "bump=${bump}" >> "$GITHUB_OUTPUT"
           if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null 2>&1; then
+            # Already published: a merge that did not move the manifest.
             echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "${tag} is already tagged; nothing to publish."
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Releasing ${version} (decided by release-please)."
           fi
-          echo "Next release: ${tag} (${bump})"
 
       # ------------------------------------------------------------------
       # Release notes are written, not generated. The section for the computed
