@@ -19,10 +19,18 @@
   export let accountInitial = '?'
   export let unreadCount = 0
   export let onOpenMobileNav: (() => void) | null = null
+  // Set while the device screen is open: the fleet is one click away and the
+  // sidebar is not on screen, so the way back has to be here.
+  export let onBack: (() => void) | null = null
 </script>
 
 <header class="topbar">
-  {#if onOpenMobileNav}
+  {#if onBack}
+    <button class="back" on:click={onBack} aria-label="Back to the fleet">
+      <Icon name="chevron" size={14} />
+      <span>Home</span>
+    </button>
+  {:else if onOpenMobileNav}
     <button class="icon-btn mobile" on:click={onOpenMobileNav} aria-label="Open navigation">
       <Icon name="menu" size={18} />
     </button>
@@ -186,6 +194,33 @@
   .refresh button.active {
     background: var(--accent-dim);
     color: var(--accent);
+  }
+
+  .back {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    height: 30px;
+    padding: 0 0.6rem 0 0.45rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--card-inset);
+    color: var(--text-muted);
+    font: inherit;
+    font-size: 0.76rem;
+    cursor: pointer;
+    flex: none;
+    transition: border-color var(--t-fast), color var(--t-fast);
+  }
+
+  .back:hover {
+    border-color: var(--border-strong);
+    color: var(--text);
+  }
+
+  /* The chevron glyph points right; the way home is left. */
+  .back :global(svg) {
+    transform: rotate(180deg);
   }
 
   .icon-btn {

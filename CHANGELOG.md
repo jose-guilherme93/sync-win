@@ -15,6 +15,13 @@ version, and a breaking change increases the major version.
 
 ### Changed
 
+- **A device is a screen of its own.** Home is now the whole fleet: the sidebar
+  carries Home, Alerts, Findings, Reports, Notifications and Settings, and never
+  a device menu — not even a disabled one. Opening a device hides the sidebar,
+  puts its identity and a `Home` back button in the header, and turns every
+  section into one horizontally scrollable tab row (hardware · system · access).
+  The redundant "Devices" entry is gone, because Home is that list.
+
 - **The dashboard is opened with a token, not an account.** `SYNCWIN_ACCESS_TOKEN`
   (32 characters or more, generated with `openssl rand -hex 24`) is now the only
   credential. It is read from `.env`, compared in constant time against its

@@ -38,9 +38,9 @@ The project is built around three main components:
 3. Web dashboard
    - Svelte 5 + TypeScript 6 + Vite 8 + Chart.js 4
    - token-first: a single access-token screen, configured only through the server's `.env`
-   - shows a dense fleet list with online state, last-seen time and inline CPU/RAM/disk percentage meters; detailed telemetry charts live on the device Overview
+   - Home is the fleet: a dense list with online state, last-seen time and inline CPU/RAM/disk percentage meters. The sidebar carries fleet and administration navigation only — never a device menu, not even a disabled one
    - device Overview: axis-labelled Performance/Network/Disk I/O charts whose legends show last/average/min/max for every series, plus load and cores, storage, interfaces, top processes and system facts
-   - device screens rendered inline by the shell: Overview, CPU & Thermal, Memory, Storage, Network, Topology (the interactive network map), All sensors, Services (services and ports side by side with a detail drawer), Docker, Security (audit history plus host posture), Processes, Packages, Logs, Remote access, Settings
+   - opening a device leaves the fleet: the sidebar is hidden, the device header shows identity plus a `Home` back button, and the 15 sections become one horizontally scrollable tab row (hardware · system · access) rendered by `shell/DeviceTabs.svelte`: Overview, CPU & Thermal, Memory, Storage, Network, Topology (the interactive network map), Sensors, Docker, Processes, Services (services and ports side by side with a detail drawer), Packages, Logs, Security (audit history plus host posture), Remote access, Settings
    - Docker container management (list, start/stop/restart/kill/remove, exec, compose, prune)
    - Remote access screen: tabbed SSH terminal (xterm.js, up to six concurrent sessions, tabs named by the running program) and a scrollable recent-session audit; device actions live in Settings → Maintenance
    - Lynis security audit: run audit, read the stored report (hardening index, warnings/suggestions/categories) and history; host posture (public listeners, pending updates, failed units)

@@ -8,6 +8,7 @@
   import { formatRelative, formatAbsolute } from './lib/format'
   import Sidebar from './components/shell/Sidebar.svelte'
   import Topbar from './components/shell/Topbar.svelte'
+  import DeviceTabs from './components/shell/DeviceTabs.svelte'
   import Logo from './components/ui/Logo.svelte'
   import Home from './components/screens/Home.svelte'
   import DeviceOverview from './components/screens/DeviceOverview.svelte'
@@ -30,7 +31,7 @@
   import DeviceSettings from './components/screens/DeviceSettings.svelte'
   import AppSettings from './components/screens/AppSettings.svelte'
   import Notifications from './components/screens/Notifications.svelte'
-  import { nav, type Section } from './lib/router'
+  import { nav, DEVICE_SCOPED, type Section } from './lib/router'
   import { selectedRange, DEFAULT_RANGE, type RangeId } from './lib/timerange'
   import { mergeDeviceDetail } from './lib/device'
   import type { AppInfo, Device, HardwareStats } from './lib/types'
@@ -167,6 +168,14 @@
     mobileNavOpen = false
   }
 
+  // Leaving the device screen returns to the fleet. The device is deselected on
+  // purpose: the fleet list is where you pick the next one, and keeping a
+  // hidden selection made the sidebar look like it belonged to it.
+  function goHome() {
+    nav.clearDevice()
+    mobileNavOpen = false
+  }
+
   // Device-scoped sidebar sections map onto the tabs the device page already
   // renders, so the two navigations cannot disagree.
   $: deviceTabForSection = ({
@@ -181,7 +190,7 @@
     security: 'security'
   } as Record<string, string>)[navState.section] || null
 
-  $: isDeviceSection = Boolean(navState.deviceId) && navState.section !== 'home' && navState.section !== 'devices' && navState.section !== 'alerts' && navState.section !== 'findings' && navState.section !== 'reports' && navState.section !== 'configuration' && navState.section !== 'notifications'
+  $: isDeviceSection = Boolean(navState.deviceId) && DEVICE_SCOPED.has(navState.section)
 
   // Only the overview still uses the shared telemetry cards. Every other
   // device section now has a dedicated screen, so nothing else falls through.
@@ -1453,22 +1462,22 @@
       </div>
     </div>
   {:else}
-  <div class="app-shell">
-    {#if mobileNavOpen}
-      <div class="nav-scrim" role="presentation" on:click={() => (mobileNavOpen = false)}></div>
+  <div class="app-shell" class:device={isDeviceSection}>
+    {#if !isDeviceSection}
+      {#if mobileNavOpen}
+        <div class="nav-scrim" role="presentation" on:click={() => (mobileNavOpen = false)}></div>
+      {/if}
+      <div class="sidebar-wrap" class:open={mobileNavOpen}>
+        <Sidebar
+          {devices}
+          activeSection={navState.section}
+          collapsed={sidebarCollapsed}
+          onNavigate={navigateTo}
+          onAddDevice={openAddDevice}
+          onToggleCollapse={toggleSidebar}
+        />
+      </div>
     {/if}
-    <div class="sidebar-wrap" class:open={mobileNavOpen}>
-      <Sidebar
-        {devices}
-        selectedId={navState.deviceId}
-        activeSection={navState.section}
-        collapsed={sidebarCollapsed}
-        onSelectDevice={selectDevice}
-        onNavigate={navigateTo}
-        onAddDevice={openAddDevice}
-        onToggleCollapse={toggleSidebar}
-      />
-    </div>
     <div class="main-col">
       <Topbar
         device={isDeviceSection ? modalDevice : null}
@@ -1481,8 +1490,13 @@
         onOpenUserMenu={toggleUserMenu}
         accountInitial="S"
         unreadCount={notifEvents.length}
-        onOpenMobileNav={() => (mobileNavOpen = true)}
+        onOpenMobileNav={isDeviceSection ? null : () => (mobileNavOpen = true)}
+        onBack={isDeviceSection ? goHome : null}
       />
+
+      {#if isDeviceSection}
+        <DeviceTabs active={navState.section} onPick={navigateTo} />
+      {/if}
 
       <!-- Popovers for the topbar buttons. They live here rather than inside
            Topbar because they need App-level state (notifications, profile

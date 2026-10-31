@@ -346,5 +346,5 @@ case "$MODE" in
     all) start_alpine; start_full ;;
 esac
 
-printf '\nTest devices ready. Sign in as %s; they appear after the first heartbeat.\n' "$EMAIL"
+printf '\nTest devices ready. They appear after the first heartbeat (sign in with the dashboard token).\n'
 printf 'Remove them with: %s down\n' "$0"
