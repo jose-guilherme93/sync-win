@@ -8,6 +8,7 @@
   import { formatRelative, formatAbsolute } from './lib/format'
   import Sidebar from './components/shell/Sidebar.svelte'
   import Topbar from './components/shell/Topbar.svelte'
+  import Logo from './components/ui/Logo.svelte'
   import Home from './components/screens/Home.svelte'
   import DeviceOverview from './components/screens/DeviceOverview.svelte'
   import Alerts from './components/screens/Alerts.svelte'
@@ -1486,14 +1487,14 @@
   {#if !authReady}
     <div class="auth-gate">
       <div class="auth-card">
-        <p class="eyebrow">SyncWin</p>
+        <div class="auth-brand"><Logo size={30} /><span>SyncWin</span></div>
         <h1>Connecting…</h1>
       </div>
     </div>
   {:else if !signedIn}
     <div class="auth-gate">
       <div class="auth-card" role="dialog" aria-labelledby="auth-gate-title">
-        <p class="eyebrow">SyncWin</p>
+        <div class="auth-brand"><Logo size={30} /><span>SyncWin</span></div>
         <h1 id="auth-gate-title">{authMode === 'login' ? 'Sign in' : 'Create your account'}</h1>
         <p class="gate-hint">Every device and agent install is registered under your account. Sign in first — then copy the install command to your Linux machines.</p>
         {#if sessionExpired && authMode === 'login'}

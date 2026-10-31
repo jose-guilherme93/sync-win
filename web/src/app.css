@@ -415,6 +415,21 @@ button.kpi:hover {
   font-size: 1.25rem;
 }
 
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--accent);
+  margin-bottom: 0.45rem;
+}
+
+.auth-brand span {
+  color: var(--text-bright);
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
 .gate-hint {
   margin: 0 0 0.9rem;
   color: #94a3b8;

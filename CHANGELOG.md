@@ -11,6 +11,16 @@ version, and a breaking change increases the major version.
 
 ## [Unreleased]
 
+## [0.15.3] - 2026-10-30
+
+### Changed
+
+- **The dashboard has a mark of its own.** A favicon, a 180 px app icon and a
+  sidebar/login lockup: an outlined node and a filled node joined by a transfer
+  path, mint on the dark surface. The mark is one SVG in `currentColor`, so the
+  same geometry serves the tab, the app shell and the README without a second
+  drawing.
+
 ## [0.15.2] - 2026-10-30
 
 ### Fixed

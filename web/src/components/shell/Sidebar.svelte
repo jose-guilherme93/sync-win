@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from '../ui/Icon.svelte'
+  import Logo from '../ui/Logo.svelte'
   import DeviceList from './DeviceList.svelte'
   import { NAV_GROUPS, type Section } from '../../lib/router'
   import { deviceLabel, memoryPercent, type Device } from '../../lib/types'
@@ -21,7 +22,7 @@
 
 <aside class="sidebar" class:collapsed aria-label="Main navigation">
   <div class="brand">
-    <span class="mark" aria-hidden="true">⬢</span>
+    <span class="mark" aria-hidden="true"><Logo size={20} /></span>
     {#if !collapsed}<span class="word">SyncWin</span>{/if}
     <button
       class="collapse"
@@ -136,8 +137,9 @@
   }
 
   .mark {
+    display: flex;
+    align-items: center;
     color: var(--accent);
-    font-size: 1.1rem;
     line-height: 1;
     flex-shrink: 0;
   }

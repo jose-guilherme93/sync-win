@@ -1,3 +1,5 @@
+<img src="web/public/brand/mark.svg" width="56" height="56" alt="SyncWin">
+
 # SyncWin
 
 **Self-hosted sync and monitoring for your Linux machines.** Keep small
