@@ -12,6 +12,7 @@
     type NotificationPrefs
   } from '../../lib/notification-prefs'
   import { NOTIFICATION_SOUNDS, playNotificationSound } from '../../lib/notification-sound'
+  import Icon from '../ui/Icon.svelte'
   import { eventDetail, eventIcon } from '../../lib/notification-format'
   import EmptyState from '../ui/EmptyState.svelte'
   import SeverityBadge from '../ui/SeverityBadge.svelte'
@@ -448,7 +449,7 @@
       <p class="muted pad">Loading notifications…</p>
     {:else if visible.length === 0}
       <EmptyState
-        icon="🔔"
+        icon="bell"
         title={merged.length === 0 ? 'No notifications yet' : 'Nothing to show'}
         message={merged.length === 0
           ? 'Device, sync and enrollment events will appear here.'
@@ -462,7 +463,7 @@
             <ul class="list">
               {#each group.events as event (event.id)}
                 <li class:unread={!event.read} class:read={event.read}>
-                  <span class="event-icon">{iconFor(event.type)}</span>
+                  <span class="event-icon"><Icon name={iconFor(event.type)} size={14} /></span>
                   <div class="event-main">
                     <div class="event-top">
                       <button class="device-link" on:click={() => onSelect(event.device_id)}>{event.hostname || event.device_id}</button>

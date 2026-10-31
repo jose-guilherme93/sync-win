@@ -31,7 +31,7 @@
       <p class="muted pad">No telemetry yet.</p>
     {:else if list.length === 0}
       <EmptyState
-        icon="⚙"
+        icon="cog"
         title="No process data"
         message="The agent did not report a process list for this collection cycle. It is sampled from the top consumers, so an idle machine can legitimately report none."
       />

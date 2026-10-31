@@ -387,7 +387,7 @@
     <div class="loading-card">Loading the network snapshot…</div>
   {:else if !hasMap}
     <EmptyState
-      icon="🌐"
+      icon="globe"
       title="No network map yet"
       message="The agent reports the topology on its five-minute inventory cycle. A device with no interface address, no default route and no overlay has no network to draw."
       actionLabel="Check again"
@@ -558,7 +558,7 @@
           <div class="detail">
             <header class="detail-head">
               <span class="detail-kind">{selectedNode.kind === 'peer' ? 'Overlay node' : selectedNode.kind === 'gateway' ? 'Gateway' : selectedNode.kind === 'neighbour' ? 'LAN node' : selectedNode.kind === 'self' ? 'This device' : 'Internet'}</span>
-              <button class="close" on:click={clearSelection} aria-label="Close details">✕</button>
+              <button class="close" on:click={clearSelection} aria-label="Close details"><Icon name="x" size={13} /></button>
             </header>
             <h3 class="detail-title">{selectedNode.label}</h3>
             <p class="detail-sub">{selectedNode.sublabel}</p>
@@ -610,7 +610,7 @@
           <div class="detail">
             <header class="detail-head">
               <span class="detail-kind">{selectedNetwork.kind === 'tailscale' ? 'Overlay network' : 'Local network'}</span>
-              <button class="close" on:click={clearSelection} aria-label="Close details">✕</button>
+              <button class="close" on:click={clearSelection} aria-label="Close details"><Icon name="x" size={13} /></button>
             </header>
             <h3 class="detail-title">{selectedNetwork.title}</h3>
             <p class="detail-sub">{selectedNetwork.subtitle}</p>

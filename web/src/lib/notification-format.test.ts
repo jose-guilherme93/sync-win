@@ -23,10 +23,12 @@ describe('eventDetail', () => {
 
 describe('eventIcon', () => {
   it('maps the event types the server emits', () => {
-    expect(eventIcon('device_offline')).toBe('🔴')
-    expect(eventIcon('device_online')).toBe('🟢')
-    expect(eventIcon('sync_error')).toBe('⚠️')
-    expect(eventIcon('device_enrolled')).toBe('➕')
-    expect(eventIcon('something_new')).toBe('ℹ️')
+    // Icon names from the shared stroke set, never emoji: the dashboard keeps
+    // one visual language and the colour carries the meaning.
+    expect(eventIcon('device_offline')).toBe('alert')
+    expect(eventIcon('device_online')).toBe('check')
+    expect(eventIcon('sync_error')).toBe('alert')
+    expect(eventIcon('device_enrolled')).toBe('plus')
+    expect(eventIcon('something_new')).toBe('bell')
   })
 })

@@ -159,12 +159,12 @@
       <Skeleton variant="lines" rows={6} />
     {:else if apps.length === 0}
       <EmptyState
-        icon="📦"
+        icon="package"
         title="No packages reported"
         message="The agent enumerates packages from a fixed set of sources (pacman, apt, flatpak, AUR, AppImage). A machine with none of those configured reports nothing here."
       />
     {:else if visible.length === 0}
-      <EmptyState icon="🔍" title="No match" message="Adjust the filter to see packages." />
+      <EmptyState icon="search" title="No match" message="Adjust the filter to see packages." />
     {:else}
       <div class="groups">
         {#each visible as [group, items] (group)}
@@ -206,13 +206,13 @@
       </div>
     {:else if !updateReport || updateReport.status === 'not_reported'}
       <EmptyState
-        icon="⬆"
+        icon="upload"
         title="Not checked yet"
         message="The agent checks for available updates on its own schedule. Nothing has been reported for this device yet."
       />
     {:else if updateReport.status === 'unsupported'}
       <EmptyState
-        icon="⬆"
+        icon="upload"
         title="No supported package manager"
         message={updateReport.message || 'This device has none of the supported package managers (apt, flatpak, pacman, AUR).'}
       />
@@ -221,7 +221,7 @@
         <span>Update check failed: {updateReport.message || 'unknown error'}</span>
       </div>
     {:else if updateReport.updates.length === 0}
-      <EmptyState icon="✅" title="Up to date" message="No pending package updates were found." />
+      <EmptyState icon="check" title="Up to date" message="No pending package updates were found." />
     {:else}
       <ul class="updates">
         {#each updateReport.updates as update (update.source + update.name)}

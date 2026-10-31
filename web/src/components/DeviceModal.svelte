@@ -4,6 +4,7 @@
   import DockerTab from './DockerTab.svelte'
   import SecurityTab from './SecurityTab.svelte'
   import DeviceLogs from './screens/DeviceLogs.svelte'
+  import Icon from './ui/Icon.svelte'
   import { apiFetch, apiURL, serverBase } from '../lib/api'
   // Shared shapes so a Device passed from the shell type-checks against this
   // component. The fields this view reads are a subset of HardwareStats.
@@ -960,7 +961,7 @@
                           </a>
                         {:else}
                           <a href={apiURL(`/api/devices/${device.id}/attachments/${att.id}${attAuth}`)} target="_blank" rel="noopener" class="attachment-preview attachment-text">
-                            <span class="file-icon">📄</span>
+                            <span class="file-icon"><Icon name="file" size={22} /></span>
                           </a>
                         {/if}
                         <div class="attachment-info">
@@ -970,7 +971,7 @@
                           {/if}
                           <div class="attachment-meta-row">
                             <span class="attachment-meta">{formatBytes(att.size_bytes)}</span>
-                            <button class="attachment-delete" on:click={() => deleteAttachment(att.id)} title="Delete">✕</button>
+                            <button class="attachment-delete" on:click={() => deleteAttachment(att.id)} title="Delete" aria-label="Delete attachment"><Icon name="x" size={12} /></button>
                           </div>
                         </div>
                       </div>

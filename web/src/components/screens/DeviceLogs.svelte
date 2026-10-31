@@ -358,7 +358,7 @@
       <p class="loading">Loading device logs…</p>
     {:else if error && entries.length === 0}
       <EmptyState
-        icon="⚠"
+        icon="alert"
         title="Could not load device logs"
         message={error}
         actionLabel="Retry"
@@ -366,7 +366,7 @@
       />
     {:else if !loaded}
       <EmptyState
-        icon="📄"
+        icon="file"
         title="Not collected yet"
         message="This device has not uploaded a journal sample yet. The agent samples the system journal about once a minute."
         actionLabel="Refresh"
@@ -374,7 +374,7 @@
       />
     {:else if entries.length === 0 && level === 'all' && !source && !search.trim() && range === 'all'}
       <EmptyState
-        icon="📄"
+        icon="file"
         title="No device logs stored"
         message="The agent has not reported any journal lines for this device. Lines are kept for a week; older ones are cleaned up automatically."
         actionLabel="Refresh"
@@ -382,7 +382,7 @@
       />
     {:else if entries.length === 0}
       <EmptyState
-        icon="🔍"
+        icon="search"
         title="No matching entries"
         message="No stored line matches the current filters. Try a wider time range or clear the filters."
         actionLabel="Clear filters"

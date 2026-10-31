@@ -40,6 +40,7 @@
   import { generateInsights } from './lib/insights'
   import { loadNotificationPrefs, notificationPrefs, resetNotificationPrefs, shouldToast } from './lib/notification-prefs'
   import { eventDetail, eventIcon } from './lib/notification-format'
+  import Icon from './components/ui/Icon.svelte'
   import { unlockNotificationAudio } from './lib/notification-sound'
 
 
@@ -76,7 +77,11 @@
   // device look stale. The topbar range now only controls how often the charts
   // refetch their history.
   let currentRange: RangeId = DEFAULT_RANGE
+  // Fleet polling while no device is open. Once a device screen is up the poll
+  // follows the agent's reporting cadence instead, which is what gives the live
+  // chart its detail inside a one-minute window.
   const DEVICE_POLL_MS = 10000
+  const DEVICE_LIVE_POLL_MS = 2000
   const MAX_POLL_MS = 60000
   const PANEL_REFRESH_MS = 60000
   // Top processes, Docker containers and the security posture only exist in
@@ -126,6 +131,9 @@
   let authVersion = 0 // prevents stale restoreSession from overwriting fresh login
   let accessToken = ''
   let authBusy = false
+  // Version of the agent binary this server hands out, used only to explain a
+  // device whose screens are empty because its agent predates a collector.
+  let shippedAgentVersion = ''
   let authError = ''
   let sessionExpired = false
 
@@ -408,6 +416,19 @@
     localStorage.removeItem(`sync-win-devices-${ownerIdentity}`)
   }
 
+  // The server advertises the version of the agent it serves. Reading it once
+  // per page load is enough: it only changes when the image changes.
+  async function loadShippedAgentVersion() {
+    try {
+      const response = await apiFetch(apiURL('/api/agent/version'))
+      if (!response.ok) return
+      const payload = await response.json()
+      if (typeof payload?.version === 'string') shippedAgentVersion = payload.version
+    } catch {
+      // A missing version only costs the badge; never the page.
+    }
+  }
+
   async function loadDevices(showLoading = false) {
     if (devicesLoading) return
     devicesLoading = true
@@ -470,7 +491,12 @@
     if (selectedDeviceId && Date.now() - lastDetailLoad >= DETAIL_REFRESH_MS) {
       void loadDeviceDetail(selectedDeviceId)
     }
-    schedulePoll(Math.min(DEVICE_POLL_MS * 2 ** Math.min(consecutiveFailures, 4), MAX_POLL_MS))
+    // Only the live window needs the fast poll: every other range reads stored
+    // history and its resolution is minutes, so polling it every two seconds
+    // would be load for nothing.
+    const liveView = isDeviceSection && currentRange === 'live'
+    const base = liveView ? DEVICE_LIVE_POLL_MS : DEVICE_POLL_MS
+    schedulePoll(Math.min(base * 2 ** Math.min(consecutiveFailures, 4), MAX_POLL_MS))
   }
 
   function schedulePoll(delay: number) {
@@ -1385,6 +1411,7 @@
 
   onMount(() => {
     void restoreSession()
+    void loadShippedAgentVersion()
     // Browsers keep an AudioContext suspended until a user gesture. Unlock it
     // on the first interaction so the first notification is not silent.
     const unlockAudio = () => {
@@ -1489,6 +1516,7 @@
         onOpenNotifications={toggleBell}
         onOpenUserMenu={toggleUserMenu}
         accountInitial="S"
+        shippedAgentVersion={shippedAgentVersion}
         unreadCount={notifEvents.length}
         onOpenMobileNav={isDeviceSection ? null : () => (mobileNavOpen = true)}
         onBack={isDeviceSection ? goHome : null}
@@ -1520,7 +1548,7 @@
                 {#each notifEvents.slice(-5) as e (e.id)}
                   <button class="bell-item bell-{e.type}" on:click={() => openNotifDevice(e)}>
                     <div class="bell-item-top">
-                      <span class="bell-item-icon">{eventIcon(e.type)}</span>
+                      <span class="bell-item-icon"><Icon name={eventIcon(e.type)} size={14} /></span>
                       <span class="bell-item-host">{e.hostname || e.device_id}</span>
                       <span class="bell-item-time">{timeAgo(e.created_at, now)}</span>
                     </div>
@@ -1550,13 +1578,13 @@
             </div>
             <div class="dropdown-divider"></div>
             <button class="dropdown-item" on:click={openSettings}>
-              <span class="dropdown-icon">⚙</span> Settings
+              <span class="dropdown-icon"><Icon name="cog" size={14} /></span> Settings
             </button>
             <button class="dropdown-item" on:click={openAppLogs}>
-              <span class="dropdown-icon">📋</span> Logs
+              <span class="dropdown-icon"><Icon name="terminal" size={14} /></span> Logs
             </button>
             <button class="dropdown-item" on:click={openNotifications}>
-              <span class="dropdown-icon">🔔</span> Notifications
+              <span class="dropdown-icon"><Icon name="bell" size={14} /></span> Notifications
             </button>
             <div class="dropdown-divider"></div>
             <div class="dropdown-divider"></div>
@@ -1633,7 +1661,7 @@
           {:else if navState.section === 'notifications'}
             <Notifications {devices} authHeaders={ownerHeaders} unread={notifEvents} onSelect={selectDevice} onMarkedRead={handleNotifMarkedRead} />
           {:else}
-            <Home {devices} onSelect={selectDevice} onAdd={openAddDevice} onAlerts={() => nav.setSection('alerts')} />
+            <Home {devices} {loading} onSelect={selectDevice} onAdd={openAddDevice} onAlerts={() => nav.setSection('alerts')} />
           {/if}
         </div>
       </main>

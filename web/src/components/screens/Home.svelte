@@ -4,12 +4,16 @@
   import { THRESHOLDS, generateInsights, type Insight } from '../../lib/insights'
   import StatusDot from '../ui/StatusDot.svelte'
   import SeverityBadge from '../ui/SeverityBadge.svelte'
+  import Skeleton from '../ui/Skeleton.svelte'
 
   export let devices: Device[] = []
   export let onSelect: (id: string) => void
   export let onAdd: () => void
   // Provided by the shell; the summary alert count links to the Alerts screen.
   export let onAlerts: () => void = () => {}
+  // The first fetch has not answered yet. An empty list and an unanswered list
+  // are different states, and only one of them means "install an agent".
+  export let loading = false
 
   type Row = {
     device: Device
@@ -94,7 +98,9 @@
     <button class="add" on:click={onAdd}>+ Add device</button>
   </header>
 
-  {#if rows.length === 0}
+  {#if loading && rows.length === 0}
+    <Skeleton variant="list" rows={3} />
+  {:else if rows.length === 0}
     <div class="empty">
       <strong>No devices yet</strong>
       <p>Install the agent on a Linux machine. It appears here within seconds of the installer finishing.</p>

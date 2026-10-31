@@ -98,7 +98,7 @@
     <header class="card-head"><h2>Device findings</h2></header>
     {#if findings.length === 0}
       <EmptyState
-        icon="✓"
+        icon="check"
         title="No findings"
         message={devices.length === 0
           ? 'No devices are reporting yet.'

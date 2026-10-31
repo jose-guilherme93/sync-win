@@ -16,10 +16,10 @@ export function eventDetail(message: string): string {
 /** The icon for an event type, matching the one the server uses. */
 export function eventIcon(type: string): string {
   switch (type) {
-    case 'device_offline': return '🔴'
-    case 'device_online': return '🟢'
-    case 'sync_error': return '⚠️'
-    case 'device_enrolled': return '➕'
-    default: return 'ℹ️'
+    case 'device_offline': return 'alert'
+    case 'device_online': return 'check'
+    case 'sync_error': return 'alert'
+    case 'device_enrolled': return 'plus'
+    default: return 'bell'
   }
 }

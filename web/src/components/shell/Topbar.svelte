@@ -3,6 +3,7 @@
   import StatusDot from '../ui/StatusDot.svelte'
   import { computedStatus, deviceLabel, type Device } from '../../lib/types'
   import { formatRelative } from '../../lib/format'
+  import { isAgentOutdated } from '../../lib/version'
   import { RANGES, DEFAULT_RANGE, type RangeId } from '../../lib/timerange'
 
   // The topbar answers "which device am I looking at, is it alive, and how
@@ -22,6 +23,10 @@
   // Set while the device screen is open: the fleet is one click away and the
   // sidebar is not on screen, so the way back has to be here.
   export let onBack: (() => void) | null = null
+  // The version of the agent the server hands out. A device that is behind keeps
+  // working, but the screens that read newer fields come up empty, so the header
+  // says why instead of leaving the reader guessing.
+  export let shippedAgentVersion = ''
 </script>
 
 <header class="topbar">
@@ -47,6 +52,17 @@
         {#if device.hardware?.operating_system}
           <span class="sep" aria-hidden="true">·</span>
           <span class="os" title={device.hardware.operating_system}>{device.hardware.operating_system}</span>
+        {/if}
+        {#if device.hardware?.agent_version}
+          <span class="sep" aria-hidden="true">·</span>
+          {#if isAgentOutdated(device.hardware.agent_version, shippedAgentVersion)}
+            <span
+              class="agent-outdated"
+              title={`Agent ${device.hardware.agent_version}. The server ships ${shippedAgentVersion}. The agent keeps syncing, but screens that read newer fields — the network map peers, for example — stay empty until it updates.`}
+            >agent {device.hardware.agent_version} · update</span>
+          {:else}
+            <span class="agent">agent {device.hardware.agent_version}</span>
+          {/if}
         {/if}
       </div>
     {:else}
@@ -125,6 +141,16 @@
 
   .meta .sep {
     color: var(--text-faint);
+  }
+
+  .agent,
+  .agent-outdated {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .agent-outdated {
+    color: var(--warn);
+    cursor: help;
   }
 
   .os {

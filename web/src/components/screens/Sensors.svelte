@@ -99,7 +99,7 @@
 
 <section class="sensors">
   {#if !hw}
-    <EmptyState icon="🌡️" title="No telemetry yet" message="The agent has not reported any sensor readings for this device." />
+    <EmptyState icon="thermometer" title="No telemetry yet" message="The agent has not reported any sensor readings for this device." />
   {:else}
     <div class="summary">
       <article class="stat">
