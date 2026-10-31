@@ -133,6 +133,20 @@ sync-win/
 └── SECURITY.md
 ```
 
+## Branches
+
+`develop` is the default branch and the only place work lands. `main` is the
+release branch: it receives a merge from `develop` when a release is due and
+nothing else. Do not commit to `main` directly, and do not open a feature PR
+against it.
+
+1. Branch from `develop` (`git worktree add ../sync-win-<topic> -b <branch> develop`).
+2. Open the pull request against `develop`.
+3. When a release is due, merge `develop` into `main`. That push is what
+   release-please sees, and it answers with the release pull request.
+
+Every other branch in the repository is stale; two branches is the whole model.
+
 ## Commit and release convention
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
@@ -216,7 +230,7 @@ Two agents must never share a working directory. The git index is shared, so
 left `develop` failing lint on a mid-edit snapshot.
 
 - **Always** create a worktree for a task, even when the main checkout looks
-  clean. A clean `git status` is not evidence the tree is yours: another agent
+  clean, and base it on `develop`. A clean `git status` is not evidence the tree is yours: another agent
   may be between edits, or have staged work you cannot see.
   `git worktree add ../sync-win-<topic> -b <branch> <base>`.
 - Never `git add -A` or `git commit -a`, in a worktree or anywhere else. Stage
