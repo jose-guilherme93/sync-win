@@ -94,12 +94,14 @@
       <Icon name="refresh" size={16} />
     </button>
 
-    <button class="icon-btn" on:click={onOpenNotifications} title="Notifications" aria-label="Notifications">
+    <button class="icon-btn" on:click|stopPropagation={onOpenNotifications} title="Notifications" aria-label="Notifications">
       <Icon name="bell" size={16} />
       {#if unreadCount > 0}<span class="badge">{unreadCount}</span>{/if}
     </button>
 
-    <button class="avatar" on:click={onOpenUserMenu} aria-label="Account menu">{accountInitial}</button>
+    <!-- stopPropagation: App closes the popovers on any document click, and without
+     this the click that opens the menu is the same click that closes it. -->
+    <button class="avatar" on:click|stopPropagation={onOpenUserMenu} aria-label="Account menu">{accountInitial}</button>
   </div>
 </header>
 

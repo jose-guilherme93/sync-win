@@ -259,10 +259,21 @@ func Run() error {
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/" {
 				if _, err := os.Stat(filepath.Join(webDir, r.URL.Path)); err == nil {
+					// Vite fingerprints everything under /assets, so those files
+					// can never change behind a URL and are safe to cache forever.
+					if strings.HasPrefix(r.URL.Path, "/assets/") {
+						w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+					}
 					fileServer.ServeHTTP(w, r)
 					return
 				}
 			}
+			// The shell must revalidate. A cached index.html keeps serving the
+			// previous bundle, and an old bundle calling an API that changed under
+			// it is exactly what an upgrade looks like when it is "broken": the
+			// sign-in form still posts an email and a password to an endpoint that
+			// now wants a token. no-cache still allows a 304 when nothing changed.
+			w.Header().Set("Cache-Control", "no-cache")
 			http.ServeFile(w, r, indexPage)
 		})
 		structLogger.Info(logging.CatSystem, logging.EventAppStarted, "serving web dashboard", map[string]any{"web_dir": webDir})
