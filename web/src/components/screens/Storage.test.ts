@@ -120,7 +120,7 @@ describe('Storage screen', () => {
     // 10 GB/day against 50 GB free.
     expect(await screen.findByText('5d')).toBeTruthy()
     expect(screen.getByText(/full in ~5d/)).toBeTruthy()
-    expect(screen.getByText('10.0 GB')).toBeTruthy()
+    expect(screen.getByText('+10.0 GB')).toBeTruthy()
   })
 
   it('says the history starts today when no daily row exists yet', async () => {
@@ -185,6 +185,28 @@ describe('Storage screen', () => {
     expect(await screen.findByText('SMART self-tests · newest first')).toBeTruthy()
     expect(screen.getAllByText(/Completed without error/).length).toBe(2)
     expect(screen.getByText(/at 12600 h power-on/)).toBeTruthy()
+  })
+
+  it('does not call a drive failing when smartctl had no verdict', async () => {
+    stubHistory({})
+    render(Storage, {
+      props: {
+        device: device({
+          disk_partitions: PARTITIONS,
+          disk_devices: [
+            {
+              name: 'sda',
+              model: 'QEMU HARDDISK',
+              size_bytes: 100 * GB,
+              rotational: true,
+              smart: { available: true, passed: false, status_known: false }
+            }
+          ]
+        })
+      }
+    })
+
+    expect(await screen.findByText('no verdict')).toBeTruthy()
   })
 
   it('flags a read-only mount', async () => {

@@ -106,9 +106,20 @@
   // below the fold.
   type View = 'logs' | 'configuration'
   let view: View = 'logs'
+  let logsLoaded = false
 
   function showView(next: View) {
+    // Leaving the log tab hides its Live toggle; a stream that keeps appending
+    // behind a hidden panel is work nobody asked for.
+    if (view === 'logs' && next !== 'logs') {
+      live = false
+      stopStream()
+    }
     view = next
+    if (next === 'logs' && !logsLoaded) {
+      logsLoaded = true
+      void reload()
+    }
   }
 
   function fromFor(id: string): string {
@@ -407,6 +418,7 @@
   onMount(() => {
     void loadSettings()
     void loadRetention()
+    logsLoaded = true
     void reload()
   })
 
@@ -423,8 +435,8 @@
       <p class="eyebrow">Administration</p>
       <h1>Settings</h1>
       <p class="muted">
-        The fleet's agents and their update state, the application log, and the retention windows
-        that decide what the server keeps.
+        The application log and the retention windows that decide what the server keeps. The
+        agents' own health lives in the Agents screen, next to Findings.
       </p>
     </div>
     {#if view === 'logs'}

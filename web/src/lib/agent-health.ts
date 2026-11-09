@@ -65,7 +65,14 @@ export function agentHealth(device: Device, shippedVersion = ''): AgentHealth {
   const hw = device.hardware
   const installed = hw?.agent_version?.trim() ?? ''
   const status = hw?.agent_update_status?.trim() ?? ''
-  const target = hw?.agent_update_target?.trim() || shippedVersion
+  // The updater stores the version it last tried. After a server release that
+  // target is stale, so the server's shipped version wins when it is newer;
+  // otherwise a device would look current while the fleet has moved on.
+  const reportedTarget = hw?.agent_update_target?.trim() ?? ''
+  let target = reportedTarget || shippedVersion
+  if (reportedTarget && shippedVersion && compareVersions(shippedVersion, reportedTarget) > 0) {
+    target = shippedVersion
+  }
   const error = hw?.agent_update_error?.trim() ?? ''
   const behind =
     Boolean(installed) && Boolean(target) && compareVersions(installed, target) < 0
@@ -77,6 +84,10 @@ export function agentHealth(device: Device, shippedVersion = ''): AgentHealth {
     state = isBlockedError(error) ? 'blocked' : 'failed'
   } else if (behind) {
     state = status === 'requested' ? 'updating' : 'outdated'
+  } else if (!status) {
+    // No updater verdict at all: the device may be current, but nothing here
+    // proves the updater ever ran. "Up to date" would be a claim we cannot make.
+    state = 'unknown'
   }
 
   return {
@@ -149,6 +160,6 @@ export function agentStateLabel(state: AgentHealthState): string {
     case 'blocked':
       return 'Cannot self-update'
     default:
-      return 'Unknown'
+      return 'No update reported'
   }
 }

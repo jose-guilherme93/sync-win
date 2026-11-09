@@ -24,7 +24,7 @@ function withHardware(overrides: Record<string, unknown>, deviceOverrides: Parti
 
 describe('agentHealth', () => {
   it('reports current when the device matches the shipped version', () => {
-    const row = agentHealth(withHardware({ agent_version: '0.11.3' }), '0.11.3')
+    const row = agentHealth(withHardware({ agent_version: '0.11.3', agent_update_status: 'current' }), '0.11.3')
     expect(row.state).toBe('current')
     expect(row.behind).toBe(false)
   })
@@ -74,12 +74,29 @@ describe('agentHealth', () => {
     expect(row.installed).toBe('unknown')
   })
 
-  it('uses the update target when the device reported one', () => {
+  it('uses the update target when it is ahead of the server', () => {
     const row = agentHealth(
-      withHardware({ agent_version: '0.10.0', agent_update_target: '0.11.2' }),
+      withHardware({ agent_version: '0.10.0', agent_update_target: '0.11.4' }),
       '0.11.3'
     )
-    expect(row.target).toBe('0.11.2')
+    expect(row.target).toBe('0.11.4')
+  })
+
+  it('does not let a stale update target hide a newer server release', () => {
+    // The updater remembers the version it last tried; after a release that
+    // target is behind, and the device must still read as behind.
+    const row = agentHealth(
+      withHardware({ agent_version: '0.11.2', agent_update_status: 'current', agent_update_target: '0.11.2' }),
+      '0.11.3'
+    )
+    expect(row.target).toBe('0.11.3')
+    expect(row.state).toBe('outdated')
+  })
+
+  it('does not claim a device is up to date when no updater ever reported', () => {
+    const row = agentHealth(withHardware({ agent_version: '0.12.0' }), '0.12.0')
+    expect(row.state).toBe('unknown')
+    expect(agentStateLabel(row.state)).toBe('No update reported')
   })
 })
 
@@ -87,7 +104,7 @@ describe('summarizeAgentFleet', () => {
   it('counts states and adds up the agent memory that was reported', () => {
     const fleet = summarizeAgentFleet(
       [
-        withHardware({ agent_version: '0.11.3', agent_memory_bytes: 10_000_000 }),
+        withHardware({ agent_version: '0.11.3', agent_update_status: 'current', agent_memory_bytes: 10_000_000 }),
         withHardware({ agent_version: '0.10.0', agent_memory_bytes: 5_000_000 }),
         withHardware({
           agent_version: '0.10.0',

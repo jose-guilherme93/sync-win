@@ -16,6 +16,8 @@
   let usageTo = 0
   let serverVersion = ''
   let signatureOk: boolean | null = null
+  let factsLoaded = false
+  let usageLoaded = false
 
   const SPARK_W = 96
   const SPARK_H = 26
@@ -122,6 +124,8 @@
       usageTo = Date.parse(payload?.to) || Date.now()
     } catch (e) {
       usageError = e instanceof Error ? e.message : 'Could not load the agent history'
+    } finally {
+      usageLoaded = true
     }
   }
 
@@ -138,6 +142,8 @@
       signatureOk = signatureRes.ok
     } catch {
       signatureOk = null
+    } finally {
+      factsLoaded = true
     }
   }
 
@@ -164,7 +170,7 @@
       </div>
       <div>
         <span class="k">Signature</span>
-        <span class:crit={signatureOk === false}>{signatureOk === null ? 'unknown' : signatureOk ? 'available' : 'missing'}</span>
+        <span class:crit={signatureOk === false}>{!factsLoaded ? 'checking…' : signatureOk === null ? 'unknown' : signatureOk ? 'available' : 'missing'}</span>
       </div>
     </div>
   </header>
@@ -177,6 +183,7 @@
     <span><span class="dot ok"></span>{summary.current} current</span>
     <span><span class="dot warn"></span>{summary.outdated + summary.updating} behind</span>
     <span><span class="dot crit"></span>{summary.needsAttention} blocked</span>
+    {#if summary.unknown > 0}<span><span class="dot"></span>{summary.unknown} no report</span>{/if}
     {#if usageError}<span class="err">{usageError}</span>{/if}
   </div>
 
@@ -209,7 +216,15 @@
           <div class="metric">
             <div class="label">
               <span>RAM held</span>
-              <span class="mono">{row.memory == null ? '—' : formatBytes(row.memory)} · {pct(ramShare(row))}</span>
+              <span class="mono">
+                {#if row.memory == null}
+                  not reported
+                {:else if row.ramTotal === 0}
+                  {formatBytes(row.memory)} of unknown capacity
+                {:else}
+                  {formatBytes(row.memory)} · {pct(ramShare(row))}
+                {/if}
+              </span>
             </div>
             <div class="track" title={row.ramTotal ? `${formatBytes(row.memory ?? 0)} of ${formatBytes(row.ramTotal)}` : 'machine RAM not reported'}>
               <div class="fill" style={`width:${Math.min(100, ramShare(row))}%`}></div>
@@ -254,7 +269,7 @@
                 <line x1="0" y1={SPARK_H} x2={SPARK_W} y2={SPARK_H} stroke="var(--border)" />
               </svg>
             {:else}
-              <div class="no-spark">no history</div>
+              <div class="no-spark">{usageLoaded ? 'no history' : 'checking…'}</div>
             {/if}
           </div>
         </article>

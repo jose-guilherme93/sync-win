@@ -93,6 +93,7 @@ export type SmartHealth = {
   available: boolean
   reason?: string
   passed: boolean
+  status_known?: boolean
   temperature_c?: number
   power_on_hours?: number
   data_written_bytes?: number

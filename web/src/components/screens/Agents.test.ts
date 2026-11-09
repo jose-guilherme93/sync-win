@@ -162,7 +162,7 @@ describe('Agents screen', () => {
       props: {
         shippedAgentVersion: '0.12.0',
         devices: [
-          device('dev-a', 'a', { agent_version: '0.12.0', agent_memory_bytes: 10_000_000 }),
+          device('dev-a', 'a', { agent_version: '0.12.0', agent_update_status: 'current', agent_memory_bytes: 10_000_000 }),
           device('dev-b', 'b', { agent_version: '0.10.0', agent_memory_bytes: 20_000_000, memory_total_bytes: 0 })
         ] as never
       }

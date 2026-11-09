@@ -43,13 +43,15 @@
   $: resetSeries(device.id)
 
   $: hw = device.hardware
-  $: partitions = (hw?.disk_partitions ?? [])
-    .filter((p) => p.total_bytes > 0)
-    .sort((a, b) => b.total_bytes - a.total_bytes)
+  // A mount reported with total_bytes 0 is not "fine"; it is a mount whose size
+  // the agent could not read, and hiding it was the worst of both.
+  $: partitions = [...(hw?.disk_partitions ?? [])].sort((a, b) => b.total_bytes - a.total_bytes)
+  $: reportedPartitions = hw?.disk_partitions
+  $: sizedPartitions = partitions.filter((p) => p.total_bytes > 0)
   $: diskDevices = hw?.disk_devices ?? []
-  $: totalBytes = partitions.reduce((n, p) => n + p.total_bytes, 0)
-  $: usedBytes = partitions.reduce((n, p) => n + p.used_bytes, 0)
-  $: freeBytes = partitions.reduce((n, p) => n + p.free_bytes, 0)
+  $: totalBytes = sizedPartitions.reduce((n, p) => n + p.total_bytes, 0)
+  $: usedBytes = sizedPartitions.reduce((n, p) => n + p.used_bytes, 0)
+  $: freeBytes = sizedPartitions.reduce((n, p) => n + p.free_bytes, 0)
   $: usedPercent = totalBytes > 0 ? (usedBytes / totalBytes) * 100 : 0
   $: rows = partitions.map((partition) => toRow(partition, history))
   $: findings = rows.filter((row) => row.severity !== 'ok')
@@ -71,7 +73,8 @@
   }
 
   function push(series: Sample[], t: number, v: number): Sample[] {
-    const out = [...series, { t, v }]
+    const cutoff = t - THROUGHPUT_WINDOW_MS
+    const out = [...series, { t, v }].filter((sample) => sample.t >= cutoff)
     return out.length > MAX_SAMPLES ? out.slice(out.length - MAX_SAMPLES) : out
   }
 
@@ -79,7 +82,7 @@
     const points = historyMap[partition.mount] ?? []
     const perDay = growthPerDay(points)
     const free = partition.free_bytes
-    const etaDays = perDay && perDay > 0 ? Math.floor(free / perDay) : null
+    const etaDays = perDay != null && perDay > 0 ? Math.floor(free / perDay) : null
     const inodePct = partition.inodes_used_percent ?? 0
     let severity: MountRow['severity'] = 'ok'
     let reason = ''
@@ -130,6 +133,21 @@
     return any ? total : null
   }
 
+  // formatBytes returns "0 B" for a decrease and the summary prepended "+", so
+  // a shrinking filesystem read as growth of zero. Signed, on purpose.
+  function signedBytes(value: number | null): string {
+    if (value == null) return '—'
+    if (value === 0) return '0 B'
+    return `${value > 0 ? '+' : '−'}${formatBytes(Math.abs(value))}`
+  }
+
+  function forecast(row: MountRow): string {
+    if (row.perDay == null) return '—'
+    if (row.perDay < 0) return 'shrinking'
+    if (row.perDay === 0) return 'stable'
+    return row.etaDays == null ? '—' : `${row.etaDays}d`
+  }
+
   function collectTests(devices: DiskDevice[]): (SmartTest & { device: string })[] {
     const out: (SmartTest & { device: string })[] = []
     for (const disk of devices) {
@@ -140,16 +158,23 @@
     return out.slice(0, 12)
   }
 
-  function smartState(disk: DiskDevice): { label: string; ok: boolean; detail: string } {
+  type SmartTone = 'ok' | 'unknown' | 'bad'
+
+  function smartState(disk: DiskDevice): { label: string; tone: SmartTone; detail: string } {
     const smart = disk.smart
-    if (!smart) return { label: 'not reported', ok: false, detail: 'the agent did not send SMART for this disk' }
+    if (!smart) return { label: 'not reported', tone: 'unknown', detail: 'the agent did not send SMART for this disk' }
     if (!smart.available) {
-      return { label: 'unavailable', ok: false, detail: smart.reason || 'smartctl could not read this device' }
+      return { label: 'unavailable', tone: 'unknown', detail: smart.reason || 'smartctl could not read this device' }
     }
-    if (!smart.passed) return { label: 'failed', ok: false, detail: 'the drive reported a failing health check' }
-    if ((smart.pending ?? 0) > 0) return { label: 'pending sectors', ok: false, detail: 'sectors waiting to be remapped' }
-    if ((smart.crc_errors ?? 0) > 0) return { label: 'link errors', ok: false, detail: 'UDMA CRC errors suggest cable or controller' }
-    return { label: 'passed', ok: true, detail: 'the drive reported a passing health check' }
+    if ((smart.pending ?? 0) > 0) return { label: 'pending sectors', tone: 'bad', detail: 'sectors waiting to be remapped' }
+    if ((smart.crc_errors ?? 0) > 0) return { label: 'link errors', tone: 'bad', detail: 'UDMA CRC errors suggest cable or controller' }
+    // Attributes without a health verdict are not a failure: the drive answered,
+    // smartctl simply had no passed/failed field to report.
+    if (!smart.status_known) {
+      return { label: 'no verdict', tone: 'unknown', detail: 'smartctl returned attributes but no health verdict' }
+    }
+    if (!smart.passed) return { label: 'failed', tone: 'bad', detail: 'the drive reported a failing health check' }
+    return { label: 'passed', tone: 'ok', detail: 'the drive reported a passing health check' }
   }
 
   function diskKind(disk: DiskDevice): string {
@@ -199,12 +224,15 @@
   const THROUGHPUT_WINDOW_MS = 10 * 60_000
 
   function samplePath(samples: Sample[], width = 320, height = 64, maxValue?: number): string {
-    if (samples.length < 2) return ''
     const to = Date.now()
     const from = to - THROUGHPUT_WINDOW_MS
+    // Samples older than the window are dropped, not pinned to the left edge:
+    // pinning them invents activity inside the window that never happened.
+    const visible = samples.filter((sample) => sample.t >= from && sample.t <= to)
+    if (visible.length < 2) return ''
     const span = THROUGHPUT_WINDOW_MS
-    const max = Math.max(maxValue ?? 0, ...samples.map((sample) => sample.v), 1)
-    return samples
+    const max = Math.max(maxValue ?? 0, ...visible.map((sample) => sample.v), 1)
+    return visible
       .map((sample, index) => {
         const x = Math.min(width, Math.max(0, ((sample.t - from) / span) * width))
         const y = height - (sample.v / max) * height
@@ -222,16 +250,24 @@
     return palette[index % palette.length]
   }
 
+  // A slow response for the previous device or range must not overwrite the
+  // current one; the sequence check is the only thing that makes that race
+  // impossible.
+  let historySeq = 0
+
   async function loadHistory() {
     const id = device.id
+    const days = rangeDays
+    const seq = ++historySeq
     historyError = ''
     try {
-      const res = await apiFetch(apiURL(`/api/devices/${id}/storage/history?days=${rangeDays}`))
+      const res = await apiFetch(apiURL(`/api/devices/${id}/storage/history?days=${days}`))
       if (!res.ok) throw new Error(`history request failed (${res.status})`)
       const payload = await res.json()
+      if (seq !== historySeq || id !== device.id || days !== rangeDays) return
       history = payload?.mounts ?? {}
     } catch (e) {
-      historyError = e instanceof Error ? e.message : 'Could not load the storage history'
+      if (seq === historySeq) historyError = e instanceof Error ? e.message : 'Could not load the storage history'
     }
   }
 
@@ -279,7 +315,7 @@
       </div>
       <div class="vbox">
         <span class="k">Growth · 7d</span>
-        <span class="v">{growth7 == null ? '—' : `+${formatBytes(growth7)}`}</span>
+        <span class="v">{signedBytes(growth7)}</span>
         <span class="s">{growth7 == null ? 'needs more than a day of history' : 'summed over the mounted filesystems'}</span>
       </div>
       <div class="vbox">
@@ -319,6 +355,11 @@
     {/if}
 
     <h2>Filesystems</h2>
+    {#if reportedPartitions == null}
+      <p class="muted">This agent did not report filesystems. Update it, or check that the collector can read /proc/mounts.</p>
+    {:else if partitions.length === 0}
+      <p class="muted">No filesystem was reported on this cycle.</p>
+    {:else}
     <div class="table-wrap">
       <table>
         <thead>
@@ -341,14 +382,14 @@
               <td class="strong">{row.mount}</td>
               <td class="mono faint">{row.device}</td>
               <td class="faint">{row.fstype || '—'}</td>
-              <td class="mono">{formatBytes(row.total_bytes)}</td>
+              <td class="mono">{row.total_bytes ? formatBytes(row.total_bytes) : 'not reported'}</td>
               <td>
                 <div class="track">
                   <div class={barClass(row.severity === 'crit')} style={`width:${Math.min(100, row.used_percent)}%`}></div>
                 </div>
               </td>
-              <td class="num mono">{row.used_percent.toFixed(0)}%</td>
-              <td class="num mono">{formatBytes(row.free_bytes)}{#if row.avail_bytes != null && row.avail_bytes !== row.free_bytes} / {formatBytes(row.avail_bytes)}{/if}</td>
+              <td class="num mono">{row.total_bytes ? `${row.used_percent.toFixed(0)}%` : '—'}</td>
+              <td class="num mono">{row.total_bytes ? formatBytes(row.free_bytes) : '—'}{#if row.total_bytes && row.avail_bytes != null && row.avail_bytes !== row.free_bytes} / {formatBytes(row.avail_bytes)}{/if}</td>
               <td class="num mono faint">{row.reserved_bytes ? formatBytes(row.reserved_bytes) : '—'}</td>
               <td class="num mono" class:strong={row.severity !== 'ok' && (row.inodes_total ?? 0) > 0}>{inodeText(row)}</td>
               <td class="mono faint options">{row.options || '—'}{#if row.read_only} <span class="flag hi">ro</span>{/if}</td>
@@ -357,12 +398,15 @@
         </tbody>
       </table>
     </div>
+    {/if}
 
     <div class="grid2">
       <div class="card">
         <h3>Used % by filesystem · {rangeDays}d</h3>
-        {#if Object.values(history).every((points) => points.length < 2)}
+        {#if Object.keys(history).length === 0}
           <p class="muted small">No daily history yet. The server records one row per mount per day from the first telemetry of the day, so this chart fills in from tomorrow.</p>
+        {:else if Object.values(history).every((points) => points.length < 2)}
+          <p class="muted small">One daily sample so far. The line needs a second day before it can show a slope.</p>
         {:else}
           <svg width="100%" height="104" viewBox="0 0 320 104" preserveAspectRatio="none" aria-label="Used percent per filesystem">
             <line x1="0" y1="4" x2="320" y2="4" stroke="var(--border)" />
@@ -394,9 +438,9 @@
             {#each rows as row (row.mount)}
               <tr>
                 <td class="strong">{row.mount}</td>
-                <td class="num mono">{row.perDay == null ? '—' : formatBytes(row.perDay)}</td>
-                <td class="num mono">{formatBytes(row.free_bytes)}</td>
-                <td class="mono">{row.etaDays == null ? (row.perDay != null && row.perDay <= 0 ? 'stable' : '—') : `${row.etaDays}d`}</td>
+                <td class="num mono">{signedBytes(row.perDay)}</td>
+                <td class="num mono">{row.total_bytes ? formatBytes(row.free_bytes) : '—'}</td>
+                <td class="mono">{forecast(row)}</td>
               </tr>
             {/each}
           </tbody>
@@ -463,7 +507,7 @@
           <tbody>
             {#each diskDevices as disk (disk.name)}
               {@const state = smartState(disk)}
-              <tr class:att={!state.ok}>
+              <tr class:att={state.tone === 'bad'}>
                 <td class="mono strong">{disk.name}</td>
                 <td>{disk.model || '—'}</td>
                 <td class="faint">{diskKind(disk)}</td>
@@ -475,7 +519,7 @@
                 <td class="num mono">{disk.smart?.reallocated ?? '—'}</td>
                 <td class="num mono">{disk.smart?.pending ?? '—'}</td>
                 <td class="num mono">{disk.smart?.crc_errors ?? '—'}</td>
-                <td title={state.detail}><span class="flag" class:hi={!state.ok}>{state.label}</span></td>
+                <td title={state.detail}><span class="flag" class:hi={state.tone === 'bad'}>{state.label}</span></td>
               </tr>
             {/each}
           </tbody>
