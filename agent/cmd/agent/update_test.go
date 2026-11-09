@@ -142,35 +142,33 @@ func TestParseAgentVersionRejectsInvalid(t *testing.T) {
 	}
 }
 
-func TestMergeExecStartKeepsExistingCommand(t *testing.T) {
-	current := "[Unit]\nDescription=SyncWin\n\n[Service]\nExecStart=/opt/custom/sync-win-agent daemon --server http://old:8080\nSupplementaryGroups=docker\n"
-	desired := "[Unit]\nDescription=SyncWin\n\n[Service]\nExecStart=/usr/local/bin/sync-win-agent daemon --server http://new:8080\nSupplementaryGroups=docker systemd-journal\n"
-
-	// The server renders its own ExecStart, which points at the public URL. A
-	// device installed from a different URL must keep its own, or an update
-	// silently repoints it.
-	got := mergeExecStart(current, strings.Replace(desired,
-		"ExecStart=/usr/local/bin/sync-win-agent daemon --server http://new:8080",
-		"ExecStart={{SERVER_URL}}", 1))
-	if !strings.Contains(got, "--server http://old:8080") {
-		t.Errorf("existing ExecStart lost:\n%s", got)
+// An installed unit is patched, never replaced: replacing it rewrote the
+// identity and sandbox another installer chose.
+func TestApplySupplementaryGroupsPatchesInPlace(t *testing.T) {
+	current := "[Unit]\nDescription=SyncWin dev agent\n\n[Service]\nUser=root\nExecStart=/usr/local/bin/sync-win-agent daemon --server http://old:8080\nRestart=always\n"
+	patched := applySupplementaryGroups(current, "docker systemd-journal")
+	if !strings.Contains(patched, "User=root") {
+		t.Errorf("local identity lost:\n%s", patched)
 	}
-	if !strings.Contains(got, "systemd-journal") {
-		t.Errorf("new group missing:\n%s", got)
+	if !strings.Contains(patched, "--server http://old:8080") {
+		t.Errorf("local ExecStart lost:\n%s", patched)
+	}
+	if !strings.Contains(patched, "SupplementaryGroups=docker systemd-journal") {
+		t.Errorf("journal group missing:\n%s", patched)
 	}
 }
 
-func TestMergeExecStartPrefersRenderedCommand(t *testing.T) {
-	current := "[Service]\nExecStart=/opt/custom/agent\n"
-	desired := "[Service]\nExecStart=/usr/local/bin/sync-win-agent daemon --server http://new:8080\nSupplementaryGroups=docker systemd-journal\n"
-	got := mergeExecStart(current, desired)
-	if !strings.Contains(got, "http://new:8080") {
-		t.Errorf("a rendered ExecStart should win:\n%s", got)
+func TestRenderUnitTemplateFillsWhatTheUpdateKnows(t *testing.T) {
+	template := "[Service]\nExecStart={{AGENT_BINARY}} daemon --server {{SERVER_URL}} --device-id {{DEVICE_ID}} --device-token {{DEVICE_TOKEN}}{{USER_FLAG}}\n"
+	got := renderUnitTemplate(template, "/usr/local/bin/sync-win-agent", "http://box:8080", "sync-win-agent.service", "dev-1", "secret")
+	if strings.Contains(got, "{{") {
+		t.Fatalf("placeholders survived rendering: %s", got)
+	}
+	if !strings.Contains(got, "--server http://box:8080 --device-id dev-1 --device-token secret") {
+		t.Fatalf("rendered command is wrong: %s", got)
 	}
 }
 
-// The endpoint serves the raw template; rendering it needs the installed unit's
-// ExecStart, so the fetch must keep the placeholders instead of refusing them.
 func TestFetchAgentUnitReturnsTheRawTemplate(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("[Service]\nExecStart={{SERVER_URL}}\n"))
@@ -188,13 +186,6 @@ func TestFetchAgentUnitReturnsTheRawTemplate(t *testing.T) {
 
 // With no installed unit to borrow the ExecStart from, the render cannot
 // finish; that must be an error, never a written unit with {{...}} in it.
-func TestMergeExecStartLeavesPlaceholdersWhenThereIsNothingToBorrow(t *testing.T) {
-	desired := "[Service]\nExecStart=/usr/local/bin/sync-win-agent --server {{SERVER_URL}}\n"
-	got := mergeExecStart("", desired)
-	if !strings.Contains(got, "{{") {
-		t.Fatalf("expected the placeholders to remain and be caught by the caller: %s", got)
-	}
-}
 
 func TestFetchAgentUnitRejectsNonUnitResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -462,28 +453,5 @@ func TestUpdateStatePathUsesTheFirstStateDirectory(t *testing.T) {
 	want := filepath.Join("/run/first", agentUpdateStateFile)
 	if got := agentUpdateStatePath(); got != want {
 		t.Fatalf("path = %q, want %q", got, want)
-	}
-}
-
-// The unit endpoint serves the raw template, whose ExecStart carries
-// {{SERVER_URL}} and the device credentials. The rendered ExecStart of the
-// installed unit is the only correct value; writing the template is what made
-// every unit refresh fail with "unit still contains template placeholders".
-func TestMergeExecStartKeepsTheInstalledCredentials(t *testing.T) {
-	current := "[Service]\nExecStart=/usr/local/bin/sync-win-agent daemon --server http://box:8080 --device-id dev-1 --device-token secret\n"
-	desired := "[Service]\nExecStart=/usr/local/bin/sync-win-agent daemon --server {{SERVER_URL}} --device-id {{DEVICE_ID}} --device-token {{DEVICE_TOKEN}}\n"
-	merged := mergeExecStart(current, desired)
-	if strings.Contains(merged, "{{") {
-		t.Fatalf("placeholders survived the merge: %s", merged)
-	}
-	if !strings.Contains(merged, "--device-token secret") {
-		t.Fatalf("the installed credentials were dropped: %s", merged)
-	}
-}
-
-func TestMergeExecStartUsesARenderedTemplate(t *testing.T) {
-	desired := "[Service]\nExecStart=/usr/local/bin/sync-win-agent daemon --server http://box:8080 --device-id dev-1 --device-token secret\n"
-	if got := mergeExecStart("", desired); got != desired {
-		t.Fatalf("a rendered template must be used as is, got %s", got)
 	}
 }
