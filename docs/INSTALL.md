@@ -203,9 +203,10 @@ installing the agent again.
 
 ### Checking what the fleet is doing
 
-Administration → Settings shows an **Agent fleet** panel: every device against
-the version the server ships, the result of the last update attempt, and the
-agent's own CPU and memory cost. A device behind the server but updating
+The **Agents** screen (sidebar, next to Findings) shows every device against the
+version the server ships, the result of the last update attempt, and what the
+agent costs on that machine: its RSS and CPU against the machine's own capacity,
+with a two-hour line per device. A device behind the server but updating
 normally needs nothing; a device marked *Cannot self-update* needs the installer
 run once.
 

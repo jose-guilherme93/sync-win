@@ -12,6 +12,7 @@ export type Section =
   | 'home'
   | 'alerts'
   | 'findings'
+  | 'agents'
   | 'reports'
   // Device-scoped — hardware
   | 'overview'
@@ -64,6 +65,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { section: 'home', label: 'Home', icon: 'grid' },
       { section: 'alerts', label: 'Alerts', icon: 'bell' },
       { section: 'findings', label: 'Findings', icon: 'shield' },
+      { section: 'agents', label: 'Agents', icon: 'gauge' },
       { section: 'reports', label: 'Reports', icon: 'chart' }
     ]
   },

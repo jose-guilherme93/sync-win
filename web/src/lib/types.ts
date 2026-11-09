@@ -328,6 +328,19 @@ export type Device = {
 
 export type AppInfo = { name: string; version: string; source: string; path?: string }
 
+// One sample of the agent's own cost, read from the raw telemetry window.
+export type AgentUsagePoint = {
+  t: string
+  rss: number
+  cpu: number
+}
+
+export type AgentUsageSeries = {
+  from: string
+  to: string
+  devices: Record<string, AgentUsagePoint[]>
+}
+
 // Client-side status fallback. The API reports a status, but it can lag the
 // last_seen_at by a poll interval, so the UI recomputes from the timestamp and
 // only trusts an explicit error/duplicate.

@@ -102,6 +102,12 @@ class FakeEventSource {
   }
 }
 
+// The screen opens on the Agents tab; the log and retention tests have to
+// switch to the tab they exercise first.
+async function openTab(name: 'Application log' | 'Configuration') {
+  await fireEvent.click(await screen.findByRole('tab', { name }))
+}
+
 describe('Application settings screen', () => {
   afterEach(() => {
     cleanup()
@@ -112,6 +118,7 @@ describe('Application settings screen', () => {
   it('renders stored log entries with their level and event', async () => {
     stubFetch((url) => route(url))
     render(AppSettings)
+    await openTab('Application log')
 
     expect(await screen.findByText('http_error')).toBeTruthy()
     expect(screen.getByText('device request failed')).toBeTruthy()
@@ -121,6 +128,7 @@ describe('Application settings screen', () => {
   it('summarises the totals from the stats endpoint', async () => {
     stubFetch((url) => route(url))
     render(AppSettings)
+    await openTab('Application log')
 
     // The by-level chips come straight from /api/logs/stats.
     expect(await screen.findByText('ERROR 1')).toBeTruthy()
@@ -130,6 +138,7 @@ describe('Application settings screen', () => {
   it('sends the level filter to the API when one is picked', async () => {
     const { calls } = stubFetch((url) => route(url))
     render(AppSettings)
+    await openTab('Application log')
     await screen.findByText('http_error')
 
     const level = await screen.findByLabelText('Level')
@@ -142,6 +151,7 @@ describe('Application settings screen', () => {
   it('sends a request id to trace one request through the log', async () => {
     const { calls } = stubFetch((url) => route(url))
     render(AppSettings)
+    await openTab('Application log')
     await screen.findByText('http_error')
 
     const request = await screen.findByLabelText('Request ID')
@@ -157,6 +167,7 @@ describe('Application settings screen', () => {
   it('renders the persisted settings values', async () => {
     stubFetch((url) => route(url))
     render(AppSettings)
+    await openTab('Configuration')
 
     const level = (await screen.findByLabelText('Persistence level')) as HTMLSelectElement
     expect(level.value).toBe('INFO')
@@ -172,6 +183,7 @@ describe('Application settings screen', () => {
       return route(url)
     })
     render(AppSettings)
+    await openTab('Configuration')
 
     await screen.findByLabelText('Persistence level')
     const level = (await screen.findByLabelText('Persistence level')) as HTMLSelectElement
@@ -186,6 +198,7 @@ describe('Application settings screen', () => {
   it('renders the stored telemetry retention values', async () => {
     stubFetch((url) => route(url))
     render(AppSettings)
+    await openTab('Configuration')
 
     const raw = (await screen.findByLabelText('Raw telemetry (hours)')) as HTMLInputElement
     expect(raw.value).toBe('2')
@@ -203,6 +216,7 @@ describe('Application settings screen', () => {
       return route(url)
     })
     render(AppSettings)
+    await openTab('Configuration')
 
     const raw = (await screen.findByLabelText('Raw telemetry (hours)')) as HTMLInputElement
     await fireEvent.input(raw, { target: { value: '6' } })
@@ -227,6 +241,7 @@ describe('Application settings screen', () => {
       return route(url)
     })
     render(AppSettings)
+    await openTab('Configuration')
 
     await screen.findByLabelText('Raw telemetry (hours)')
     await fireEvent.click(screen.getByText('Save retention'))
@@ -242,6 +257,7 @@ describe('Application settings screen', () => {
       return route(url)
     })
     render(AppSettings)
+    await openTab('Application log')
 
     expect(await screen.findByRole('alert')).toBeTruthy()
 
@@ -254,6 +270,7 @@ describe('Application settings screen', () => {
     vi.stubGlobal('EventSource', FakeEventSource)
     const { calls } = stubFetch((url) => route(url))
     render(AppSettings)
+    await openTab('Application log')
     await screen.findByText('http_error')
 
     await fireEvent.click(screen.getByRole('button', { name: /Live/ }))
@@ -281,6 +298,7 @@ describe('Application settings screen', () => {
     vi.stubGlobal('EventSource', FakeEventSource)
     stubFetch((url) => route(url))
     render(AppSettings)
+    await openTab('Application log')
     await screen.findByText('http_error')
 
     await fireEvent.click(screen.getByRole('button', { name: /Live/ }))
@@ -298,6 +316,7 @@ describe('Application settings screen', () => {
     vi.stubGlobal('EventSource', FakeEventSource)
     stubFetch((url) => route(url))
     render(AppSettings)
+    await openTab('Application log')
     await screen.findByText('http_error')
 
     const live = screen.getByRole('button', { name: /Live/ })
@@ -309,90 +328,17 @@ describe('Application settings screen', () => {
   })
 })
 
-describe('Application settings · agent fleet', () => {
+describe('Application settings · tabs', () => {
   afterEach(() => {
     cleanup()
     vi.unstubAllGlobals()
   })
 
-  const now = new Date().toISOString()
-
-  function agentDevice(id: string, hostname: string, hardware: Record<string, unknown>) {
-    return {
-      id,
-      hostname,
-      user_id: 'owner',
-      status: 'online',
-      last_seen_at: now,
-      last_sync_at: now,
-      app_count: 0,
-      preference_count: 0,
-      saves_count: 0,
-      saves_size_bytes: 0,
-      hardware: {
-        cpu_usage_percent: 1,
-        memory_used_bytes: 1,
-        memory_total_bytes: 2,
-        disk_read_rate: 0,
-        disk_write_rate: 0,
-        uptime_seconds: 1,
-        load_average: '0',
-        power_watts: 0,
-        collected_at: now,
-        ...hardware
-      }
-    }
-  }
-
-  it('shows each device against the version the server ships', async () => {
-    stubFetch((url) => route(url))
-    render(AppSettings, {
-      props: {
-        shippedAgentVersion: '0.11.3',
-        devices: [
-          agentDevice('dev-a', 'fresh-box', { agent_version: '0.11.3', agent_cpu_usage: 0.4, agent_memory_bytes: 12_000_000 }),
-          agentDevice('dev-b', 'old-box', { agent_version: '0.10.0' })
-        ] as never
-      }
-    })
-
-    expect(await screen.findByText('Agent fleet')).toBeTruthy()
-    // The device select in the log filters repeats the hostname, so count
-    // rather than requiring a single node.
-    expect(screen.getAllByText('fresh-box').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('old-box').length).toBeGreaterThan(0)
-    // Scope to the table: "Up to date" is also the summary KPI label.
-    const table = document.querySelector('.agent-table') as HTMLElement
-    expect(within(table).getAllByText('Up to date').length).toBe(1)
-    expect(within(table).getAllByText('Behind').length).toBe(1)
-  })
-
-  it('surfaces a fail-closed agent as needing attention, with the reason', async () => {
-    stubFetch((url) => route(url))
-    render(AppSettings, {
-      props: {
-        shippedAgentVersion: '0.11.3',
-        devices: [
-          agentDevice('dev-blocked', 'frozen-box', {
-            agent_version: '0.10.0',
-            agent_update_status: 'failed',
-            agent_update_error: 'agent was built without an update signing key; refusing unsigned update'
-          })
-        ] as never
-      }
-    })
-
-    expect(await screen.findByText('Cannot self-update')).toBeTruthy()
-    expect(
-      screen.getByText(/agent was built without an update signing key/)
-    ).toBeTruthy()
-    expect(screen.getByText(/cannot update itself/)).toBeTruthy()
-  })
-
-  it('says so when no device is enrolled instead of rendering an empty table', async () => {
+  it('does not duplicate the agent fleet inside settings', async () => {
     stubFetch((url) => route(url))
     render(AppSettings)
-    expect(await screen.findByText('No devices enrolled yet.')).toBeTruthy()
+
+    expect(await screen.findByText('http_error')).toBeTruthy()
+    expect(screen.queryByRole('tab', { name: /Agents/ })).toBeNull()
   })
 })
-

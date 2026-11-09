@@ -206,6 +206,7 @@ func Run() error {
 	mux.HandleFunc("/api/sync-config", server.handleSyncConfig)
 	mux.HandleFunc("/api/agent/version", server.handleAgentVersion)
 	mux.HandleFunc("/api/devices", server.handleDevices)
+	mux.HandleFunc("/api/agents/usage", server.handleAgentUsage)
 	mux.HandleFunc("/api/devices/", server.handleDeviceDetail)
 	mux.HandleFunc("/api/agent/install.sh", server.handleAgentInstallScript)
 	mux.HandleFunc("/api/agent/unit", server.handleAgentUnitTemplate)
@@ -846,6 +847,63 @@ func shellDoubleQuote(value string) string {
 		"`", "\\`",
 		`$`, `\$`,
 	).Replace(value)
+}
+
+// handleAgentUsage serves the per-device history of the agent's own cost.
+//
+// The fleet view needs one series per device to draw a sparkline; asking the
+// per-device telemetry history N times would be N authentication checks and N
+// scans for the same two numbers. This reads the raw window once and returns
+// the downsample.
+func (s *Server) handleAgentUsage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	ownerID, ok := s.requireSession(w, r)
+	if !ok {
+		return
+	}
+
+	to := time.Now().UTC()
+	from := to.Add(-2 * time.Hour)
+	if v := r.URL.Query().Get("from"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, errors.New("invalid 'from' timestamp (expected RFC3339)"))
+			return
+		}
+		from = t
+	}
+	if v := r.URL.Query().Get("to"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, errors.New("invalid 'to' timestamp (expected RFC3339)"))
+			return
+		}
+		to = t
+	}
+	if to.Before(from) {
+		s.writeError(w, http.StatusBadRequest, errors.New("'to' must not be before 'from'"))
+		return
+	}
+	// The raw window is bounded by retention anyway; cap it so a hand-written
+	// query cannot turn into a full-table scan.
+	if to.Sub(from) > 24*time.Hour {
+		from = to.Add(-24 * time.Hour)
+	}
+
+	series, err := s.store.AgentUsageSeries(ownerID, from, to, 0)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"from":    from.Format(time.RFC3339),
+		"to":      to.Format(time.RFC3339),
+		"devices": series,
+	})
 }
 
 func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {

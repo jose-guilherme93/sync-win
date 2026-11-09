@@ -3,14 +3,11 @@
   import { apiFetch, apiURL } from '../../lib/api'
   import EmptyState from '../ui/EmptyState.svelte'
   import type { Device } from '../../lib/types'
-  import { formatBytes } from '../../lib/format'
-  import { agentHealth, summarizeAgentFleet, agentStateLabel, type AgentHealthState } from '../../lib/agent-health'
 
   export let devices: Device[] = []
   export let authHeaders: Record<string, string> = {}
   // The version of the binary the server hands out. The fleet view uses it as
   // the target when a device has never reported an update attempt of its own.
-  export let shippedAgentVersion = ''
 
   type LogEntry = {
     id: number
@@ -103,36 +100,15 @@
   $: hasMore = offset < total
   $: levels = settings?.levels ?? []
   $: categories = settings?.categories ?? []
-  $: agentRows = devices
-    .map((device) => agentHealth(device, shippedAgentVersion))
-    .sort((a, b) => agentRank(a.state) - agentRank(b.state) || a.label.localeCompare(b.label))
-  $: agentSummary = summarizeAgentFleet(devices, shippedAgentVersion)
 
-  // Attention first: a device that cannot update matters more than twelve that
-  // are simply current, and the operator opens this screen to find those.
-  function agentRank(state: AgentHealthState): number {
-    switch (state) {
-      case 'blocked':
-        return 0
-      case 'failed':
-        return 1
-      case 'outdated':
-        return 2
-      case 'updating':
-        return 3
-      case 'unknown':
-        return 4
-      default:
-        return 5
-    }
-  }
+  // Three audiences, three tabs. The log viewer is a debugging tool and the
+  // agent panel is an operations view; stacked on one page they pushed both
+  // below the fold.
+  type View = 'logs' | 'configuration'
+  let view: View = 'logs'
 
-  function agentPercent(value: number | null): string {
-    return value == null ? '—' : `${value.toFixed(2)}%`
-  }
-
-  function agentMemory(value: number | null): string {
-    return value == null ? '—' : formatBytes(value)
+  function showView(next: View) {
+    view = next
   }
 
   function fromFor(id: string): string {
@@ -431,7 +407,7 @@
   onMount(() => {
     void loadSettings()
     void loadRetention()
-    reload()
+    void reload()
   })
 
   onDestroy(() => {
@@ -447,115 +423,34 @@
       <p class="eyebrow">Administration</p>
       <h1>Settings</h1>
       <p class="muted">
-        The fleet's agents — version, update health and their own resource cost — plus every
-        structured event the server records: HTTP, auth, devices, commands and sync, the thresholds
-        that decide what is kept, and how long telemetry history is retained.
+        The fleet's agents and their update state, the application log, and the retention windows
+        that decide what the server keeps.
       </p>
     </div>
-    <div class="head-actions">
-      {#if liveError}
-        <span class="live-error" role="status">{liveError}</span>
-      {/if}
-      <button class:active={live} class="ghost" on:click={toggleLive}>
-        {live ? 'Live · on' : 'Live · off'}
-      </button>
-      <button class="ghost" on:click={reload} disabled={loading}>Refresh</button>
-    </div>
+    {#if view === 'logs'}
+      <div class="head-actions">
+        {#if liveError}
+          <span class="live-error" role="status">{liveError}</span>
+        {/if}
+        <button class:active={live} class="ghost" on:click={toggleLive}>
+          {live ? 'Live · on' : 'Live · off'}
+        </button>
+        <button class="ghost" on:click={reload} disabled={loading}>Refresh</button>
+      </div>
+    {/if}
   </header>
 
-  <section class="settings-card">
-    <header>
-      <h2>Agent fleet</h2>
-      <p class="muted">
-        Every device's agent: the version it runs against the version this server hands out, what
-        the automatic updater did last, and what the agent itself costs. A device that is behind
-        keeps syncing; one that cannot self-update needs a fresh install.
-      </p>
-    </header>
+  <div class="view-tabs" role="tablist" aria-label="Settings sections">
+    <button role="tab" aria-selected={view === 'logs'} class:active={view === 'logs'} on:click={() => showView('logs')}>
+      Application log
+      {#if errors24h > 0}<span class="count warn">{errors24h}</span>{/if}
+    </button>
+    <button role="tab" aria-selected={view === 'configuration'} class:active={view === 'configuration'} on:click={() => showView('configuration')}>
+      Configuration
+    </button>
+  </div>
 
-    <div class="agent-stats">
-      <div class="stat">
-        <span class="k">Devices</span>
-        <strong>{agentSummary.total}</strong>
-      </div>
-      <div class="stat">
-        <span class="k">Up to date</span>
-        <strong class="ok">{agentSummary.current}</strong>
-      </div>
-      <div class="stat">
-        <span class="k">Behind</span>
-        <strong class:behind={agentSummary.outdated + agentSummary.updating > 0}>
-          {agentSummary.outdated + agentSummary.updating}
-        </strong>
-      </div>
-      <div class="stat">
-        <span class="k">Needs attention</span>
-        <strong class:crit={agentSummary.needsAttention > 0}>{agentSummary.needsAttention}</strong>
-      </div>
-      <div class="stat">
-        <span class="k">Agent RSS · fleet</span>
-        <strong>{agentSummary.reporting === 0 ? '—' : agentMemory(agentSummary.agentMemoryBytes)}</strong>
-        <small>{agentSummary.reporting} of {agentSummary.total} reporting</small>
-      </div>
-      <div class="stat">
-        <span class="k">Agent CPU · fleet</span>
-        <strong>{agentSummary.reporting === 0 ? '—' : agentPercent(agentSummary.agentCPUPercent)}</strong>
-        <small>sum of the agents' own share</small>
-      </div>
-    </div>
-
-    {#if agentRows.length === 0}
-      <p class="muted">No devices enrolled yet.</p>
-    {:else}
-      <div class="agent-table-wrap">
-        <table class="agent-table">
-          <thead>
-            <tr>
-              <th>Device</th>
-              <th>State</th>
-              <th>Agent</th>
-              <th>Target</th>
-              <th>Last attempt</th>
-              <th class="num">CPU</th>
-              <th class="num">Memory</th>
-              <th>Detail</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each agentRows as row (row.id)}
-              <tr class:attention={row.state === 'blocked' || row.state === 'failed'}>
-                <td class="name">{row.label}</td>
-                <td><span class="state state-{row.state}">{agentStateLabel(row.state)}</span></td>
-                <td class="mono">{row.installed}</td>
-                <td class="mono">{row.target}</td>
-                <td class="mono">{row.lastAttempt}</td>
-                <td class="num mono">{agentPercent(row.cpu)}</td>
-                <td class="num mono">{agentMemory(row.memory)}</td>
-                <td class="detail-cell">
-                  {#if row.error}
-                    <span class="err">{row.error}</span>
-                  {:else if !row.online}
-                    <span class="muted">No report for {row.seen}</span>
-                  {:else}
-                    <span class="muted">—</span>
-                  {/if}
-                </td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-      </div>
-      {#if agentSummary.blocked > 0}
-        <p class="muted note">
-          {agentSummary.blocked} device{agentSummary.blocked === 1 ? '' : 's'} cannot update itself:
-          the installed agent was built without the update signing key, so it refuses every update.
-          Reinstall the agent once from the dashboard; automatic updates resume afterwards.
-        </p>
-      {/if}
-    {/if}
-  </section>
-
-
+  {#if view === 'logs'}
   <div class="stat-row">
     <div class="stat">
       <span class="k">Total entries</span>
@@ -665,7 +560,7 @@
       </div>
     {/if}
   {/if}
-
+  {:else}
   <section class="settings-card">
     <header>
       <h2>Log settings</h2>
@@ -769,6 +664,7 @@
       </div>
     {/if}
   </section>
+  {/if}
 </section>
 
 <style>
@@ -824,124 +720,50 @@
     gap: 0.6rem;
   }
 
-  .agent-stats {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-    gap: 0.6rem;
-  }
-
-  .agent-stats .stat small {
-    color: var(--text-faint);
-    font-size: 0.68rem;
-  }
-
-  .stat strong.ok {
-    color: var(--accent);
-  }
-
-  .stat strong.behind {
-    color: var(--warn);
-  }
-
-  .agent-table-wrap {
-    overflow-x: auto;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-  }
-
-  .agent-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.78rem;
-  }
-
-  .agent-table th {
-    text-align: left;
-    padding: 0.45rem 0.6rem;
-    color: var(--text-faint);
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+  .view-tabs {
+    display: flex;
+    gap: 0.1rem;
     border-bottom: 1px solid var(--border);
-    white-space: nowrap;
   }
 
-  .agent-table td {
-    padding: 0.45rem 0.6rem;
-    border-top: 1px solid var(--border);
-    color: var(--text);
-    vertical-align: middle;
-  }
-
-  .agent-table tr:first-child td {
-    border-top: 0;
-  }
-
-  .agent-table tr.attention td {
-    background: color-mix(in srgb, var(--danger, #ef5350) 8%, transparent);
-  }
-
-  .agent-table .name {
-    font-weight: 600;
-    color: var(--text-bright);
-    white-space: nowrap;
-  }
-
-  .mono {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-
-  .num {
-    text-align: right;
-  }
-
-  .detail-cell {
-    max-width: 380px;
-    min-width: 180px;
-  }
-
-  .err {
-    color: var(--danger, #ef5350);
-    word-break: break-word;
-  }
-
-  .note {
-    margin: 0;
-  }
-
-  .state {
-    display: inline-block;
-    padding: 0.05rem 0.4rem;
-    border-radius: 999px;
-    border: 1px solid var(--border);
-    background: var(--card-hover);
+  .view-tabs button {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.5rem 0.7rem;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    background: transparent;
     color: var(--text-muted);
-    font-size: 0.68rem;
-    white-space: nowrap;
+    font: inherit;
+    font-size: 0.82rem;
+    cursor: pointer;
+    transition: color var(--t-fast), border-color var(--t-fast);
   }
 
-  .state-current {
-    border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-    color: var(--accent);
+  .view-tabs button:hover {
+    color: var(--text);
   }
 
-  .state-outdated,
-  .state-updating {
-    border-color: color-mix(in srgb, var(--warn) 55%, var(--border));
-    color: var(--warn);
+  .view-tabs button.active {
+    color: var(--text-bright);
+    border-bottom-color: var(--accent);
   }
 
-  .state-failed,
-  .state-blocked {
-    border-color: color-mix(in srgb, var(--danger, #ef5350) 55%, var(--border));
-    color: var(--danger, #ef5350);
-  }
-
-  .state-unknown {
+  .view-tabs .count {
+    min-width: 1.1rem;
+    padding: 0 0.3rem;
+    border-radius: var(--radius-pill);
+    background: var(--card-hover);
     color: var(--text-faint);
+    font-size: 0.65rem;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+  }
+
+  .view-tabs .count.warn {
+    color: var(--warn);
   }
 
   .stat {

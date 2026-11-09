@@ -35,11 +35,13 @@ status: active
   telemetry payload as `agent_update_status`, `agent_update_target`,
   `agent_update_error` and `agent_update_at`. Absent means the updater never ran
   here, which the dashboard treats as `unknown`, never as a failure.
-- **Settings gained an Agent fleet panel** (`web/src/lib/agent-health.ts` plus a
-  card at the top of `AppSettings.svelte`): per device the installed version
-  against the one the server ships, the update state, the last attempt, and the
-  agent's CPU and memory. The summary counts current, behind and
-  needs-attention, and totals the fleet's agent RSS and CPU.
+- **A fleet-wide Agents screen** sits in the sidebar next to Findings, not in
+  Settings: per device the agent's RSS and CPU as a share of that machine's own
+  capacity, a two-hour RSS line, the installed version against the server's, and
+  the last update outcome. `GET /api/agents/usage` serves the history from
+  `telemetry_raw` in one request (max 60 points per device); the screen's
+  `web/src/lib/agent-health.ts` decides the state and `Agents.svelte` draws it.
+  Settings kept its log viewer and a Configuration tab.
 - **`Cannot self-update` is its own state.** The fail-closed error ("agent was
   built without an update signing key") is recognised by text and shown
   separately from an ordinary failure, because the fix is a manual install, not

@@ -197,6 +197,30 @@ JSON responses are gzip-compressed when the client sends `Accept-Encoding: gzip`
 ]
 ```
 
+### `GET /api/agents/usage`
+
+Per-device history of the agent's own cost, read from the raw telemetry window.
+The dashboard's **Agents** screen draws one sparkline per device from it; a
+single request replaces one telemetry-history read per device.
+
+**Query:** `from`, `to` (RFC3339, optional). Defaults to the last two hours and
+is capped at 24 hours. Samples are downsampled to at most 60 points per device.
+
+**Response:** `200 OK`
+```json
+{
+  "from": "2024-01-01T10:00:00Z",
+  "to": "2024-01-01T12:00:00Z",
+  "devices": {
+    "dev-1": [{ "t": "2024-01-01T10:00:05Z", "rss": 12000000, "cpu": 0.41 }]
+  }
+}
+```
+
+A device that never reported `agent_memory_bytes` and `agent_cpu_usage` is
+absent from `devices` rather than present with zeroes: absent and idle are
+different readings.
+
 ### `GET /api/devices/{id}`
 
 List the synced preference files for a device.

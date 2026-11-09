@@ -3617,3 +3617,100 @@ func (s *Store) DeleteSecurityAudit(auditID, ownerID string) error {
 	_, err := s.db.Exec("DELETE FROM security_audits WHERE id = ? AND owner_id = ?", auditID, ownerID)
 	return err
 }
+
+// AgentUsagePoint is one sample of what the agent itself costs, read back from
+// the raw telemetry payloads the server already keeps.
+type AgentUsagePoint struct {
+	Timestamp   string  `json:"t"`
+	MemoryBytes uint64  `json:"rss"`
+	CPUPercent  float64 `json:"cpu"`
+}
+
+// agentUsageMaxPointsPerDevice caps one series. The agents view draws a
+// sparkline, not a chart you can measure: sixty points is more than a 300px
+// line can show.
+const agentUsageMaxPointsPerDevice = 60
+
+// AgentUsageSeries returns, per device, the agent's own RSS and CPU over the
+// window, evenly downsampled from telemetry_raw.
+//
+// The payload in telemetry_raw is the full HardwareStats JSON, so the agent
+// fields ride along with every sample. A device that never reported them yields
+// no points rather than zeroes, which keeps "absent" distinct from "idle".
+func (s *Store) AgentUsageSeries(ownerID string, from, to time.Time, maxPerDevice int) (map[string][]AgentUsagePoint, error) {
+	if maxPerDevice <= 0 {
+		maxPerDevice = agentUsageMaxPointsPerDevice
+	}
+	devices, err := s.ListDevicesForOwner(ownerID)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make(map[string][]AgentUsagePoint, len(devices))
+	for _, device := range devices {
+		var total int
+		if err := s.db.QueryRow(
+			"SELECT COUNT(*) FROM telemetry_raw WHERE device_id = ? AND received_at >= ? AND received_at <= ?",
+			device.ID, timeText(from), timeText(to),
+		).Scan(&total); err != nil {
+			return nil, err
+		}
+		if total == 0 {
+			continue
+		}
+		stride := 1
+		if total > maxPerDevice {
+			stride = (total + maxPerDevice - 1) / maxPerDevice
+		}
+
+		rows, err := s.db.Query(
+			"SELECT payload, received_at FROM telemetry_raw WHERE device_id = ? AND received_at >= ? AND received_at <= ? ORDER BY id ASC",
+			device.ID, timeText(from), timeText(to),
+		)
+		if err != nil {
+			return nil, err
+		}
+		points := make([]AgentUsagePoint, 0, maxPerDevice)
+		index := 0
+		for rows.Next() {
+			var payload, received string
+			if err := rows.Scan(&payload, &received); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			if index%stride != 0 {
+				index++
+				continue
+			}
+			index++
+			var sample struct {
+				AgentMemoryBytes uint64  `json:"agent_memory_bytes"`
+				AgentCPUUsage    float64 `json:"agent_cpu_usage"`
+				MemoryTotalBytes uint64  `json:"memory_total_bytes"`
+			}
+			if err := json.Unmarshal([]byte(payload), &sample); err != nil {
+				continue
+			}
+			if sample.AgentMemoryBytes == 0 && sample.AgentCPUUsage == 0 {
+				continue
+			}
+			points = append(points, AgentUsagePoint{
+				Timestamp:   received,
+				MemoryBytes: sample.AgentMemoryBytes,
+				CPUPercent:  sample.AgentCPUUsage,
+			})
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+		if len(points) > 0 {
+			result[device.ID] = points
+		}
+	}
+	return result, nil
+}

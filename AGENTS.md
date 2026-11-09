@@ -44,7 +44,8 @@ The project is built around three main components:
    - Docker container management (list, start/stop/restart/kill/remove, exec, compose, prune)
    - Remote access screen: tabbed SSH terminal (xterm.js, up to six concurrent sessions, tabs named by the running program) and a scrollable recent-session audit; device actions live in Settings → Maintenance
    - Lynis security audit: run audit, read the stored report (hardening index, warnings/suggestions/categories) and history; host posture (public listeners, pending updates, failed units)
-   - fleet-wide Administration → Settings screen: the application log viewer (filter by level, category, device, time window; live tail; metadata detail) plus the log level and retention controls, and the agent fleet panel: per device the installed version against the one the server ships, the outcome of the last automatic update (with the reason when it failed or cannot self-update), and the agent's own CPU and memory cost
+   - fleet-wide Administration → Settings screen: the application log viewer (filter by level, category, device, time window; live tail; metadata detail) plus the log level and retention controls
+   - fleet-wide Agents screen (sidebar, next to Findings): what each agent costs on its own machine — RSS and CPU as a share of that machine's capacity, a two-hour RSS line per device, the installed version against the one the server ships, and the last update outcome with its reason; the server version and signature availability head the screen
    - notification settings and inbox with real-time SSE push
    - device notes and attachments
 
