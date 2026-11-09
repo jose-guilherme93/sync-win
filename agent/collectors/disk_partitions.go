@@ -24,6 +24,9 @@ func CollectDiskPartitions() []DiskPartition {
 		"ntfs": true, "vfat": true, "exfat": true,
 		"fuseblk": true, // NTFS via ntfs-3g
 		"zfs":     true, "tmpfs": true,
+		// A container's root is an overlay mount; without it the agent inside one
+		// reports only tmpfs and the disk reads as empty.
+		"overlay": true,
 	}
 
 	var partitions []DiskPartition
