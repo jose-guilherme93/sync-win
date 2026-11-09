@@ -485,6 +485,10 @@ type telemetryStats struct {
 	AgentCPUUsage      float64        `json:"agent_cpu_usage"`
 	AgentMemoryBytes   uint64         `json:"agent_memory_bytes,omitempty"`
 	AgentVersion       string         `json:"agent_version"`
+	AgentUpdateStatus  string         `json:"agent_update_status,omitempty"`
+	AgentUpdateTarget  string         `json:"agent_update_target,omitempty"`
+	AgentUpdateError   string         `json:"agent_update_error,omitempty"`
+	AgentUpdateAt      string         `json:"agent_update_at,omitempty"`
 	OperatingSystem    string         `json:"operating_system"`
 	Architecture       string         `json:"architecture"`
 	CPUModel           string         `json:"cpu_model,omitempty"`
@@ -1581,6 +1585,10 @@ func collectHardwareStats(prev *hardwareSample, now time.Time, sampleDocker bool
 	stats.OperatingSystem = runtime.GOOS
 	stats.Architecture = runtime.GOARCH
 	stats.AgentVersion = agentVersion
+	// The updater runs in its own root unit and has no other channel back to
+	// the dashboard. A missing file means it has never run here, which is not
+	// the same as a failed attempt.
+	applyUpdateStateToStats(&stats)
 	stats.CollectedAt = now.Format(time.RFC3339)
 
 	// Parallel collectors for heavier I/O operations

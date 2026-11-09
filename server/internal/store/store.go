@@ -151,6 +151,10 @@ type HardwareSummary struct {
 	AgentCPUUsage      float64         `json:"agent_cpu_usage"`
 	AgentMemoryBytes   uint64          `json:"agent_memory_bytes"`
 	AgentVersion       string          `json:"agent_version,omitempty"`
+	AgentUpdateStatus  string          `json:"agent_update_status,omitempty"`
+	AgentUpdateTarget  string          `json:"agent_update_target,omitempty"`
+	AgentUpdateError   string          `json:"agent_update_error,omitempty"`
+	AgentUpdateAt      string          `json:"agent_update_at,omitempty"`
 	KernelVersion      string          `json:"kernel_version"`
 	OperatingSystem    string          `json:"operating_system"`
 	DesktopEnvironment string          `json:"desktop_environment"`
@@ -192,6 +196,10 @@ type HardwareStats struct {
 	AgentCPUUsage      float64        `json:"agent_cpu_usage"`
 	AgentMemoryBytes   uint64         `json:"agent_memory_bytes"`
 	AgentVersion       string         `json:"agent_version,omitempty"`
+	AgentUpdateStatus  string         `json:"agent_update_status,omitempty"`
+	AgentUpdateTarget  string         `json:"agent_update_target,omitempty"`
+	AgentUpdateError   string         `json:"agent_update_error,omitempty"`
+	AgentUpdateAt      string         `json:"agent_update_at,omitempty"`
 	OperatingSystem    string         `json:"operating_system"`
 	Architecture       string         `json:"architecture"`
 	CPUModel           string         `json:"cpu_model"`

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/svelte'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import AppSettings from './AppSettings.svelte'
 
@@ -308,3 +308,91 @@ describe('Application settings screen', () => {
     expect(FakeEventSource.instances[0].closed).toBe(true)
   })
 })
+
+describe('Application settings · agent fleet', () => {
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllGlobals()
+  })
+
+  const now = new Date().toISOString()
+
+  function agentDevice(id: string, hostname: string, hardware: Record<string, unknown>) {
+    return {
+      id,
+      hostname,
+      user_id: 'owner',
+      status: 'online',
+      last_seen_at: now,
+      last_sync_at: now,
+      app_count: 0,
+      preference_count: 0,
+      saves_count: 0,
+      saves_size_bytes: 0,
+      hardware: {
+        cpu_usage_percent: 1,
+        memory_used_bytes: 1,
+        memory_total_bytes: 2,
+        disk_read_rate: 0,
+        disk_write_rate: 0,
+        uptime_seconds: 1,
+        load_average: '0',
+        power_watts: 0,
+        collected_at: now,
+        ...hardware
+      }
+    }
+  }
+
+  it('shows each device against the version the server ships', async () => {
+    stubFetch((url) => route(url))
+    render(AppSettings, {
+      props: {
+        shippedAgentVersion: '0.11.3',
+        devices: [
+          agentDevice('dev-a', 'fresh-box', { agent_version: '0.11.3', agent_cpu_usage: 0.4, agent_memory_bytes: 12_000_000 }),
+          agentDevice('dev-b', 'old-box', { agent_version: '0.10.0' })
+        ] as never
+      }
+    })
+
+    expect(await screen.findByText('Agent fleet')).toBeTruthy()
+    // The device select in the log filters repeats the hostname, so count
+    // rather than requiring a single node.
+    expect(screen.getAllByText('fresh-box').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('old-box').length).toBeGreaterThan(0)
+    // Scope to the table: "Up to date" is also the summary KPI label.
+    const table = document.querySelector('.agent-table') as HTMLElement
+    expect(within(table).getAllByText('Up to date').length).toBe(1)
+    expect(within(table).getAllByText('Behind').length).toBe(1)
+  })
+
+  it('surfaces a fail-closed agent as needing attention, with the reason', async () => {
+    stubFetch((url) => route(url))
+    render(AppSettings, {
+      props: {
+        shippedAgentVersion: '0.11.3',
+        devices: [
+          agentDevice('dev-blocked', 'frozen-box', {
+            agent_version: '0.10.0',
+            agent_update_status: 'failed',
+            agent_update_error: 'agent was built without an update signing key; refusing unsigned update'
+          })
+        ] as never
+      }
+    })
+
+    expect(await screen.findByText('Cannot self-update')).toBeTruthy()
+    expect(
+      screen.getByText(/agent was built without an update signing key/)
+    ).toBeTruthy()
+    expect(screen.getByText(/cannot update itself/)).toBeTruthy()
+  })
+
+  it('says so when no device is enrolled instead of rendering an empty table', async () => {
+    stubFetch((url) => route(url))
+    render(AppSettings)
+    expect(await screen.findByText('No devices enrolled yet.')).toBeTruthy()
+  })
+})
+

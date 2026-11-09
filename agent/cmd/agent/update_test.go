@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -339,6 +340,101 @@ func TestJournalAccessDeniedDetectsPermissionFailures(t *testing.T) {
 	} {
 		if got := journalAccessDenied(tc.status); got != tc.want {
 			t.Errorf("journalAccessDenied(%q) = %v, want %v", tc.status, got, tc.want)
+		}
+	}
+}
+
+func TestAgentUpdateStateRoundTrip(t *testing.T) {
+	t.Setenv("STATE_DIRECTORY", "")
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", dir)
+
+	saveAgentUpdateState(agentUpdateState{
+		Status:      agentUpdateFailed,
+		FromVersion: "0.10.0",
+		ToVersion:   "0.11.3",
+		Error:       "agent was built without an update signing key",
+	})
+
+	if !strings.HasPrefix(agentUpdateStatePath(), dir) {
+		t.Fatalf("state path %q escaped the test directory %q", agentUpdateStatePath(), dir)
+	}
+	state := loadAgentUpdateState()
+	if state.Status != agentUpdateFailed {
+		t.Errorf("status = %q, want %q", state.Status, agentUpdateFailed)
+	}
+	if state.FromVersion != "0.10.0" || state.ToVersion != "0.11.3" {
+		t.Errorf("versions = %q -> %q", state.FromVersion, state.ToVersion)
+	}
+	if state.Error == "" {
+		t.Error("the failure reason must survive the round trip")
+	}
+	if state.CheckedAt == "" {
+		t.Error("checked_at must be stamped when the outcome is recorded")
+	}
+}
+
+func TestUpdateFailureIsReportedForTheDashboard(t *testing.T) {
+	t.Setenv("STATE_DIRECTORY", "")
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "no version for you", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	executable := filepath.Join(t.TempDir(), "sync-win-agent")
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\necho 0.10.0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := updateAgentAt(executable, server.URL, "sync-win-agent.service", false); err == nil {
+		t.Fatal("expected the update to fail")
+	}
+
+	state := loadAgentUpdateState()
+	if state.Status != agentUpdateFailed {
+		t.Errorf("status = %q, want %q", state.Status, agentUpdateFailed)
+	}
+	if !strings.Contains(state.Error, "version endpoint") {
+		t.Errorf("error %q does not name the cause", state.Error)
+	}
+	if state.FromVersion != "0.10.0" {
+		t.Errorf("from_version = %q, want the version the device runs", state.FromVersion)
+	}
+}
+
+func TestUpdateStateIsAttachedToTelemetry(t *testing.T) {
+	t.Setenv("STATE_DIRECTORY", "")
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	saveAgentUpdateState(agentUpdateState{
+		Status:      agentUpdateFailed,
+		FromVersion: "0.10.0",
+		ToVersion:   "0.12.0",
+		Error:       "agent was built without an update signing key",
+	})
+
+	var stats telemetryStats
+	applyUpdateStateToStats(&stats)
+	if stats.AgentUpdateStatus != agentUpdateFailed {
+		t.Errorf("agent_update_status = %q, want %q", stats.AgentUpdateStatus, agentUpdateFailed)
+	}
+	if stats.AgentUpdateTarget != "0.12.0" {
+		t.Errorf("agent_update_target = %q", stats.AgentUpdateTarget)
+	}
+	if stats.AgentUpdateError == "" || stats.AgentUpdateAt == "" {
+		t.Error("error and timestamp must reach the telemetry payload")
+	}
+
+	// The names matter as much as the values: the server decodes this JSON.
+	payload, err := json.Marshal(stats)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"agent_update_status", "agent_update_target", "agent_update_error", "agent_update_at"} {
+		if !strings.Contains(string(payload), `"`+key+`"`) {
+			t.Errorf("telemetry payload has no %q: %s", key, payload)
 		}
 	}
 }

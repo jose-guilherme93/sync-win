@@ -99,29 +99,55 @@ func updateAgentAt(executable, serverURL, service string, userSystemd bool) erro
 // authenticate. They are optional so the existing callers and tests keep working
 // without them.
 func updateAgentAtIdentity(executable, serverURL, service string, userSystemd bool, deviceID, deviceToken string) error {
+	current := installedAgentVersion(executable)
+	remote, err := performAgentUpdate(executable, serverURL, service, userSystemd, deviceID, deviceToken, current)
+	if err != nil {
+		saveAgentUpdateState(agentUpdateState{
+			Status:      agentUpdateFailed,
+			FromVersion: current,
+			ToVersion:   remote,
+			Error:       err.Error(),
+		})
+		return err
+	}
+	status := agentUpdateCurrent
+	if remote != "" && remote != current {
+		status = agentUpdateUpdated
+	}
+	saveAgentUpdateState(agentUpdateState{
+		Status:      status,
+		FromVersion: current,
+		ToVersion:   remote,
+	})
+	return nil
+}
+
+// performAgentUpdate is the update body. It returns the version the server
+// offers, even when the attempt fails, so the caller can record what it was
+// trying to reach.
+func performAgentUpdate(executable, serverURL, service string, userSystemd bool, deviceID, deviceToken, current string) (string, error) {
 	if serverURL == "" {
-		return fmt.Errorf("server URL is required")
+		return "", fmt.Errorf("server URL is required")
 	}
 	remote, err := fetchAgentVersion(serverURL)
 	if err != nil {
-		return err
+		return "", err
 	}
-	current := installedAgentVersion(executable)
 	newer, err := newerAgentVersion(remote, current)
 	if err != nil {
-		return err
+		return remote, err
 	}
 	if !newer {
 		fmt.Printf("SyncWin agent is current: %s\n", current)
 		// A unit change is independent of the binary. An agent can be current
 		// while its unit is stale or missing entirely, which is how a device
 		// kept running without systemd-journal after the fix shipped.
-		return reconcileUnit(serverURL, service, userSystemd, deviceID, deviceToken)
+		return current, reconcileUnit(serverURL, service, userSystemd, deviceID, deviceToken)
 	}
 
 	temp, err := downloadAgent(serverURL, executable)
 	if err != nil {
-		return err
+		return remote, err
 	}
 	defer os.Remove(temp)
 
@@ -130,39 +156,39 @@ func updateAgentAtIdentity(executable, serverURL, service string, userSystemd bo
 	// runs it) until it is proven to come from the trusted key.
 	signature, err := downloadAgentSignature(serverURL)
 	if err != nil {
-		return err
+		return remote, err
 	}
 	if err := verifyAgentSignature(temp, signature); err != nil {
-		return err
+		return remote, err
 	}
 	if err := verifyAgentChecksum(serverURL, temp); err != nil {
-		return err
+		return remote, err
 	}
 	if err := os.Chmod(temp, 0o755); err != nil {
-		return fmt.Errorf("chmod downloaded agent: %w", err)
+		return remote, fmt.Errorf("chmod downloaded agent: %w", err)
 	}
 	downloadedVersion := installedAgentVersion(temp)
 	if downloadedVersion != remote {
-		return fmt.Errorf("downloaded agent version %q does not match server version %q", downloadedVersion, remote)
+		return remote, fmt.Errorf("downloaded agent version %q does not match server version %q", downloadedVersion, remote)
 	}
 
 	backup := executable + ".rollback"
 	_ = os.Remove(backup)
 	if err := copyFile(executable, backup, 0o755); err != nil {
-		return fmt.Errorf("backup current agent: %w", err)
+		return remote, fmt.Errorf("backup current agent: %w", err)
 	}
 	if err := os.Rename(temp, executable); err != nil {
-		return fmt.Errorf("install downloaded agent: %w", err)
+		return remote, fmt.Errorf("install downloaded agent: %w", err)
 	}
 	if err := restartAgent(service, userSystemd); err != nil {
 		_ = copyFile(backup, executable, 0o755)
 		_ = restartAgent(service, userSystemd)
-		return fmt.Errorf("new agent failed to start; rolled back: %w", err)
+		return remote, fmt.Errorf("new agent failed to start; rolled back: %w", err)
 	}
 	if err := waitForAgent(service, userSystemd); err != nil {
 		_ = copyFile(backup, executable, 0o755)
 		_ = restartAgent(service, userSystemd)
-		return fmt.Errorf("new agent failed health check; rolled back: %w", err)
+		return remote, fmt.Errorf("new agent failed health check; rolled back: %w", err)
 	}
 
 	// Rewrite the unit after the binary is proven good, then restart so a unit
@@ -174,7 +200,7 @@ func updateAgentAtIdentity(executable, serverURL, service string, userSystemd bo
 
 	_ = os.Remove(backup)
 	fmt.Printf("SyncWin agent updated: %s -> %s\n", current, remote)
-	return nil
+	return remote, nil
 }
 
 // reconcileUnit rewrites the systemd unit from the server and restarts the
@@ -655,6 +681,11 @@ func requestUpdateForCurrentVersion(serverURL string) {
 		log.Printf("could not request agent update: %v", err)
 		return
 	}
+	saveAgentUpdateState(agentUpdateState{
+		Status:      agentUpdateRequested,
+		FromVersion: current,
+		ToVersion:   remote,
+	})
 	log.Printf("agent update requested: %s -> %s (see %s)", current, remote, AgentUpdateRequestPath)
 }
 

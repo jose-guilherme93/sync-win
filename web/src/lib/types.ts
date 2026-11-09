@@ -41,6 +41,12 @@ export type HardwareStats = {
   agent_version?: string
   agent_cpu_usage?: number
   agent_memory_bytes?: number
+  // Outcome of the last automatic-update attempt, reported by the updater
+  // through its own state file. Absent means it has never run here.
+  agent_update_status?: string
+  agent_update_target?: string
+  agent_update_error?: string
+  agent_update_at?: string
   gpu_temperature_celsius?: number
   battery_percent?: number
   battery_status?: string

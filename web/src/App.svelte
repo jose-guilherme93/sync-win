@@ -1656,7 +1656,7 @@
           {:else if navState.section === 'reports'}
             <Reports {devices} onSelect={selectDevice} />
           {:else if navState.section === 'configuration'}
-            <AppSettings {devices} authHeaders={ownerHeaders} />
+            <AppSettings {devices} authHeaders={ownerHeaders} {shippedAgentVersion} />
           {:else if navState.section === 'notifications'}
             <Notifications {devices} authHeaders={ownerHeaders} unread={notifEvents} onSelect={selectDevice} onMarkedRead={handleNotifMarkedRead} />
           {:else}

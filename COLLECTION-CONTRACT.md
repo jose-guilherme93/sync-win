@@ -108,7 +108,19 @@ O agent valida tamanho, encoding e paths relativos, rejeita traversal/symlinks, 
 
 Campos enviados (todos opcionais no display, mas parte do contrato):
 
-`cpu_usage_percent, memory_used_bytes, memory_total_bytes, disk_read_bytes, disk_write_bytes, disk_read_rate, disk_write_rate, net_rx_rate, net_tx_rate, uptime_seconds, load_average, cpu_model, cpu_clock_mhz, core_voltage_v, kernel_version, operating_system, power_watts, architecture, desktop_environment, locale, timezone, agent_version`
+`cpu_usage_percent, memory_used_bytes, memory_total_bytes, disk_read_bytes, disk_write_bytes, disk_read_rate, disk_write_rate, net_rx_rate, net_tx_rate, uptime_seconds, load_average, cpu_model, cpu_clock_mhz, core_voltage_v, kernel_version, operating_system, power_watts, architecture, desktop_environment, locale, timezone, agent_version, agent_update_status, agent_update_target, agent_update_error, agent_update_at`
+
+`agent_update_status` é o resultado da última tentativa do atualizador
+automático: `requested` (o daemon viu uma versão nova e pediu a atualização),
+`current` (checou e não havia nada a fazer), `updated` (binário trocado e
+serviço reiniciado) ou `failed`. O atualizador roda como root em uma unit
+própria e não tem outro canal para o dashboard, então grava o resultado em
+`$STATE_DIRECTORY/agent-update-state.json`; o daemon lê esse arquivo e o envia
+na telemetria. Arquivo ausente significa que o atualizador nunca rodou neste
+dispositivo — o dashboard deve tratar isso como `unknown`, nunca como falha.
+`agent_update_error` carrega o motivo real (ex.: binário construído sem chave de
+assinatura, endpoint de assinatura em 404); `agent_update_target` é a versão que
+a tentativa buscava e `agent_update_at` o instante da checagem.
 
 `cpu_clock_mhz` é a frequência média atual entre as CPUs lógicas, lida de
 `cpufreq/scaling_cur_freq` (kHz) com fallback para a linha `cpu MHz` de
