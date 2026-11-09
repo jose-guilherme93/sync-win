@@ -12,6 +12,8 @@
 
   let usage: Record<string, AgentUsagePoint[]> = {}
   let usageError = ''
+  let usageFrom = 0
+  let usageTo = 0
   let serverVersion = ''
   let signatureOk: boolean | null = null
 
@@ -65,25 +67,43 @@
     }
   }
 
-  // A flat series is the reassurance this screen exists for, so the line is
-  // scaled to its own band instead of to zero: a 12 MB line against a 16 GB
-  // axis would be indistinguishable from a dead agent.
+  // Two rules decide this line: the x axis is time, so a device that has been
+  // reporting for ten minutes draws ten minutes at the right edge instead of
+  // stretching them over two hours; and the y axis is scaled to the series' own
+  // band, because a 12 MB line against a 16 GB axis would be indistinguishable
+  // from a dead agent.
   function sparkPoints(series: AgentUsagePoint[]): string {
     if (series.length < 2) return ''
+    const span = Math.max(1, usageTo - usageFrom)
     const values = series.map((point) => point.rss ?? 0)
     const max = Math.max(...values)
     const min = Math.min(...values)
     const pad = Math.max((max - min) * 2, max * 0.02, 1)
     const lo = Math.max(0, min - pad)
     const hi = max + pad
-    const span = hi - lo || 1
-    return values
-      .map((value, index) => {
-        const x = (index / (values.length - 1)) * SPARK_W
-        const y = SPARK_H - ((value - lo) / span) * SPARK_H
+    const band = hi - lo || 1
+    const points = series
+      .map((point) => {
+        const t = Date.parse(point.t)
+        if (!Number.isFinite(t)) return null
+        const x = ((t - usageFrom) / span) * SPARK_W
+        const y = SPARK_H - ((point.rss - lo) / band) * SPARK_H
         return `${x.toFixed(1)},${y.toFixed(1)}`
       })
-      .join(' ')
+      .filter((value): value is string => value != null)
+    if (points.length < 2) return ''
+    return points.join(' ')
+  }
+
+  function sparkDots(series: AgentUsagePoint[]): { x: number; y: number }[] {
+    if (series.length !== 1) return []
+    const point = series[0]
+    const t = Date.parse(point.t)
+    if (!Number.isFinite(t)) return []
+    const span = Math.max(1, usageTo - usageFrom)
+    const x = ((t - usageFrom) / span) * SPARK_W
+    const max = Math.max(point.rss ?? 0, 1)
+    return [{ x, y: SPARK_H - ((point.rss ?? 0) / (max * 1.2)) * SPARK_H }]
   }
 
   function peak(series: AgentUsagePoint[]): string {
@@ -98,6 +118,8 @@
       if (!res.ok) throw new Error(`usage request failed (${res.status})`)
       const payload = await res.json()
       usage = payload?.devices ?? {}
+      usageFrom = Date.parse(payload?.from) || Date.now() - 2 * 60 * 60_000
+      usageTo = Date.parse(payload?.to) || Date.now()
     } catch (e) {
       usageError = e instanceof Error ? e.message : 'Could not load the agent history'
     }
@@ -222,6 +244,13 @@
             {#if row.series.length > 1}
               <svg width={SPARK_W} height={SPARK_H} viewBox={`0 0 ${SPARK_W} ${SPARK_H}`} aria-label="Agent RSS over the last two hours">
                 <polyline points={sparkPoints(row.series)} fill="none" stroke="var(--accent)" stroke-width="1.4" />
+                <line x1="0" y1={SPARK_H} x2={SPARK_W} y2={SPARK_H} stroke="var(--border)" />
+              </svg>
+            {:else if row.series.length === 1}
+              <svg width={SPARK_W} height={SPARK_H} viewBox={`0 0 ${SPARK_W} ${SPARK_H}`} aria-label="One agent RSS sample so far">
+                {#each sparkDots(row.series) as dot}
+                  <circle cx={dot.x} cy={dot.y} r="1.8" fill="var(--accent)" />
+                {/each}
                 <line x1="0" y1={SPARK_H} x2={SPARK_W} y2={SPARK_H} stroke="var(--border)" />
               </svg>
             {:else}

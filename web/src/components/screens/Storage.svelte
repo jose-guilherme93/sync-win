@@ -23,8 +23,9 @@
   let historyError = ''
   let historyLoadedFor = ''
 
-  let readSeries: number[] = []
-  let writeSeries: number[] = []
+  type Sample = { t: number; v: number }
+  let readSeries: Sample[] = []
+  let writeSeries: Sample[] = []
   let lastStamp = ''
   let seriesDeviceId = ''
 
@@ -59,8 +60,9 @@
 
   $: if (hw?.collected_at && hw.collected_at !== lastStamp) {
     lastStamp = hw.collected_at
-    readSeries = push(readSeries, hw.disk_read_rate || 0)
-    writeSeries = push(writeSeries, hw.disk_write_rate || 0)
+    const at = Date.parse(hw.collected_at) || Date.now()
+    readSeries = push(readSeries, at, hw.disk_read_rate || 0)
+    writeSeries = push(writeSeries, at, hw.disk_write_rate || 0)
   }
 
   $: if (device.id && device.id !== historyLoadedFor) {
@@ -68,8 +70,8 @@
     void loadHistory()
   }
 
-  function push(series: number[], value: number): number[] {
-    const out = [...series, value]
+  function push(series: Sample[], t: number, v: number): Sample[] {
+    const out = [...series, { t, v }]
     return out.length > MAX_SAMPLES ? out.slice(out.length - MAX_SAMPLES) : out
   }
 
@@ -164,21 +166,55 @@
     return crit ? 'fill hi' : 'fill'
   }
 
-  // Two points are enough to draw a slope; one says "history starts today".
-  function historyPoints(mount: string): StorageDailyPoint[] {
-    return history[mount] ?? []
+  // The x axis is the calendar, not the sample index: two rows a week apart must
+  // be a week apart on screen, and a gap stays a gap instead of being squeezed.
+  function dayWindow(): { from: number; to: number } {
+    const to = Date.parse(new Date().toISOString().slice(0, 10))
+    const from = to - (rangeDays - 1) * 86_400_000
+    return { from, to }
   }
 
-  function historyPolyline(points: StorageDailyPoint[], total: number, width = 320, height = 96): string {
+  function historyPath(points: StorageDailyPoint[], width = 320, height = 96): string {
     if (points.length < 2) return ''
-    return points
-      .map((point, i) => {
-        const x = total <= 1 ? 0 : (i / (total - 1)) * width
-        const percent = point.total_bytes > 0 ? (point.used_bytes / point.total_bytes) * 100 : 0
-        const y = height - (Math.min(100, percent) / 100) * height
-        return `${x.toFixed(1)},${y.toFixed(1)}`
+    const { from, to } = dayWindow()
+    const span = Math.max(1, to - from)
+    let path = ''
+    let previous: number | null = null
+    for (const point of points) {
+      const t = Date.parse(point.day)
+      if (!Number.isFinite(t)) continue
+      const x = ((t - from) / span) * width
+      const percent = point.total_bytes > 0 ? (point.used_bytes / point.total_bytes) * 100 : 0
+      const y = height - (Math.min(100, percent) / 100) * height
+      // A break longer than a day starts a new stroke: the line must not claim
+      // samples that were never reported.
+      path += previous != null && t - previous <= 36 * 3_600_000 ? `L${x.toFixed(1)},${y.toFixed(1)}` : `M${x.toFixed(1)},${y.toFixed(1)}`
+      previous = t
+    }
+    return path
+  }
+
+  // Throughput keeps its own clock: the last ten minutes, so the line grows from
+  // the right as samples arrive instead of being stretched to the full width.
+  const THROUGHPUT_WINDOW_MS = 10 * 60_000
+
+  function samplePath(samples: Sample[], width = 320, height = 64, maxValue?: number): string {
+    if (samples.length < 2) return ''
+    const to = Date.now()
+    const from = to - THROUGHPUT_WINDOW_MS
+    const span = THROUGHPUT_WINDOW_MS
+    const max = Math.max(maxValue ?? 0, ...samples.map((sample) => sample.v), 1)
+    return samples
+      .map((sample, index) => {
+        const x = Math.min(width, Math.max(0, ((sample.t - from) / span) * width))
+        const y = height - (sample.v / max) * height
+        return `${index === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`
       })
-      .join(' ')
+      .join('')
+  }
+
+  function peakSample(samples: Sample[]): number {
+    return samples.length === 0 ? 0 : Math.max(...samples.map((sample) => sample.v))
   }
 
   function shade(index: number): string {
@@ -203,22 +239,6 @@
     if (rangeDays === days) return
     rangeDays = days
     void loadHistory()
-  }
-
-  function seriesPoints(values: number[], width: number, height: number): string {
-    if (values.length < 2) return ''
-    const max = Math.max(...values, 1)
-    return values
-      .map((value, index) => {
-        const x = (index / (values.length - 1)) * width
-        const y = height - (value / max) * height
-        return `${x.toFixed(1)},${y.toFixed(1)}`
-      })
-      .join(' ')
-  }
-
-  function maxOf(values: number[]): number {
-    return values.length === 0 ? 0 : Math.max(...values)
   }
 
   onMount(() => {
@@ -344,17 +364,20 @@
         {#if Object.values(history).every((points) => points.length < 2)}
           <p class="muted small">No daily history yet. The server records one row per mount per day from the first telemetry of the day, so this chart fills in from tomorrow.</p>
         {:else}
-          {@const longest = Math.max(...Object.values(history).map((points) => points.length))}
           <svg width="100%" height="104" viewBox="0 0 320 104" preserveAspectRatio="none" aria-label="Used percent per filesystem">
             <line x1="0" y1="4" x2="320" y2="4" stroke="var(--border)" />
             <line x1="0" y1="52" x2="320" y2="52" stroke="var(--border)" />
             <line x1="0" y1="100" x2="320" y2="100" stroke="var(--border)" />
             {#each Object.entries(history) as [mount, points], index (mount)}
               {#if points.length > 1}
-                <polyline points={historyPolyline(points, longest)} fill="none" stroke={shade(index)} stroke-width="1.3" />
+                <path d={historyPath(points)} fill="none" stroke={shade(index)} stroke-width="1.3" />
               {/if}
             {/each}
           </svg>
+          <div class="axis">
+            <span>{new Date(Date.now() - (rangeDays - 1) * 86_400_000).toISOString().slice(0, 10)}</span>
+            <span>today</span>
+          </div>
           <div class="legend">
             {#each Object.entries(history) as [mount, points], index (mount)}
               <span><i style={`background:${shade(index)}`}></i>{mount} {points.length > 0 ? ((points[points.length - 1].used_bytes / Math.max(1, points[points.length - 1].total_bytes)) * 100).toFixed(0) : '—'}%</span>
@@ -384,16 +407,20 @@
 
     <div class="grid2">
       <div class="card">
-        <h3>Throughput · this session · read / write</h3>
-        <svg width="100%" height="72" viewBox="0 0 320 72" preserveAspectRatio="none" aria-label="Disk throughput">
-          <line x1="0" y1="70" x2="320" y2="70" stroke="var(--border)" />
-          <polyline points={seriesPoints(writeSeries, 320, 64)} fill="none" stroke="var(--text-bright)" stroke-width="1.3" />
-          <polyline points={seriesPoints(readSeries, 320, 64)} fill="none" stroke="var(--text-faint)" stroke-width="1.3" />
-        </svg>
-        <div class="legend">
-          <span><i class="bright"></i>write {formatRate(maxOf(writeSeries))} peak</span>
-          <span><i class="dim"></i>read {formatRate(maxOf(readSeries))} peak</span>
-        </div>
+        <h3>Throughput · last 10 min · read / write</h3>
+        {#if writeSeries.length > 1 || readSeries.length > 1}
+          <svg width="100%" height="72" viewBox="0 0 320 72" preserveAspectRatio="none" aria-label="Disk throughput over the last ten minutes">
+            <line x1="0" y1="70" x2="320" y2="70" stroke="var(--border)" />
+            <path d={samplePath(writeSeries, 320, 64)} fill="none" stroke="var(--text-bright)" stroke-width="1.3" />
+            <path d={samplePath(readSeries, 320, 64)} fill="none" stroke="var(--text-faint)" stroke-width="1.3" />
+          </svg>
+          <div class="legend">
+            <span><i class="bright"></i>write {formatRate(peakSample(writeSeries))} peak</span>
+            <span><i class="dim"></i>read {formatRate(peakSample(readSeries))} peak</span>
+          </div>
+        {:else}
+          <p class="muted small">Waiting for the second telemetry sample: the line starts at the right edge and grows with the window, it is never stretched to fill it.</p>
+        {/if}
       </div>
 
       <div class="card">
@@ -771,6 +798,14 @@
     font-weight: 700;
     letter-spacing: 0.09em;
     text-transform: uppercase;
+  }
+
+  .axis {
+    display: flex;
+    justify-content: space-between;
+    color: var(--text-faint);
+    font-size: 0.62rem;
+    font-family: var(--mono);
   }
 
   .legend {
