@@ -227,6 +227,21 @@ func readSmart(name string) *SmartHealth {
 	if err := json.Unmarshal(out, &report); err != nil {
 		return &SmartHealth{Available: false, Reason: "smartctl output is not JSON"}
 	}
+	return parseSmartReport(report)
+}
+
+// parseSmartReport separates "the drive has no SMART" from "the drive is
+// failing". A virtual or SCSI disk answers smartctl with exit 0 and no
+// smart_status block at all; reporting that as a failed health check would be
+// the worst possible false positive.
+func parseSmartReport(report map[string]any) *SmartHealth {
+	_, hasStatus := report["smart_status"]
+	_, hasATA := report["ata_smart_attributes"]
+	nvme, hasNVMe := report["nvme"].(map[string]any)
+	if !hasStatus && !hasATA && !hasNVMe {
+		return &SmartHealth{Available: false, Reason: "device does not expose SMART data"}
+	}
+
 	health := &SmartHealth{Available: true}
 	if status, ok := report["smart_status"].(map[string]any); ok {
 		health.Passed, _ = status["passed"].(bool)
@@ -237,7 +252,7 @@ func readSmart(name string) *SmartHealth {
 	if power, ok := report["power_on_time"].(map[string]any); ok {
 		health.PowerOnHours = int64(number(power["hours"]))
 	}
-	if nvme, ok := report["nvme"].(map[string]any); ok {
+	if hasNVMe {
 		// NVMe counts data in 512 000-byte units.
 		health.DataWrittenBytes = uint64(number(nvme["data_units_written"]) * 512000)
 		health.WearPercent = int(number(nvme["percentage_used"]))
