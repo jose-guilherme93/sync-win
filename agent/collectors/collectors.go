@@ -110,9 +110,12 @@ type DiskDevice struct {
 // carries the reason (smartctl missing, permission denied) so "not readable" is
 // never shown as "healthy".
 type SmartHealth struct {
-	Available        bool    `json:"available"`
-	Reason           string  `json:"reason,omitempty"`
-	Passed           bool    `json:"passed"`
+	Available bool   `json:"available"`
+	Reason    string `json:"reason,omitempty"`
+	Passed    bool   `json:"passed"`
+	// StatusKnown is false when smartctl returned a report without a verdict
+	// (ATA attributes but no smart_status). "No verdict" is not "failing".
+	StatusKnown      bool    `json:"status_known,omitempty"`
 	TemperatureC     float64 `json:"temperature_c,omitempty"`
 	PowerOnHours     int64   `json:"power_on_hours,omitempty"`
 	DataWrittenBytes uint64  `json:"data_written_bytes,omitempty"`

@@ -74,3 +74,49 @@ func TestParseSmartReportReadsATAAttributes(t *testing.T) {
 		t.Fatalf("attributes = %+v", health)
 	}
 }
+
+func TestParseSmartReportReadsTopLevelNVMeKeys(t *testing.T) {
+	// Current smartctl emits these at the top level, not nested under "nvme".
+	report := map[string]any{
+		"smart_status": map[string]any{"passed": true},
+		"nvme_smart_health_information_log": map[string]any{
+			"percentage_used":    7.0,
+			"data_units_written": 2000.0,
+			"temperature":        38.0,
+		},
+		"nvme_self_test_log": map[string]any{
+			"table": []any{
+				map[string]any{
+					"type":   map[string]any{"string": "Extended"},
+					"status": map[string]any{"string": "Completed without error"},
+				},
+			},
+		},
+	}
+	health := parseSmartReport(report)
+	if !health.Available || !health.Passed || !health.StatusKnown {
+		t.Fatalf("health = %+v", health)
+	}
+	if health.WearPercent != 7 || health.DataWrittenBytes != 2000*512000 {
+		t.Fatalf("NVMe fields = %+v", health)
+	}
+	if len(health.Tests) != 1 || health.Tests[0].Type != "Extended" {
+		t.Fatalf("self-test log = %+v", health.Tests)
+	}
+}
+
+func TestParseSmartReportWithoutAVerdictIsNotAFailure(t *testing.T) {
+	report := map[string]any{
+		"ata_smart_attributes": map[string]any{"table": []any{}},
+	}
+	health := parseSmartReport(report)
+	if !health.Available {
+		t.Fatalf("attributes should make the drive readable: %+v", health)
+	}
+	if health.StatusKnown {
+		t.Fatal("no smart_status means no verdict, not a pass")
+	}
+	if health.Passed {
+		t.Fatal("an unknown verdict must not read as passed")
+	}
+}

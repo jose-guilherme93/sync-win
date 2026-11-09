@@ -1,6 +1,6 @@
 {
   "contract_version": "1.11.0",
-  "agent_version": "0.13.4",
+  "agent_version": "0.13.5",
   "collection": {
     "max_file_bytes": 524288,
     "default_preference_files": [
@@ -78,7 +78,7 @@
       "cpu_model",
       "cpu_clock_mhz",
       "core_voltage_v",
-      "kernel",
+      "kernel_version",
       "operating_system",
       "power_watts",
       "architecture",

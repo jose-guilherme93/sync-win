@@ -455,3 +455,32 @@ func TestUpdateStatePathUsesTheFirstStateDirectory(t *testing.T) {
 		t.Fatalf("path = %q, want %q", got, want)
 	}
 }
+
+// The state directory is writable by the unprivileged agent, and the updater
+// writes there as root. A predictable temp name could be a planted symlink to
+// another root-writable file; the write must not follow it.
+func TestAgentUpdateStateWriteIgnoresAPlantedSymlink(t *testing.T) {
+	t.Setenv("STATE_DIRECTORY", "")
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", dir)
+
+	stateDir := filepath.Join(dir, "sync-win")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(dir, "victim")
+	if err := os.WriteFile(victim, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, filepath.Join(stateDir, agentUpdateStateFile+".tmp")); err != nil {
+		t.Fatal(err)
+	}
+
+	saveAgentUpdateState(agentUpdateState{Status: agentUpdateFailed})
+	if data, _ := os.ReadFile(victim); string(data) != "keep" {
+		t.Fatalf("the write followed the planted symlink: %q", data)
+	}
+	if state := loadAgentUpdateState(); state.Status != agentUpdateFailed {
+		t.Fatalf("state = %+v", state)
+	}
+}

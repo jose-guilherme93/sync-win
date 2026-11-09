@@ -58,6 +58,10 @@ func (r *DiskDeviceReader) Collect(now time.Time) []DiskDevice {
 
 	stats := readDiskStats()
 	devices := listBlockDevices()
+	// Elapsed belongs to the sample, not to each device: updating prevAt inside
+	// the loop made every device after the first see zero elapsed and report no
+	// throughput at all.
+	elapsed := now.Sub(r.prevAt).Seconds()
 
 	out := make([]DiskDevice, 0, len(devices))
 	for _, name := range devices {
@@ -78,7 +82,6 @@ func (r *DiskDeviceReader) Collect(now time.Time) []DiskDevice {
 			device.ReadBytes = counters.SectorsRead * 512
 			device.WriteBytes = counters.SectorsWrite * 512
 			if previous, ok := r.prev[name]; ok {
-				elapsed := now.Sub(r.prevAt).Seconds()
 				if elapsed > 0 {
 					device.ReadRate = float64(delta(counters.SectorsRead, previous.SectorsRead)) * 512 / elapsed
 					device.WriteRate = float64(delta(counters.SectorsWrite, previous.SectorsWrite)) * 512 / elapsed
@@ -95,9 +98,9 @@ func (r *DiskDeviceReader) Collect(now time.Time) []DiskDevice {
 			}
 		}
 		r.prev[name] = counters
-		r.prevAt = now
 		out = append(out, device)
 	}
+	r.prevAt = now
 	return out
 }
 
@@ -214,11 +217,21 @@ func readSmart(name string) *SmartHealth {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, path, "--json", "-H", "-A", "-i", "-d", "auto", "/dev/"+name).Output()
+	// -l selftest is what makes the self-test log part of the report; without it
+	// the drive details arrive but the history is empty.
+	command := exec.CommandContext(ctx, path, "--json", "-H", "-A", "-i", "-l", "selftest", "-d", "auto", "/dev/"+name)
+	const smartOutputLimit = 1 << 20
+	capped := &cappedBuffer{limit: smartOutputLimit}
+	command.Stdout = capped
+	runErr := command.Run()
+	out := []byte(capped.String())
+	if len(out) >= smartOutputLimit {
+		return &SmartHealth{Available: false, Reason: "smartctl output exceeded the size limit"}
+	}
 	if len(out) == 0 {
 		reason := "smartctl failed"
-		if err != nil {
-			reason = err.Error()
+		if runErr != nil {
+			reason = runErr.Error()
 		}
 		return &SmartHealth{Available: false, Reason: reason}
 	}
@@ -235,16 +248,21 @@ func readSmart(name string) *SmartHealth {
 // smart_status block at all; reporting that as a failed health check would be
 // the worst possible false positive.
 func parseSmartReport(report map[string]any) *SmartHealth {
-	_, hasStatus := report["smart_status"]
+	status, hasStatus := report["smart_status"].(map[string]any)
 	_, hasATA := report["ata_smart_attributes"]
-	nvme, hasNVMe := report["nvme"].(map[string]any)
+	nvme, hasNVMe := report["nvme_smart_health_information_log"].(map[string]any)
+	if !hasNVMe {
+		// Older smartctl builds nested the same keys under "nvme".
+		nvme, hasNVMe = report["nvme"].(map[string]any)
+	}
 	if !hasStatus && !hasATA && !hasNVMe {
 		return &SmartHealth{Available: false, Reason: "device does not expose SMART data"}
 	}
 
 	health := &SmartHealth{Available: true}
-	if status, ok := report["smart_status"].(map[string]any); ok {
-		health.Passed, _ = status["passed"].(bool)
+	if passed, ok := status["passed"].(bool); ok {
+		health.Passed = passed
+		health.StatusKnown = true
 	}
 	if temp, ok := report["temperature"].(map[string]any); ok {
 		health.TemperatureC = number(temp["current"])
@@ -307,8 +325,18 @@ func readSelfTest(report map[string]any, health *SmartHealth) {
 			}
 		}
 	}
-	if nvme, ok := report["nvme"].(map[string]any); ok {
-		if log, ok := nvme["self_test_log"].(map[string]any); ok {
+	// self-test log: top-level in current smartctl, nested in older builds.
+	if log, ok := report["nvme_self_test_log"].(map[string]any); ok {
+		if list, ok := log["table"].([]any); ok {
+			for _, item := range list {
+				if entry, ok := item.(map[string]any); ok {
+					entries = append(entries, entry)
+				}
+			}
+		}
+	}
+	if nested, ok := report["nvme"].(map[string]any); ok {
+		if log, ok := nested["self_test_log"].(map[string]any); ok {
 			if list, ok := log["table"].([]any); ok {
 				for _, item := range list {
 					if entry, ok := item.(map[string]any); ok {

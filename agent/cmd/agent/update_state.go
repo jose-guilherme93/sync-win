@@ -64,6 +64,14 @@ func agentUpdateStatePath() string {
 	if dir := stateDirectoryFromEnv(); dir != "" {
 		return filepath.Join(dir, agentUpdateStateFile)
 	}
+	// The system updater runs as root and must write where the daemon reads.
+	// Root's XDG_STATE_HOME would be /root/.local/state, so the shared path wins
+	// for uid 0 even when the environment happens to set one.
+	if os.Geteuid() == 0 {
+		if info, err := os.Stat(systemStateDir); err == nil && info.IsDir() {
+			return filepath.Join(systemStateDir, agentUpdateStateFile)
+		}
+	}
 	if dir := os.Getenv("XDG_STATE_HOME"); dir != "" {
 		return filepath.Join(dir, "sync-win", agentUpdateStateFile)
 	}
@@ -97,13 +105,27 @@ func saveAgentUpdateState(state agentUpdateState) {
 	if err != nil {
 		return
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, payload, 0o644); err != nil {
-		os.Remove(tmp)
+	// The directory is writable by the service user while this runs as root, so
+	// a predictable name could be a symlink planted there to make root truncate
+	// another file. Create the temp file exclusively and write through its
+	// descriptor.
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+agentUpdateStateFile+".*")
+	if err != nil {
 		return
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
+	tmpName := tmp.Name()
+	_ = tmp.Chmod(0o644)
+	if _, err := tmp.Write(payload); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
 	}
 }
 
