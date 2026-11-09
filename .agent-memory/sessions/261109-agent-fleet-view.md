@@ -47,7 +47,7 @@ status: active
   separately from an ordinary failure, because the fix is a manual install, not
   another retry. The device header now says `· reinstall` instead of `· update`
   for exactly that case.
-- **Agent 0.12.0, contract 1.10.0.** The new telemetry fields are part of the
+- **Agent 0.11.4, contract 1.10.0.** The new telemetry fields are part of the
   contract; a device on an older agent reports nothing and reads as `unknown`.
 
 ## Why
