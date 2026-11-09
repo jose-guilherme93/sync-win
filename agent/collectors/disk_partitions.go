@@ -66,6 +66,13 @@ func CollectDiskPartitions() []DiskPartition {
 			btrfsDevices[device] = true
 		}
 
+		// A bind-mounted file (Docker's /etc/hosts, /etc/resolv.conf) is not a
+		// filesystem: statfs on it returns the backing disk, which made a
+		// container look like a 96%-full 91 GB machine.
+		if info, err := os.Stat(mount); err != nil || !info.IsDir() {
+			continue
+		}
+
 		var stat syscall.Statfs_t
 		if err := syscall.Statfs(mount, &stat); err != nil {
 			continue
