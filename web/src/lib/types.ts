@@ -26,6 +26,7 @@ export type HardwareStats = {
   disk_read_rate: number
   disk_write_rate: number
   disk_partitions?: DiskPartition[]
+  disk_devices?: DiskDevice[]
   network_ifaces?: NetworkIface[]
   net_rx_rate?: number
   net_tx_rate?: number
@@ -67,10 +68,75 @@ export type HardwareStats = {
 export type DiskPartition = {
   mount: string
   device: string
+  fstype?: string
+  options?: string
+  read_only?: boolean
   total_bytes: number
   used_bytes: number
   free_bytes: number
+  avail_bytes?: number
+  reserved_bytes?: number
   used_percent: number
+  inodes_total?: number
+  inodes_used?: number
+  inodes_free?: number
+  inodes_used_percent?: number
+}
+
+export type SmartTest = {
+  type?: string
+  result?: string
+  hours?: number
+}
+
+export type SmartHealth = {
+  available: boolean
+  reason?: string
+  passed: boolean
+  temperature_c?: number
+  power_on_hours?: number
+  data_written_bytes?: number
+  wear_percent?: number
+  reallocated?: number
+  pending?: number
+  crc_errors?: number
+  last_test_type?: string
+  last_test_result?: string
+  last_test_hours?: number
+  tests?: SmartTest[]
+}
+
+export type DiskDevice = {
+  name: string
+  model?: string
+  serial?: string
+  size_bytes: number
+  rotational: boolean
+  removable?: boolean
+  temperature_c?: number
+  read_bytes?: number
+  write_bytes?: number
+  read_rate?: number
+  write_rate?: number
+  iops?: number
+  await_ms?: number
+  util_percent?: number
+  smart?: SmartHealth
+}
+
+export type StorageDailyPoint = {
+  day: string
+  total_bytes: number
+  used_bytes: number
+  free_bytes: number
+  inodes_used: number
+  inodes_total: number
+}
+
+export type StorageHistory = {
+  device_id: string
+  days: number
+  mounts: Record<string, StorageDailyPoint[]>
 }
 
 export type NetworkIface = {

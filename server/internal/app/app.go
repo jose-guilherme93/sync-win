@@ -985,6 +985,10 @@ func (s *Server) handleDeviceDetail(w http.ResponseWriter, r *http.Request) {
 		s.handleTelemetryHistoryV2(w, r, parts[0])
 		return
 	}
+	if len(parts) == 3 && parts[1] == "storage" && parts[2] == "history" {
+		s.handleStorageHistory(w, r, parts[0])
+		return
+	}
 	if len(parts) == 3 && parts[1] == "telemetry" && parts[2] == "delete" && r.Method == http.MethodDelete {
 		s.handleDeleteDeviceTelemetry(w, r, parts[0])
 		return
@@ -1912,6 +1916,13 @@ func (s *Server) handleTelemetry(w http.ResponseWriter, r *http.Request, deviceI
 	req.Hardware.DockerContainersSampled = false
 
 	updated, err := s.store.UpdateHardwareStats(deviceID, req.Hardware)
+	if err == nil {
+		// Best effort: the daily rollup feeds the Storage screen, and failing it
+		// must never fail a heartbeat the device depends on.
+		if derr := s.store.UpsertStorageDaily(deviceID, req.Hardware.DiskPartitions, time.Now().UTC()); derr != nil {
+			s.log.Warn(logging.CatDevice, logging.EventAppError, "storage rollup failed", map[string]any{"device_id": deviceID, "error": derr.Error()})
+		}
+	}
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
@@ -1977,6 +1988,47 @@ func (s *Server) handleTelemetryHistory(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	_ = json.NewEncoder(w).Encode(points)
+}
+
+// handleStorageHistory serves the daily per-mount usage kept in storage_daily.
+// It is what makes the growth chart and its ETA real rather than extrapolated
+// from the two-hour raw window.
+func (s *Server) handleStorageHistory(w http.ResponseWriter, r *http.Request, deviceID string) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	device, err := s.store.GetDevice(deviceID)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
+		return
+	}
+	if device.OwnerID != s.ownerID(r) {
+		s.writeError(w, http.StatusForbidden, errors.New("not authorized"))
+		return
+	}
+
+	days := 90
+	if v := r.URL.Query().Get("days"); v != "" {
+		parsed, err := strconv.Atoi(v)
+		if err != nil || parsed <= 0 {
+			s.writeError(w, http.StatusBadRequest, errors.New("invalid 'days' (expected a positive integer)"))
+			return
+		}
+		days = parsed
+	}
+
+	mounts, err := s.store.StorageDailyHistory(deviceID, days)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"device_id": deviceID,
+		"days":      days,
+		"mounts":    mounts,
+	})
 }
 
 func (s *Server) handleTelemetryHistoryV2(w http.ResponseWriter, r *http.Request, deviceID string) {

@@ -60,12 +60,71 @@ type NetworkInterface struct {
 
 // DiskPartition holds per-mount disk space info.
 type DiskPartition struct {
-	Mount       string  `json:"mount"`
-	Device      string  `json:"device"`
-	TotalBytes  uint64  `json:"total_bytes"`
-	UsedBytes   uint64  `json:"used_bytes"`
-	FreeBytes   uint64  `json:"free_bytes"`
-	UsedPercent float64 `json:"used_percent"`
+	Mount      string `json:"mount"`
+	Device     string `json:"device"`
+	FSType     string `json:"fstype,omitempty"`
+	Options    string `json:"options,omitempty"`
+	ReadOnly   bool   `json:"read_only,omitempty"`
+	TotalBytes uint64 `json:"total_bytes"`
+	UsedBytes  uint64 `json:"used_bytes"`
+	FreeBytes  uint64 `json:"free_bytes"`
+	// AvailBytes is what an unprivileged process can still write: the ext4
+	// reserved blocks are counted as free by du and df -h but are not available.
+	AvailBytes    uint64  `json:"avail_bytes,omitempty"`
+	ReservedBytes uint64  `json:"reserved_bytes,omitempty"`
+	UsedPercent   float64 `json:"used_percent"`
+	InodesTotal   uint64  `json:"inodes_total,omitempty"`
+	InodesUsed    uint64  `json:"inodes_used,omitempty"`
+	InodesFree    uint64  `json:"inodes_free,omitempty"`
+	InodesUsedPct float64 `json:"inodes_used_percent,omitempty"`
+}
+
+// SmartTest is one entry of the drive's self-test log.
+type SmartTest struct {
+	Type   string `json:"type,omitempty"`
+	Result string `json:"result,omitempty"`
+	Hours  int64  `json:"hours,omitempty"`
+}
+
+// DiskDevice is one physical (or virtual) block device, which is the unit an
+// operator replaces and runs a SMART test against.
+type DiskDevice struct {
+	Name         string       `json:"name"`
+	Model        string       `json:"model,omitempty"`
+	Serial       string       `json:"serial,omitempty"`
+	SizeBytes    uint64       `json:"size_bytes"`
+	Rotational   bool         `json:"rotational"`
+	Removable    bool         `json:"removable,omitempty"`
+	TemperatureC float64      `json:"temperature_c,omitempty"`
+	ReadBytes    uint64       `json:"read_bytes,omitempty"`
+	WriteBytes   uint64       `json:"write_bytes,omitempty"`
+	ReadRate     float64      `json:"read_rate,omitempty"`
+	WriteRate    float64      `json:"write_rate,omitempty"`
+	IOPS         float64      `json:"iops,omitempty"`
+	AwaitMs      float64      `json:"await_ms,omitempty"`
+	UtilPercent  float64      `json:"util_percent,omitempty"`
+	SMART        *SmartHealth `json:"smart,omitempty"`
+}
+
+// SmartHealth is the subset of smartctl's report worth storing. Available=false
+// carries the reason (smartctl missing, permission denied) so "not readable" is
+// never shown as "healthy".
+type SmartHealth struct {
+	Available        bool    `json:"available"`
+	Reason           string  `json:"reason,omitempty"`
+	Passed           bool    `json:"passed"`
+	TemperatureC     float64 `json:"temperature_c,omitempty"`
+	PowerOnHours     int64   `json:"power_on_hours,omitempty"`
+	DataWrittenBytes uint64  `json:"data_written_bytes,omitempty"`
+	WearPercent      int     `json:"wear_percent,omitempty"`
+	Reallocated      int64   `json:"reallocated,omitempty"`
+	Pending          int64   `json:"pending,omitempty"`
+	CRCErrors        int64   `json:"crc_errors,omitempty"`
+	LastTestType     string  `json:"last_test_type,omitempty"`
+	LastTestResult   string  `json:"last_test_result,omitempty"`
+	// SMART has no calendar date for a test; this is the power-on hour it ran.
+	LastTestHours int64       `json:"last_test_hours,omitempty"`
+	Tests         []SmartTest `json:"tests,omitempty"`
 }
 
 // ProcessInfo is one diagnosable process row. The agent enriches only the

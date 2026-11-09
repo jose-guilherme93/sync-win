@@ -134,6 +134,25 @@ omitido em vez de exibir um rail de 12 V como se fosse tensão de core.
 
 Campos adicionais coletados: `battery_percent`, `battery_status`, `network_ifaces[]` (inclui `rx_errors`/`tx_errors`), `disk_partitions[]`, `swap_used_bytes`/`swap_total_bytes`, `cpu_core_usage[]`, `top_cpu_processes[]`/`top_mem_processes[]`/`stopped_processes[]`/`zombie_processes[]`/`process_summary`, `docker_available`/`docker_containers[]`, `lynis_available` e `logs[]`. `power_watts` é a potência instantânea real (watts), não a porcentagem da bateria.
 
+### Storage (`disk_partitions[]`, `disk_devices[]`)
+
+Cada filesystem reporta `mount`, `device`, `fstype`, `options` (a linha do
+`/proc/mounts`), `read_only`, `total_bytes`/`used_bytes`/`free_bytes`,
+`avail_bytes` (o que um processo sem privilégio ainda pode escrever),
+`reserved_bytes` (blocos reservados que `df` conta como usados para o usuário) e
+`inodes_total`/`inodes_used`/`inodes_free`/`inodes_used_percent`. Inode é um
+limite independente: um filesystem pode encher sem que os blocos acabem.
+
+Cada disco físico reporta `name`, `model`, `serial`, `size_bytes`, `rotational`,
+`removable`, `temperature_c` (hwmon do kernel, quando existe), os contadores de
+`/proc/diskstats` (`read_bytes`, `write_bytes`) e, calculados entre duas
+amostras, `read_rate`, `write_rate`, `iops`, `await_ms` e `util_percent`. O
+bloco `smart` só está disponível quando `smartctl` existe e pode ser executado;
+`available:false` traz o motivo em `reason` e nunca deve ser exibido como um
+disco saudável. `tests[]` é o log de self-test (tipo, resultado e a hora de
+power-on em que rodou). Uma leitura de SMART é feita no máximo a cada 15
+minutos.
+
 ### Taxas de rede são agregadas pelo agente
 
 `net_rx_rate` e `net_tx_rate` são bytes por segundo **somados pelo agente somente sobre as interfaces contadas** (`counted=true`). O dashboard deve consumir esses campos e **nunca somar `network_ifaces[]` por conta própria**: somar a lista inteira contaria o mesmo byte no par `veth`, na sua bridge e no `docker0`.

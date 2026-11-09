@@ -166,6 +166,7 @@ type HardwareSummary struct {
 	DiskReadRate       float64         `json:"disk_read_rate"`
 	DiskWriteRate      float64         `json:"disk_write_rate"`
 	DiskPartitions     []DiskPartition `json:"disk_partitions,omitempty"`
+	DiskDevices        []DiskDevice    `json:"disk_devices,omitempty"`
 	SwapUsedBytes      uint64          `json:"swap_used_bytes"`
 	SwapTotalBytes     uint64          `json:"swap_total_bytes"`
 	MemoryBuffersBytes uint64          `json:"memory_buffers_bytes"`
@@ -221,6 +222,7 @@ type HardwareStats struct {
 	DiskReadRate       float64           `json:"disk_read_rate"`
 	DiskWriteRate      float64           `json:"disk_write_rate"`
 	DiskPartitions     []DiskPartition   `json:"disk_partitions,omitempty"`
+	DiskDevices        []DiskDevice      `json:"disk_devices,omitempty"`
 	SwapUsedBytes      uint64            `json:"swap_used_bytes"`
 	SwapTotalBytes     uint64            `json:"swap_total_bytes"`
 	MemoryBuffersBytes uint64            `json:"memory_buffers_bytes"`
@@ -251,12 +253,65 @@ type HardwareStats struct {
 }
 
 type DiskPartition struct {
-	Mount       string  `json:"mount"`
-	Device      string  `json:"device"`
-	TotalBytes  uint64  `json:"total_bytes"`
-	UsedBytes   uint64  `json:"used_bytes"`
-	FreeBytes   uint64  `json:"free_bytes"`
-	UsedPercent float64 `json:"used_percent"`
+	Mount         string  `json:"mount"`
+	Device        string  `json:"device"`
+	FSType        string  `json:"fstype,omitempty"`
+	Options       string  `json:"options,omitempty"`
+	ReadOnly      bool    `json:"read_only,omitempty"`
+	TotalBytes    uint64  `json:"total_bytes"`
+	UsedBytes     uint64  `json:"used_bytes"`
+	FreeBytes     uint64  `json:"free_bytes"`
+	AvailBytes    uint64  `json:"avail_bytes,omitempty"`
+	ReservedBytes uint64  `json:"reserved_bytes,omitempty"`
+	UsedPercent   float64 `json:"used_percent"`
+	InodesTotal   uint64  `json:"inodes_total,omitempty"`
+	InodesUsed    uint64  `json:"inodes_used,omitempty"`
+	InodesFree    uint64  `json:"inodes_free,omitempty"`
+	InodesUsedPct float64 `json:"inodes_used_percent,omitempty"`
+}
+
+// SmartHealth is the subset of smartctl the dashboard stores. Available=false
+// with a Reason is the normal state on an unprivileged agent and must not be
+// read as a passed device.
+type SmartHealth struct {
+	Available        bool        `json:"available"`
+	Reason           string      `json:"reason,omitempty"`
+	Passed           bool        `json:"passed"`
+	TemperatureC     float64     `json:"temperature_c,omitempty"`
+	PowerOnHours     int64       `json:"power_on_hours,omitempty"`
+	DataWrittenBytes uint64      `json:"data_written_bytes,omitempty"`
+	WearPercent      int         `json:"wear_percent,omitempty"`
+	Reallocated      int64       `json:"reallocated,omitempty"`
+	Pending          int64       `json:"pending,omitempty"`
+	CRCErrors        int64       `json:"crc_errors,omitempty"`
+	LastTestType     string      `json:"last_test_type,omitempty"`
+	LastTestResult   string      `json:"last_test_result,omitempty"`
+	LastTestHours    int64       `json:"last_test_hours,omitempty"`
+	Tests            []SmartTest `json:"tests,omitempty"`
+}
+
+type SmartTest struct {
+	Type   string `json:"type,omitempty"`
+	Result string `json:"result,omitempty"`
+	Hours  int64  `json:"hours,omitempty"`
+}
+
+type DiskDevice struct {
+	Name         string       `json:"name"`
+	Model        string       `json:"model,omitempty"`
+	Serial       string       `json:"serial,omitempty"`
+	SizeBytes    uint64       `json:"size_bytes"`
+	Rotational   bool         `json:"rotational"`
+	Removable    bool         `json:"removable,omitempty"`
+	TemperatureC float64      `json:"temperature_c,omitempty"`
+	ReadBytes    uint64       `json:"read_bytes,omitempty"`
+	WriteBytes   uint64       `json:"write_bytes,omitempty"`
+	ReadRate     float64      `json:"read_rate,omitempty"`
+	WriteRate    float64      `json:"write_rate,omitempty"`
+	IOPS         float64      `json:"iops,omitempty"`
+	AwaitMs      float64      `json:"await_ms,omitempty"`
+	UtilPercent  float64      `json:"util_percent,omitempty"`
+	SMART        *SmartHealth `json:"smart,omitempty"`
 }
 
 type ProcessInfo struct {
@@ -874,6 +929,18 @@ func (s *Store) initSchema() error {
 		device_id TEXT NOT NULL,
 		payload TEXT NOT NULL,
 		received_at TEXT NOT NULL
+	);
+	CREATE TABLE IF NOT EXISTS storage_daily (
+		device_id TEXT NOT NULL,
+		mount TEXT NOT NULL,
+		day TEXT NOT NULL,
+		total_bytes INTEGER NOT NULL,
+		used_bytes INTEGER NOT NULL,
+		free_bytes INTEGER NOT NULL,
+		inodes_used INTEGER NOT NULL DEFAULT 0,
+		inodes_total INTEGER NOT NULL DEFAULT 0,
+		updated_at TEXT NOT NULL,
+		PRIMARY KEY (device_id, mount, day)
 	);
 	CREATE TABLE IF NOT EXISTS telemetry_downsampled (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3713,4 +3780,94 @@ func (s *Store) AgentUsageSeries(ownerID string, from, to time.Time, maxPerDevic
 		}
 	}
 	return result, nil
+}
+
+// StorageDailyPoint is one day of one mount, kept so the Storage screen can
+// show real growth and an ETA instead of extrapolating from a 2-hour window.
+type StorageDailyPoint struct {
+	Day         string `json:"day"`
+	TotalBytes  uint64 `json:"total_bytes"`
+	UsedBytes   uint64 `json:"used_bytes"`
+	FreeBytes   uint64 `json:"free_bytes"`
+	InodesUsed  uint64 `json:"inodes_used"`
+	InodesTotal uint64 `json:"inodes_total"`
+}
+
+// UpsertStorageDaily records today's usage per mounted filesystem. One row per
+// mount per day: the last sample of the day wins, so a device that reports
+// every ten seconds still writes once per mount per day.
+func (s *Store) UpsertStorageDaily(deviceID string, partitions []DiskPartition, at time.Time) error {
+	if len(partitions) == 0 {
+		return nil
+	}
+	day := at.UTC().Format("2006-01-02")
+	now := timeText(at.UTC())
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	stmt, err := tx.Prepare(`INSERT INTO storage_daily
+		(device_id, mount, day, total_bytes, used_bytes, free_bytes, inodes_used, inodes_total, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(device_id, mount, day) DO UPDATE SET
+			total_bytes = excluded.total_bytes,
+			used_bytes = excluded.used_bytes,
+			free_bytes = excluded.free_bytes,
+			inodes_used = excluded.inodes_used,
+			inodes_total = excluded.inodes_total,
+			updated_at = excluded.updated_at`)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	defer stmt.Close()
+	for _, partition := range partitions {
+		if partition.TotalBytes == 0 {
+			continue
+		}
+		if _, err := stmt.Exec(deviceID, partition.Mount, day, partition.TotalBytes,
+			partition.UsedBytes, partition.FreeBytes, partition.InodesUsed, partition.InodesTotal, now); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	// The screen offers 90 days; a year of rows is the ceiling this table keeps.
+	if _, err := tx.Exec("DELETE FROM storage_daily WHERE day < ?", at.UTC().AddDate(0, 0, -400).Format("2006-01-02")); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
+// StorageDailyHistory returns the last days of per-mount usage, grouped by mount.
+func (s *Store) StorageDailyHistory(deviceID string, days int) (map[string][]StorageDailyPoint, error) {
+	if days <= 0 || days > 400 {
+		days = 90
+	}
+	from := time.Now().UTC().AddDate(0, 0, -days).Format("2006-01-02")
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rows, err := s.db.Query(`SELECT mount, day, total_bytes, used_bytes, free_bytes, inodes_used, inodes_total
+		FROM storage_daily WHERE device_id = ? AND day >= ? ORDER BY mount, day`, deviceID, from)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string][]StorageDailyPoint)
+	for rows.Next() {
+		var mount string
+		var point StorageDailyPoint
+		if err := rows.Scan(&mount, &point.Day, &point.TotalBytes, &point.UsedBytes, &point.FreeBytes,
+			&point.InodesUsed, &point.InodesTotal); err != nil {
+			return nil, err
+		}
+		result[mount] = append(result[mount], point)
+	}
+	return result, rows.Err()
 }

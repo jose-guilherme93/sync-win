@@ -155,3 +155,6 @@ entries:
   - id: sessions/261109-agent-fleet-view
     path: sessions/261109-agent-fleet-view.md
     type: session
+  - id: sessions/261109-storage-tab
+    path: sessions/261109-storage-tab.md
+    type: session

@@ -53,6 +53,8 @@ Fields:
 - sync_failures: consecutive failed sync attempts; reset on heartbeat or success
 - last_error: last error message
 - last_error_at: timestamp of last error
+- storage_daily: one row per device, mount and UTC day (total/used/free bytes and inode counts), kept 400 days; it is what makes growth and the full-disk forecast real. Written from the telemetry ingest, best effort.
+
 - hardware_json: JSON blob with latest hardware telemetry (HardwareStats). Besides the machine telemetry it carries the agent's own state: `agent_version`, `agent_cpu_usage`, `agent_memory_bytes`, and the last update outcome the updater left in `agent-update-state.json` (`agent_update_status`, `agent_update_target`, `agent_update_error`, `agent_update_at`). The update fields are absent on an agent that has never run the updater, which is reported as unknown rather than as a failure.
 - apps_json: JSON array with latest installed application inventory
 - services_json: JSON array with latest systemd service snapshot (ServiceUnit)
