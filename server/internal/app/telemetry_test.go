@@ -98,8 +98,8 @@ func TestTelemetryCarriesAgentUpdateStateIntoTheDeviceList(t *testing.T) {
 		Hardware: store.HardwareStats{
 			CPUUsagePercent:   5,
 			AgentVersion:      "0.10.0",
-			AgentCPUUsage:     0.4,
-			AgentMemoryBytes:  12 << 20,
+			AgentCPUUsage:     floatPtr(0.4),
+			AgentMemoryBytes:  uintPtr(12 << 20),
 			AgentUpdateStatus: "failed",
 			AgentUpdateTarget: "0.12.0",
 			AgentUpdateError:  "agent was built without an update signing key; refusing unsigned update",
@@ -148,7 +148,10 @@ func TestTelemetryCarriesAgentUpdateStateIntoTheDeviceList(t *testing.T) {
 	if hw.AgentUpdateAt != "2026-11-02T10:23:12Z" {
 		t.Errorf("agent_update_at = %q", hw.AgentUpdateAt)
 	}
-	if hw.AgentMemoryBytes != 12<<20 {
-		t.Errorf("agent_memory_bytes = %d", hw.AgentMemoryBytes)
+	if hw.AgentMemoryBytes == nil || *hw.AgentMemoryBytes != 12<<20 {
+		t.Errorf("agent_memory_bytes = %v", hw.AgentMemoryBytes)
 	}
 }
+
+func floatPtr(value float64) *float64 { return &value }
+func uintPtr(value uint64) *uint64    { return &value }

@@ -21,6 +21,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -56,6 +57,9 @@ type Server struct {
 	// logStreamInterval is how often the log SSE endpoint checks the table for
 	// new rows. It is a field so tests can shorten it.
 	logStreamInterval time.Duration
+	// storageRollup remembers the last rollup per device. The daily table only
+	// needs the day's last sample, not one write per heartbeat.
+	storageRollup sync.Map
 }
 
 type registerRequest struct {
@@ -849,6 +853,20 @@ func shellDoubleQuote(value string) string {
 	).Replace(value)
 }
 
+// storageRollupEvery is how often a device's daily storage row is written.
+const storageRollupEvery = 5 * time.Minute
+
+func (s *Server) shouldRollupStorage(deviceID string) bool {
+	now := time.Now()
+	if value, ok := s.storageRollup.Load(deviceID); ok {
+		if last, ok := value.(time.Time); ok && now.Sub(last) < storageRollupEvery {
+			return false
+		}
+	}
+	s.storageRollup.Store(deviceID, now)
+	return true
+}
+
 // handleAgentUsage serves the per-device history of the agent's own cost.
 //
 // The fleet view needs one series per device to draw a sparkline; asking the
@@ -918,6 +936,7 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(devices)
 	case http.MethodPost:
 		ownerID, ok := s.requireSession(w, r)
@@ -1916,9 +1935,11 @@ func (s *Server) handleTelemetry(w http.ResponseWriter, r *http.Request, deviceI
 	req.Hardware.DockerContainersSampled = false
 
 	updated, err := s.store.UpdateHardwareStats(deviceID, req.Hardware)
-	if err == nil {
+	if err == nil && s.shouldRollupStorage(deviceID) {
 		// Best effort: the daily rollup feeds the Storage screen, and failing it
-		// must never fail a heartbeat the device depends on.
+		// must never fail a heartbeat the device depends on. It runs at most
+		// every five minutes per device: the table keeps one row per day, so a
+		// write per heartbeat bought nothing but WAL churn.
 		if derr := s.store.UpsertStorageDaily(deviceID, req.Hardware.DiskPartitions, time.Now().UTC()); derr != nil {
 			s.log.Warn(logging.CatDevice, logging.EventAppError, "storage rollup failed", map[string]any{"device_id": deviceID, "error": derr.Error()})
 		}
@@ -1998,13 +2019,15 @@ func (s *Server) handleStorageHistory(w http.ResponseWriter, r *http.Request, de
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	device, err := s.store.GetDevice(deviceID)
-	if err != nil {
-		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
+	ownerID, ok := s.requireSession(w, r)
+	if !ok {
 		return
 	}
-	if device.OwnerID != s.ownerID(r) {
-		s.writeError(w, http.StatusForbidden, errors.New("not authorized"))
+	device, err := s.store.GetDevice(deviceID)
+	// A device of another owner answers the same as one that does not exist:
+	// otherwise an unauthenticated caller can enumerate real device IDs.
+	if err != nil || device.OwnerID != ownerID {
+		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
 		return
 	}
 
@@ -2014,6 +2037,11 @@ func (s *Server) handleStorageHistory(w http.ResponseWriter, r *http.Request, de
 		if err != nil || parsed <= 0 {
 			s.writeError(w, http.StatusBadRequest, errors.New("invalid 'days' (expected a positive integer)"))
 			return
+		}
+		// Clamp here and echo the effective value: the store refuses windows over
+		// 400, and a response claiming 401 while returning 90 is a lie.
+		if parsed > 400 {
+			parsed = 400
 		}
 		days = parsed
 	}
@@ -2036,13 +2064,13 @@ func (s *Server) handleTelemetryHistoryV2(w http.ResponseWriter, r *http.Request
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	device, err := s.store.GetDevice(deviceID)
-	if err != nil {
-		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
+	ownerID, ok := s.requireSession(w, r)
+	if !ok {
 		return
 	}
-	if device.OwnerID != s.ownerID(r) {
-		s.writeError(w, http.StatusForbidden, errors.New("not authorized"))
+	device, err := s.store.GetDevice(deviceID)
+	if err != nil || device.OwnerID != ownerID {
+		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
 		return
 	}
 

@@ -65,6 +65,10 @@ type Store struct {
 	mu   sync.RWMutex
 	db   *sql.DB
 	path string
+	// storagePrunedAt throttles the storage_daily prune: the table only loses
+	// relevance a day at a time, and scanning it on every telemetry sample was
+	// pure cost.
+	storagePrunedAt time.Time
 }
 
 type Device struct {
@@ -148,8 +152,10 @@ type HardwareSummary struct {
 	PowerWatts         float64         `json:"power_watts"`
 	BatteryPercent     float64         `json:"battery_percent"`
 	BatteryStatus      string          `json:"battery_status"`
-	AgentCPUUsage      float64         `json:"agent_cpu_usage"`
-	AgentMemoryBytes   uint64          `json:"agent_memory_bytes"`
+	// Pointers so an old agent that never reported its own cost serializes as
+	// absent, not as a real zero.
+	AgentCPUUsage      *float64        `json:"agent_cpu_usage,omitempty"`
+	AgentMemoryBytes   *uint64         `json:"agent_memory_bytes,omitempty"`
 	AgentVersion       string          `json:"agent_version,omitempty"`
 	AgentUpdateStatus  string          `json:"agent_update_status,omitempty"`
 	AgentUpdateTarget  string          `json:"agent_update_target,omitempty"`
@@ -194,8 +200,8 @@ type HardwareStats struct {
 	PowerWatts         float64        `json:"power_watts"`
 	BatteryPercent     float64        `json:"battery_percent"`
 	BatteryStatus      string         `json:"battery_status"`
-	AgentCPUUsage      float64        `json:"agent_cpu_usage"`
-	AgentMemoryBytes   uint64         `json:"agent_memory_bytes"`
+	AgentCPUUsage      *float64       `json:"agent_cpu_usage,omitempty"`
+	AgentMemoryBytes   *uint64        `json:"agent_memory_bytes,omitempty"`
 	AgentVersion       string         `json:"agent_version,omitempty"`
 	AgentUpdateStatus  string         `json:"agent_update_status,omitempty"`
 	AgentUpdateTarget  string         `json:"agent_update_target,omitempty"`
@@ -942,6 +948,7 @@ func (s *Store) initSchema() error {
 		updated_at TEXT NOT NULL,
 		PRIMARY KEY (device_id, mount, day)
 	);
+	CREATE INDEX IF NOT EXISTS idx_storage_daily_day ON storage_daily(day);
 	CREATE TABLE IF NOT EXISTS telemetry_downsampled (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		device_id TEXT NOT NULL,
@@ -3836,9 +3843,12 @@ func (s *Store) UpsertStorageDaily(deviceID string, partitions []DiskPartition, 
 		}
 	}
 	// The screen offers 90 days; a year of rows is the ceiling this table keeps.
-	if _, err := tx.Exec("DELETE FROM storage_daily WHERE day < ?", at.UTC().AddDate(0, 0, -400).Format("2006-01-02")); err != nil {
-		_ = tx.Rollback()
-		return err
+	if s.storagePrunedAt.IsZero() || at.Sub(s.storagePrunedAt) > 24*time.Hour {
+		if _, err := tx.Exec("DELETE FROM storage_daily WHERE day < ?", at.UTC().AddDate(0, 0, -400).Format("2006-01-02")); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		s.storagePrunedAt = at
 	}
 	return tx.Commit()
 }

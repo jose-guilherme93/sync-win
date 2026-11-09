@@ -30,8 +30,8 @@ func TestAgentUsageEndpointReturnsOneSeriesPerDevice(t *testing.T) {
 		Hardware: store.HardwareStats{
 			CPUUsagePercent:  10,
 			MemoryTotalBytes: 16 << 30,
-			AgentMemoryBytes: 12_000_000,
-			AgentCPUUsage:    0.41,
+			AgentMemoryBytes: ptrUint64(12_000_000),
+			AgentCPUUsage:    ptrFloat64(0.41),
 		},
 	})
 	if err != nil {
@@ -102,3 +102,54 @@ func TestAgentUsageEndpointRejectsABadWindow(t *testing.T) {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}
 }
+
+func TestStorageHistoryClampsAndReportsTheEffectiveWindow(t *testing.T) {
+	s := newTestServer(t)
+	user, err := s.store.CreateUser("storage@example.com", "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := s.store.CreateSession(user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	device, err := s.store.RegisterDevice("pc-storage", user.ID, user.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/devices/"+device.ID+"/storage/history?days=1000", nil)
+	req.Header.Set("Authorization", "Bearer "+session.Token)
+	rec := httptest.NewRecorder()
+	s.handleStorageHistory(rec, req, device.ID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d %s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Days int `json:"days"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Days != 400 {
+		t.Fatalf("days = %d, want the clamped 400 the store actually honours", payload.Days)
+	}
+}
+
+// The daily rollup answers a once-a-day question; writing it on every heartbeat
+// was WAL churn with no reader.
+func TestStorageRollupIsThrottledPerDevice(t *testing.T) {
+	s := newTestServer(t)
+	if !s.shouldRollupStorage("dev-1") {
+		t.Fatal("the first sample must roll up")
+	}
+	if s.shouldRollupStorage("dev-1") {
+		t.Fatal("a second sample inside the throttle window must not write")
+	}
+	if !s.shouldRollupStorage("dev-2") {
+		t.Fatal("the throttle is per device")
+	}
+}
+
+func ptrFloat64(value float64) *float64 { return &value }
+func ptrUint64(value uint64) *uint64    { return &value }
