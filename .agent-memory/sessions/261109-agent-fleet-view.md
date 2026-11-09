@@ -24,6 +24,13 @@ status: active
   error text and a timestamp. A separate file from `agent-state.json` on purpose
   — the daemon owns that one and rewrites it every cycle, and the updater runs as
   root, which would leave a file the service user could no longer replace.
+  The path is resolved in this order: `STATE_DIRECTORY`, `XDG_STATE_HOME`, then
+  `/var/lib/sync-win` when it exists. The last step matters: the update unit on
+  older devices does not declare `StateDirectory`, so root's own state lookup
+  would land in `/root/.local/state` and the dashboard would read nothing. Adding
+  `StateDirectory=sync-win` to that unit instead was rejected because systemd
+  re-chowns an existing directory to the unit's user, which is root there — it
+  would take `/var/lib/sync-win` away from the agent.
 - **The daemon reports it.** `applyUpdateStateToStats` copies the file into the
   telemetry payload as `agent_update_status`, `agent_update_target`,
   `agent_update_error` and `agent_update_at`. Absent means the updater never ran

@@ -115,9 +115,12 @@ automático: `requested` (o daemon viu uma versão nova e pediu a atualização)
 `current` (checou e não havia nada a fazer), `updated` (binário trocado e
 serviço reiniciado) ou `failed`. O atualizador roda como root em uma unit
 própria e não tem outro canal para o dashboard, então grava o resultado em
-`$STATE_DIRECTORY/agent-update-state.json`; o daemon lê esse arquivo e o envia
-na telemetria. Arquivo ausente significa que o atualizador nunca rodou neste
-dispositivo — o dashboard deve tratar isso como `unknown`, nunca como falha.
+`/var/lib/sync-win/agent-update-state.json` (o mesmo diretório de estado do
+daemon, via `STATE_DIRECTORY`; a unit de update de instalações antigas não
+declara `StateDirectory`, por isso o caminho do sistema é usado como fallback em
+vez de `$HOME` do root). O daemon lê esse arquivo e o envia na telemetria.
+Arquivo ausente significa que o atualizador nunca rodou neste dispositivo — o
+dashboard deve tratar isso como `unknown`, nunca como falha.
 `agent_update_error` carrega o motivo real (ex.: binário construído sem chave de
 assinatura, endpoint de assinatura em 404); `agent_update_target` é a versão que
 a tentativa buscava e `agent_update_at` o instante da checagem.

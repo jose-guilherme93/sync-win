@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -36,7 +37,39 @@ type agentUpdateState struct {
 	CheckedAt   string `json:"checked_at,omitempty"`
 }
 
+// systemStateDir is where the installed units keep agent state. The daemon gets
+// it from systemd's StateDirectory; the root updater may not, so it is named
+// here as the shared location.
+const systemStateDir = "/var/lib/sync-win"
+
+func stateDirectoryFromEnv() string {
+	raw := strings.TrimSpace(os.Getenv("STATE_DIRECTORY"))
+	if raw == "" {
+		return ""
+	}
+	// systemd passes a colon-separated list; the first entry is the primary.
+	if i := strings.IndexByte(raw, ':'); i >= 0 {
+		raw = raw[:i]
+	}
+	return strings.TrimSpace(raw)
+}
+
 func agentUpdateStatePath() string {
+	// The daemon resolves its state through systemd's StateDirectory. The
+	// updater runs from its own unit, and older devices installed a template
+	// without StateDirectory, so for root the same lookup falls into
+	// /root/.local/state and the dashboard would never see the outcome. Prefer
+	// an explicit directory, then the shared system path that both units use,
+	// and only then the daemon's own resolution.
+	if dir := stateDirectoryFromEnv(); dir != "" {
+		return filepath.Join(dir, agentUpdateStateFile)
+	}
+	if dir := os.Getenv("XDG_STATE_HOME"); dir != "" {
+		return filepath.Join(dir, "sync-win", agentUpdateStateFile)
+	}
+	if info, err := os.Stat(systemStateDir); err == nil && info.IsDir() {
+		return filepath.Join(systemStateDir, agentUpdateStateFile)
+	}
 	return filepath.Join(filepath.Dir(stateFilePath()), agentUpdateStateFile)
 }
 

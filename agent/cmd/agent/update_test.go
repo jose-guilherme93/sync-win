@@ -438,3 +438,15 @@ func TestUpdateStateIsAttachedToTelemetry(t *testing.T) {
 		}
 	}
 }
+
+// systemd passes a colon-separated list for StateDirectory. Taking the whole
+// string would resolve a path that resembles nothing and the daemon would read
+// a different file than the updater wrote.
+func TestUpdateStatePathUsesTheFirstStateDirectory(t *testing.T) {
+	t.Setenv("STATE_DIRECTORY", "/run/first:/run/second")
+	t.Setenv("XDG_STATE_HOME", "/tmp/ignored")
+	want := filepath.Join("/run/first", agentUpdateStateFile)
+	if got := agentUpdateStatePath(); got != want {
+		t.Fatalf("path = %q, want %q", got, want)
+	}
+}
