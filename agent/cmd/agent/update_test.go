@@ -169,16 +169,30 @@ func TestMergeExecStartPrefersRenderedCommand(t *testing.T) {
 	}
 }
 
-func TestFetchAgentUnitRejectsUnrenderedTemplate(t *testing.T) {
+// The endpoint serves the raw template; rendering it needs the installed unit's
+// ExecStart, so the fetch must keep the placeholders instead of refusing them.
+func TestFetchAgentUnitReturnsTheRawTemplate(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("[Service]\nExecStart={{SERVER_URL}}\n"))
 	}))
 	defer srv.Close()
 
-	// Writing this to /etc/systemd/system would break the service, so it must
-	// be rejected rather than installed.
-	if _, err := fetchAgentUnit(srv.URL); err == nil {
-		t.Fatal("expected an error for a unit still containing placeholders")
+	unit, err := fetchAgentUnit(srv.URL)
+	if err != nil {
+		t.Fatalf("the raw template must be fetchable: %v", err)
+	}
+	if !strings.Contains(unit, "{{SERVER_URL}}") {
+		t.Fatalf("the raw template lost its placeholders: %s", unit)
+	}
+}
+
+// With no installed unit to borrow the ExecStart from, the render cannot
+// finish; that must be an error, never a written unit with {{...}} in it.
+func TestMergeExecStartLeavesPlaceholdersWhenThereIsNothingToBorrow(t *testing.T) {
+	desired := "[Service]\nExecStart=/usr/local/bin/sync-win-agent --server {{SERVER_URL}}\n"
+	got := mergeExecStart("", desired)
+	if !strings.Contains(got, "{{") {
+		t.Fatalf("expected the placeholders to remain and be caught by the caller: %s", got)
 	}
 }
 
@@ -448,5 +462,28 @@ func TestUpdateStatePathUsesTheFirstStateDirectory(t *testing.T) {
 	want := filepath.Join("/run/first", agentUpdateStateFile)
 	if got := agentUpdateStatePath(); got != want {
 		t.Fatalf("path = %q, want %q", got, want)
+	}
+}
+
+// The unit endpoint serves the raw template, whose ExecStart carries
+// {{SERVER_URL}} and the device credentials. The rendered ExecStart of the
+// installed unit is the only correct value; writing the template is what made
+// every unit refresh fail with "unit still contains template placeholders".
+func TestMergeExecStartKeepsTheInstalledCredentials(t *testing.T) {
+	current := "[Service]\nExecStart=/usr/local/bin/sync-win-agent daemon --server http://box:8080 --device-id dev-1 --device-token secret\n"
+	desired := "[Service]\nExecStart=/usr/local/bin/sync-win-agent daemon --server {{SERVER_URL}} --device-id {{DEVICE_ID}} --device-token {{DEVICE_TOKEN}}\n"
+	merged := mergeExecStart(current, desired)
+	if strings.Contains(merged, "{{") {
+		t.Fatalf("placeholders survived the merge: %s", merged)
+	}
+	if !strings.Contains(merged, "--device-token secret") {
+		t.Fatalf("the installed credentials were dropped: %s", merged)
+	}
+}
+
+func TestMergeExecStartUsesARenderedTemplate(t *testing.T) {
+	desired := "[Service]\nExecStart=/usr/local/bin/sync-win-agent daemon --server http://box:8080 --device-id dev-1 --device-token secret\n"
+	if got := mergeExecStart("", desired); got != desired {
+		t.Fatalf("a rendered template must be used as is, got %s", got)
 	}
 }

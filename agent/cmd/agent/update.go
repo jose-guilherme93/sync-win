@@ -245,6 +245,9 @@ func reconcileHelperUnit(serverURL string) (bool, error) {
 		}
 		return false, err
 	}
+	if strings.Contains(desired, "{{") {
+		return false, errors.New("helper unit still contains template placeholders")
+	}
 	if current, err := os.ReadFile(target); err == nil && desired == string(current) {
 		return false, nil
 	}
@@ -509,6 +512,10 @@ func refreshUnitFile(serverURL, service string, userSystemd bool, _ string, _ st
 	// line is recomputed from what exists here.
 	desired = applySupplementaryGroups(desired, hostSupplementaryGroups())
 
+	if strings.Contains(desired, "{{") {
+		return false, errors.New("unit still contains template placeholders after rendering")
+	}
+
 	if current, err := os.ReadFile(target); err == nil && desired == string(current) {
 		return false, nil
 	}
@@ -575,17 +582,36 @@ func applySupplementaryGroups(unit, groups string) string {
 // mergeExecStart keeps the existing ExecStart when the new template does not
 // carry a usable one.
 func mergeExecStart(current, desired string) string {
-	if strings.Contains(desired, "ExecStart=/") {
+	desiredStart := ""
+	for _, line := range strings.Split(desired, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "ExecStart=") {
+			desiredStart = strings.TrimSpace(line)
+			break
+		}
+	}
+	// The raw template carries {{SERVER_URL}} and the device credentials. Those
+	// are known only to the installed unit, so a templated ExecStart is never
+	// written; the running one is kept instead. Writing the template verbatim
+	// is how the refresh failed every single time.
+	if desiredStart != "" && !strings.Contains(desiredStart, "{{") {
 		return desired
 	}
+
+	currentStart := ""
 	for _, line := range strings.Split(current, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "ExecStart=") {
-			lines := strings.Split(desired, "\n")
-			for i, l := range lines {
-				if strings.HasPrefix(strings.TrimSpace(l), "ExecStart=") {
-					lines[i] = line
-				}
-			}
+			currentStart = strings.TrimSpace(line)
+			break
+		}
+	}
+	if currentStart == "" {
+		return desired
+	}
+
+	lines := strings.Split(desired, "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "ExecStart=") {
+			lines[i] = currentStart
 			return strings.Join(lines, "\n")
 		}
 	}
@@ -631,11 +657,9 @@ func fetchUnitTemplate(serverURL, name string) (string, error) {
 	if !strings.Contains(unit, "[Service]") {
 		return "", errors.New("unit response does not look like a systemd unit")
 	}
-	// Unresolved placeholders mean the server could not render it; writing this
-	// would break the service.
-	if strings.Contains(unit, "{{") {
-		return "", errors.New("unit still contains template placeholders")
-	}
+	// This is the raw template on purpose: the device credentials and the server
+	// URL are only known to the installed unit, so the caller renders it. The
+	// placeholder check belongs after that render, not here.
 	return unit, nil
 }
 

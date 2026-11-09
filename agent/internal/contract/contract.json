@@ -1,6 +1,6 @@
 {
   "contract_version": "1.11.0",
-  "agent_version": "0.13.0",
+  "agent_version": "0.13.3",
   "collection": {
     "max_file_bytes": 524288,
     "default_preference_files": [
