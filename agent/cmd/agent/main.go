@@ -1572,7 +1572,7 @@ type hardwareSample struct {
 	NetRX       map[string]uint64
 	NetTX       map[string]uint64
 	NetRetrans  uint64
-	CPUCores    []uint64
+	CPUCores    []collectors.CoreStat
 	Processes   collectors.ProcessCPUSample
 	AgentImpact collectors.AgentImpact
 	At          time.Time
@@ -1628,7 +1628,7 @@ func collectHardwareStats(prev *hardwareSample, now time.Time, sampleDocker bool
 	var wg sync.WaitGroup
 
 	// CPU cores + core usage
-	var newCPUCores []uint64
+	var newCPUCores []collectors.CoreStat
 	var corePercents []float64
 	wg.Add(1)
 	go func() {
