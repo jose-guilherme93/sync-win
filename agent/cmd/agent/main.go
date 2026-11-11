@@ -514,6 +514,11 @@ type telemetryStats struct {
 	CPUCoreUsage       []float64         `json:"cpu_core_usage,omitempty"`
 	TopCPUProcesses    []processInfo     `json:"top_cpu_processes,omitempty"`
 	TopMemProcesses    []processInfo     `json:"top_mem_processes,omitempty"`
+	Processes            []collectors.ProcessRow `json:"processes,omitempty"`
+	ProcessStats         *collectors.ProcessStats `json:"process_stats,omitempty"`
+	ProcessHistory       *collectors.ProcessHistory `json:"process_history,omitempty"`
+	ProcessesCollected   bool                   `json:"processes_collected"`
+	ProcessIOAvailable   bool                   `json:"process_io_available"`
 	DockerAvailable    bool              `json:"docker_available"`
 	DockerContainers   []dockerContainer `json:"docker_containers,omitempty"`
 	// True only on the cycles that actually listed containers. Without it the
@@ -1519,8 +1524,9 @@ type hardwareSample struct {
 	NetTX       map[string]uint64
 	NetRetrans  uint64
 	CPUCores    []uint64
-	Processes   collectors.ProcessCPUSample
-	AgentImpact collectors.AgentImpact
+	Processes       collectors.ProcessCPUSample
+	ProcessSamples  collectors.ProcessSampleMap
+	AgentImpact     collectors.AgentImpact
 	At          time.Time
 }
 
@@ -1681,7 +1687,31 @@ func collectHardwareStats(prev *hardwareSample, now time.Time, sampleDocker bool
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		topCPU, topMem, newProcSample = collectors.CollectTopProcesses(10, runtime.NumCPU(), prev.Processes, procElapsed)
+		topCPU, topMem, newProcSample = collectors.CollectTopProcesses("/proc", 10, runtime.NumCPU(), prev.Processes, procElapsed)
+	}()
+
+	// Processes: full process table. CPU percentages are deltas against the
+	// previous sample, so the previous sample map and elapsed wall time are
+	// required (same rule as the top-process collector above).
+	var procRows []collectors.ProcessRow
+	var procStats collectors.ProcessStats
+	var procSampleMap collectors.ProcessSampleMap
+	var procIOAvailable bool
+	var procCollected bool
+	procLimit := syncwinContract.MaxProcessRows()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		rows, stats, next, err := collectors.CollectProcesses("/proc", procLimit, runtime.NumCPU(), prev.ProcessSamples, procElapsed, now)
+		if err != nil {
+			log.Printf("process collection failed: %v", err)
+			return
+		}
+		procRows = rows
+		procStats = stats
+		procSampleMap = next
+		procIOAvailable = stats.IOAvailable
+		procCollected = true
 	}()
 
 	// System info (file reads)
@@ -1864,6 +1894,16 @@ func collectHardwareStats(prev *hardwareSample, now time.Time, sampleDocker bool
 		})
 	}
 
+	// Full process table for the Processes tab.
+	if procCollected {
+		stats.Processes = procRows
+		stats.ProcessStats = &procStats
+		stats.ProcessesCollected = true
+		stats.ProcessIOAvailable = procIOAvailable
+	} else {
+		stats.ProcessesCollected = false
+	}
+
 	// Compute network rates (needs previous state) and the totals the dashboard
 	// renders. Totalling here rather than in the browser keeps the three
 	// frontend call sites from having to reimplement (and get wrong) the sum.
@@ -1941,6 +1981,7 @@ func collectHardwareStats(prev *hardwareSample, now time.Time, sampleDocker bool
 	next.CPU, next.Idle = cpuTotal, idle
 	next.DiskRead, next.DiskWrite = diskRead, diskWrite
 	next.CPUCores, next.Processes, next.AgentImpact = newCPUCores, newProcSample, newImpact
+	next.ProcessSamples = procSampleMap
 
 	return stats, next, nil
 }
@@ -2227,6 +2268,7 @@ type localPolicy struct {
 	AllowDockerCompose    bool   `json:"allow_docker_compose"`
 	AllowDockerImages     bool   `json:"allow_docker_images"`
 	AllowRemoteAccess     bool   `json:"allow_remote_access"`
+	AllowProcessSignals   bool   `json:"allow_process_signals"`
 	SSHUser               string `json:"ssh_user,omitempty"`
 	CommandTimeoutSeconds int    `json:"command_timeout_seconds"`
 }
@@ -2249,6 +2291,7 @@ func loadLocalPolicy() localPolicy {
 		AllowDockerCompose:    defaults.AllowDockerCompose,
 		AllowDockerImages:     defaults.AllowDockerImages,
 		AllowRemoteAccess:     defaults.AllowRemoteAccess,
+		AllowProcessSignals:   defaults.AllowProcessSignals,
 		CommandTimeoutSeconds: defaults.CommandTimeoutSeconds,
 	}
 	if policy.CommandTimeoutSeconds <= 0 {
@@ -2340,6 +2383,7 @@ func policyDefaultsMap() map[string]any {
 		"allow_docker_compose":    d.AllowDockerCompose,
 		"allow_docker_images":     d.AllowDockerImages,
 		"allow_remote_access":     d.AllowRemoteAccess,
+		"allow_process_signals":   d.AllowProcessSignals,
 		"command_timeout_seconds": d.CommandTimeoutSeconds,
 	}
 }

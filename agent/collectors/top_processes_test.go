@@ -10,7 +10,7 @@ import (
 // reported exactly 100%. The first sample has no delta to work from and must
 // therefore report 0 rather than a lifetime total.
 func TestCollectTopProcessesFirstSampleReportsZeroCPU(t *testing.T) {
-	byCPU, byMem, next := CollectTopProcesses(5, 4, nil, 0)
+	byCPU, byMem, next := CollectTopProcesses("/proc", 5, 4, nil, 0)
 	if next == nil {
 		t.Fatal("expected a sample to feed into the next cycle")
 	}
@@ -31,12 +31,12 @@ func TestCollectTopProcessesFirstSampleReportsZeroCPU(t *testing.T) {
 // measuring the current one exercises the delta path end to end.
 func TestCollectTopProcessesDerivesCPUFromDelta(t *testing.T) {
 	// Prime the sample so PIDs are known.
-	_, _, prev := CollectTopProcesses(5, 1, nil, 0)
+	_, _, prev := CollectTopProcesses("/proc", 5, 1, nil, 0)
 	if len(prev) == 0 {
 		t.Skip("no readable /proc processes in this environment")
 	}
 
-	byCPU, byMem, next := CollectTopProcesses(5, 1, prev, 10*time.Second)
+	byCPU, byMem, next := CollectTopProcesses("/proc", 5, 1, prev, 10*time.Second)
 
 	for _, p := range append(append([]ProcessInfo{}, byCPU...), byMem...) {
 		if p.CPUPercent < 0 || p.CPUPercent > 100 {
@@ -53,7 +53,7 @@ func TestCollectTopProcessesDerivesCPUFromDelta(t *testing.T) {
 // arithmetic is checked without depending on real process behaviour.
 func TestCollectTopProcessesCPUPercentIsPerCore(t *testing.T) {
 	prev := ProcessCPUSample{}
-	byCPU, _, _ := CollectTopProcesses(1, 1, prev, 10*time.Second)
+	byCPU, _, _ := CollectTopProcesses("/proc", 1, 1, prev, 10*time.Second)
 	// With an empty prev every percentage is 0 by construction; this asserts
 	// the normalisation cannot exceed the cap regardless of input.
 	for _, p := range byCPU {

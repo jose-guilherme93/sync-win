@@ -1,0 +1,473 @@
+package store
+
+import (
+	"bytes"
+	"io"
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"time"
+)
+
+// ProcessPort is one listening socket owned by a process.
+type ProcessPort struct {
+	Proto string `json:"proto"`
+	Port  int    `json:"port"`
+	Addr  string `json:"addr"`
+}
+
+// ProcessRow mirrors the agent's process row.
+type ProcessRow struct {
+	PID            int           `json:"pid"`
+	PPID           int           `json:"ppid"`
+	Name           string        `json:"name"`
+	Cmd            string        `json:"cmd"`
+	User           string        `json:"user"`
+	UID            int           `json:"uid"`
+	State          string        `json:"state"`
+	Threads        int           `json:"threads"`
+	RSSBytes       uint64        `json:"rss_bytes"`
+	VSZBytes       uint64        `json:"vsz_bytes"`
+	SwapBytes      uint64        `json:"swap_bytes"`
+	CPUPercent     float64       `json:"cpu_percent"`
+	CPUTimeSeconds float64       `json:"cpu_time_seconds"`
+	StartTimeUnix  int64         `json:"start_time_unix"`
+	UptimeSeconds  int64         `json:"uptime_seconds"`
+	IOReadBps      float64       `json:"io_read_bps"`
+	IOWriteBps     float64       `json:"io_write_bps"`
+	FDCount        int           `json:"fd_count"`
+	OOMScore       int           `json:"oom_score"`
+	Nice           int           `json:"nice"`
+	Prio           int           `json:"prio"`
+	Cgroup         string        `json:"cgroup"`
+	Unit           string        `json:"unit"`
+	Container      string        `json:"container"`
+	Ports          []ProcessPort `json:"ports"`
+	Kernel         bool          `json:"kernel"`
+}
+
+// ProcessStats mirrors the agent's process stats.
+type ProcessStats struct {
+	Total           int     `json:"total"`
+	Threads         int     `json:"threads"`
+	Running         int     `json:"running"`
+	Sleeping        int     `json:"sleeping"`
+	Stopped         int     `json:"stopped"`
+	Zombie          int     `json:"zombie"`
+	Blocked         int     `json:"blocked"`
+	Idle            int     `json:"idle"`
+	Load1           float64 `json:"load1"`
+	Load5           float64 `json:"load5"`
+	Load15          float64 `json:"load15"`
+	PSICPUSomeAvg10 float64 `json:"psi_cpu_some_avg10"`
+	PSIMemSomeAvg10 float64 `json:"psi_mem_some_avg10"`
+	PSIIOSomeAvg10  float64 `json:"psi_io_some_avg10"`
+	OOMKills24h     int     `json:"oom_kills_24h"`
+}
+
+// ProcessSnapshot is the stored process state for a device.
+type ProcessSnapshot struct {
+	Processes   []ProcessRow   `json:"processes"`
+	Stats       *ProcessStats  `json:"stats"`
+	CollectedAt string         `json:"collected_at"`
+	IOAvailable bool           `json:"io_available"`
+	Collected   bool           `json:"collected"`
+}
+
+// ProcessHistory is the slow-cycle history payload.
+type ProcessHistory struct {
+	IntervalSeconds int                    `json:"interval_seconds"`
+	Samples         []ProcessHistorySample `json:"samples"`
+	Events          []ProcessHistoryEvent  `json:"events"`
+}
+
+type ProcessHistorySample struct {
+	T    int64                 `json:"t"`
+	Rows []ProcessHistoryPoint `json:"rows"`
+}
+
+type ProcessHistoryPoint struct {
+	PID  int     `json:"pid"`
+	Name string  `json:"name"`
+	CPU  float64 `json:"cpu"`
+	RSS  uint64  `json:"rss"`
+}
+
+type ProcessHistoryEvent struct {
+	T        int64 `json:"t"`
+	Type     string `json:"type"`
+	PID      int    `json:"pid"`
+	Name     string `json:"name"`
+	ExitCode *int   `json:"exit_code,omitempty"`
+}
+
+type ProcessHistoryResult struct {
+	Series  []ProcessHistorySeries  `json:"series"`
+	Events  []ProcessHistoryEvent   `json:"events"`
+	Buckets []ProcessHistoryBucket `json:"buckets"`
+}
+
+type ProcessHistorySeries struct {
+	Name   string      `json:"name"`
+	Points [][]float64 `json:"points"`
+}
+
+type ProcessHistoryBucket struct {
+	T   int64                    `json:"t"`
+	Top []ProcessHistoryBucketTop `json:"top"`
+}
+
+type ProcessHistoryBucketTop struct {
+	Name string  `json:"name"`
+	CPU  float64 `json:"cpu"`
+}
+
+// UpdateProcessState stores the latest process table for a device.
+func (s *Store) UpdateProcessState(deviceID string, snapshot ProcessSnapshot) error {
+	if snapshot.Processes == nil {
+		snapshot.Processes = []ProcessRow{}
+	}
+	payload, err := json.Marshal(snapshot)
+	if err != nil {
+		return fmt.Errorf("encode process state: %w", err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err = s.db.ExecContext(context.Background(),
+		"UPDATE devices SET process_state_json = ?, updated_at = ? WHERE id = ?",
+		string(payload), timeText(time.Now().UTC()), deviceID,
+	)
+	if err != nil {
+		return fmt.Errorf("store process state: %w", err)
+	}
+	return nil
+}
+
+// GetProcessState returns the last stored process state. A device that never
+// reported one yields collected=false and an empty list.
+func (s *Store) GetProcessState(deviceID string) (ProcessSnapshot, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var raw sql.NullString
+	err := s.db.QueryRowContext(context.Background(),
+		"SELECT process_state_json FROM devices WHERE id = ?", deviceID).Scan(&raw)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return ProcessSnapshot{Processes: []ProcessRow{}}, nil
+		}
+		return ProcessSnapshot{}, err
+	}
+	if !raw.Valid || raw.String == "" || raw.String == "null" {
+		return ProcessSnapshot{Processes: []ProcessRow{}}, nil
+	}
+	var snapshot ProcessSnapshot
+	if err := json.Unmarshal([]byte(raw.String), &snapshot); err != nil {
+		return ProcessSnapshot{}, fmt.Errorf("decode process state: %w", err)
+	}
+	if snapshot.Processes == nil {
+		snapshot.Processes = []ProcessRow{}
+	}
+	return snapshot, nil
+}
+
+// QueueProcessCommand queues a process command after validating payload.
+func (s *Store) QueueProcessCommand(deviceID, cmdType, payload string) (DeviceCommand, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	validTypes := map[string]bool{
+		"process_signal": true, "process_renice": true, "process_ionice": true,
+	}
+	if !validTypes[cmdType] {
+		return DeviceCommand{}, fmt.Errorf("unsupported process command type: %s", cmdType)
+	}
+	if len(payload) > 4096 {
+		return DeviceCommand{}, fmt.Errorf("payload too large")
+	}
+
+	// strict validation
+	switch cmdType {
+	case "process_signal":
+		var p struct {
+			PID           int    `json:"pid"`
+			Signal        string `json:"signal"`
+			StartTimeUnix int64  `json:"start_time_unix"`
+		}
+		if err := strictDecodeString(payload, &p); err != nil {
+			return DeviceCommand{}, err
+		}
+		if p.PID < 2 || p.PID > 4194304 {
+			return DeviceCommand{}, fmt.Errorf("pid out of range")
+		}
+		if p.PID == 1 {
+			return DeviceCommand{}, fmt.Errorf("pid 1 is protected")
+		}
+		switch p.Signal {
+		case "TERM", "KILL", "STOP", "CONT":
+		default:
+			return DeviceCommand{}, fmt.Errorf("signal not allowed")
+		}
+	case "process_renice":
+		var p struct {
+			PID           int `json:"pid"`
+			Nice          int `json:"nice"`
+			StartTimeUnix int64 `json:"start_time_unix"`
+		}
+		if err := strictDecodeString(payload, &p); err != nil {
+			return DeviceCommand{}, err
+		}
+		if p.PID < 2 || p.PID > 4194304 || p.PID == 1 {
+			return DeviceCommand{}, fmt.Errorf("pid out of range")
+		}
+		if p.Nice < -20 || p.Nice > 19 {
+			return DeviceCommand{}, fmt.Errorf("nice out of range")
+		}
+	case "process_ionice":
+		var p struct {
+			PID           int `json:"pid"`
+			Class         int `json:"class"`
+			Level         int `json:"level"`
+			StartTimeUnix int64 `json:"start_time_unix"`
+		}
+		if err := strictDecodeString(payload, &p); err != nil {
+			return DeviceCommand{}, err
+		}
+		if p.PID < 2 || p.PID > 4194304 || p.PID == 1 {
+			return DeviceCommand{}, fmt.Errorf("pid out of range")
+		}
+		if p.Class < 1 || p.Class > 3 {
+			return DeviceCommand{}, fmt.Errorf("ionice class out of range")
+		}
+		if p.Level < 0 || p.Level > 7 {
+			return DeviceCommand{}, fmt.Errorf("ionice level out of range")
+		}
+	}
+
+	command := DeviceCommand{
+		ID:        newID(),
+		DeviceID:  deviceID,
+		Type:      cmdType,
+		Path:      "",
+		Name:      "",
+		Source:    "",
+		Payload:   payload,
+		Status:    "queued",
+		CreatedAt: time.Now().UTC(),
+	}
+	return command, s.insertCommand(command)
+}
+
+func strictDecodeString(payload string, dst any) error {
+	dec := json.NewDecoder(bytes.NewReader([]byte(payload)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("request body must contain one JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
+// RecordProcessHistory stores process history samples and events.
+func (s *Store) RecordProcessHistory(deviceID string, history ProcessHistory, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, sample := range history.Samples {
+		bucket := time.Unix(sample.T, 0).UTC()
+		bucketText := timeText(bucket)
+		for _, row := range sample.Rows {
+			_, err := tx.Exec(`
+				INSERT INTO process_history (device_id, bucket, resolution, name, pid, cpu_sum, cpu_max, rss_max, samples)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+				ON CONFLICT(device_id, name, pid, resolution, bucket) DO UPDATE SET
+					cpu_sum = cpu_sum + excluded.cpu_sum,
+					cpu_max = MAX(cpu_max, excluded.cpu_max),
+					rss_max = MAX(rss_max, excluded.rss_max),
+					samples = samples + 1`,
+				deviceID, bucketText, "1m", row.Name, row.PID, row.CPU, row.CPU, int64(row.RSS))
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	for _, ev := range history.Events {
+		ts := time.Unix(ev.T, 0).UTC()
+		exitCode := 0
+		hasExit := 0
+		if ev.ExitCode != nil {
+			exitCode = *ev.ExitCode
+			hasExit = 1
+		}
+		var ec interface{}
+		if hasExit == 1 {
+			ec = exitCode
+		} else {
+			ec = nil
+		}
+		_, err := tx.Exec(
+			"INSERT INTO process_events (device_id, ts, type, pid, name, exit_code) VALUES (?, ?, ?, ?, ?, ?)",
+			deviceID, timeText(ts), ev.Type, ev.PID, ev.Name, ec)
+		if err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+// GetProcessHistory returns aggregated process history since from.
+func (s *Store) GetProcessHistory(deviceID string, from time.Time) (ProcessHistoryResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := ProcessHistoryResult{
+		Series:  []ProcessHistorySeries{},
+		Events:  []ProcessHistoryEvent{},
+		Buckets: []ProcessHistoryBucket{},
+	}
+
+	// Build series + buckets from process_history.
+	rows, err := s.db.Query(`
+		SELECT bucket, name, pid, cpu_sum, cpu_max, rss_max, samples
+		FROM process_history
+		WHERE device_id = ? AND bucket >= ?
+		ORDER BY bucket ASC`,
+		deviceID, timeText(from))
+	if err != nil {
+		return result, err
+	}
+	defer rows.Close()
+
+	type bucketKey struct{ t int64 }
+	seriesMap := make(map[string]*ProcessHistorySeries)
+	bucketMap := make(map[int64]*ProcessHistoryBucket)
+	var bucketOrder []int64
+
+	for rows.Next() {
+		var bucketText, name string
+		var pid int
+		var cpuSum, cpuMax float64
+		var rssMax int64
+		var samples int
+		if err := rows.Scan(&bucketText, &name, &pid, &cpuSum, &cpuMax, &rssMax, &samples); err != nil {
+			return result, err
+		}
+		bucketTime, _ := time.Parse("2006-01-02T15:04:05Z", bucketText)
+		// fallback parse via timeText? timeText format is RFC3339. Use parse.
+		if bucketTime.IsZero() {
+			// try RFC3339
+			if t2, err := time.Parse(time.RFC3339, bucketText); err == nil {
+				bucketTime = t2
+			}
+		}
+		bucketUnix := bucketTime.Unix()
+		if bucketTime.IsZero() {
+			bucketUnix = 0
+		}
+		cpuAvg := cpuMax
+		if samples > 0 {
+			cpuAvg = cpuSum / float64(samples)
+		}
+
+		// series
+		series, ok := seriesMap[name]
+		if !ok {
+			series = &ProcessHistorySeries{Name: name, Points: [][]float64{}}
+			seriesMap[name] = series
+		}
+		series.Points = append(series.Points, []float64{float64(bucketUnix), cpuAvg, float64(rssMax)})
+
+		// bucket
+		bk, ok := bucketMap[bucketUnix]
+		if !ok {
+			bk = &ProcessHistoryBucket{T: bucketUnix, Top: []ProcessHistoryBucketTop{}}
+			bucketMap[bucketUnix] = bk
+			bucketOrder = append(bucketOrder, bucketUnix)
+		}
+		bk.Top = append(bk.Top, ProcessHistoryBucketTop{Name: name, CPU: cpuAvg})
+	}
+	if err := rows.Err(); err != nil {
+		return result, err
+	}
+
+	for _, s := range seriesMap {
+		result.Series = append(result.Series, *s)
+	}
+	for _, bk := range bucketOrder {
+		b := bucketMap[bk]
+		// sort top by cpu desc
+		sortBucketTop(b.Top)
+		result.Buckets = append(result.Buckets, *b)
+	}
+
+	// Events
+	evRows, err := s.db.Query(`
+		SELECT ts, type, pid, name, exit_code
+		FROM process_events
+		WHERE device_id = ? AND ts >= ?
+		ORDER BY ts ASC`, deviceID, timeText(from))
+	if err != nil {
+		return result, err
+	}
+	defer evRows.Close()
+	for evRows.Next() {
+		var tsText, typ, name string
+		var pid int
+		var exitCode sql.NullInt64
+		if err := evRows.Scan(&tsText, &typ, &pid, &name, &exitCode); err != nil {
+			return result, err
+		}
+		ev := ProcessHistoryEvent{T: 0, Type: typ, PID: pid, Name: name}
+		if t2, err := time.Parse(time.RFC3339, tsText); err == nil {
+			ev.T = t2.Unix()
+		}
+		if exitCode.Valid {
+			v := int(exitCode.Int64)
+			ev.ExitCode = &v
+		}
+		result.Events = append(result.Events, ev)
+	}
+	if err := evRows.Err(); err != nil {
+		return result, err
+	}
+
+	if result.Series == nil {
+		result.Series = []ProcessHistorySeries{}
+	}
+	if result.Buckets == nil {
+		result.Buckets = []ProcessHistoryBucket{}
+	}
+	if result.Events == nil {
+		result.Events = []ProcessHistoryEvent{}
+	}
+	return result, nil
+}
+
+func sortBucketTop(top []ProcessHistoryBucketTop) {
+	// simple insertion sort by cpu desc
+	for i := 1; i < len(top); i++ {
+		j := i
+		for j > 0 && top[j-1].CPU < top[j].CPU {
+			top[j-1], top[j] = top[j], top[j-1]
+			j--
+		}
+	}
+}
+
+// Need bytes import
+var _ = bytes.NewReader
