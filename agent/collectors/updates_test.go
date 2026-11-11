@@ -69,6 +69,22 @@ func TestParsePendingUpdatesSkipsHeadersAndMalformedRows(t *testing.T) {
 	}
 }
 
+func TestCollectPendingUpdatesTreatsPacmanExit1EmptyAsNoUpdates(t *testing.T) {
+	bin := t.TempDir()
+	t.Setenv("PATH", bin)
+	writeFakeCommand(t, bin, "pacman", "#!/bin/sh\nexit 1\n")
+	got := CollectPendingUpdates([]string{"pacman"}, time.Second, 4096)
+	if got.Status != "ready" || len(got.Updates) != 0 {
+		t.Fatalf("no-update inventory = %+v", got)
+	}
+
+	writeFakeCommand(t, bin, "pacman", "#!/bin/sh\necho broken >&2\nexit 1\n")
+	failed := CollectPendingUpdates([]string{"pacman"}, time.Second, 4096)
+	if failed.Status != "error" {
+		t.Fatalf("stderr exit1 inventory = %+v", failed)
+	}
+}
+
 func TestUpdateOutputRecordsOverflowAcrossWrites(t *testing.T) {
 	var output updateOutput
 	output.limit = 4

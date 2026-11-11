@@ -123,8 +123,18 @@ func InterfaceKind(name string) string {
 // used to be dropped here. The dashboard needs to see a veth pair or a docker
 // bridge to explain where the traffic went, and the fleet totals are protected
 // by the Counted flag instead of by hiding the interface.
-func CollectNetwork() []NetworkInterface {
-	file, err := os.Open("/proc/net/dev")
+func CollectNetwork(args ...interface{}) []NetworkInterface {
+	netPath := "/proc/net/dev"
+	for _, a := range args {
+		if s, ok := a.(string); ok && s != "" {
+			if strings.HasSuffix(s, "dev") {
+				netPath = s
+			} else {
+				netPath = filepath.Join(s, "net", "dev")
+			}
+		}
+	}
+	file, err := os.Open(netPath)
 	if err != nil {
 		return nil
 	}
@@ -181,9 +191,9 @@ func CollectNetwork() []NetworkInterface {
 		if len(fields) > 12 {
 			iface.TXFIFOErrors, _ = strconv.ParseUint(fields[12], 10, 64)
 		}
-		if len(fields) > 13 {
-			iface.RXCollisions, _ = strconv.ParseUint(fields[13], 10, 64)
-		}
+		// /proc/net/dev has no rx-collisions counter: field 13 is the tx
+		// collisions counter. Linux does not report rx collisions, so leave
+		// RXCollisions at 0 rather than mislabelling the tx value as rx.
 		if len(fields) > 14 {
 			iface.TXCarrierErrors, _ = strconv.ParseUint(fields[14], 10, 64)
 		}
