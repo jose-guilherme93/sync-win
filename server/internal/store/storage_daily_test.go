@@ -18,13 +18,13 @@ func TestStorageDailyKeepsOneRowPerMountPerDay(t *testing.T) {
 
 	now := time.Now().UTC()
 	first := []DiskPartition{{Mount: "/", TotalBytes: 100, UsedBytes: 40, FreeBytes: 60}}
-	if err := s.UpsertStorageDaily(device.ID, first, now); err != nil {
-		t.Fatal(err)
+	if upsertErr := s.UpsertStorageDaily(device.ID, first, now); upsertErr != nil {
+		t.Fatal(upsertErr)
 	}
 	// A later sample the same day replaces the row instead of appending.
 	second := []DiskPartition{{Mount: "/", TotalBytes: 100, UsedBytes: 55, FreeBytes: 45}}
-	if err := s.UpsertStorageDaily(device.ID, second, now); err != nil {
-		t.Fatal(err)
+	if upsertErr := s.UpsertStorageDaily(device.ID, second, now); upsertErr != nil {
+		t.Fatal(upsertErr)
 	}
 
 	history, err := s.StorageDailyHistory(device.ID, 7)
@@ -61,13 +61,13 @@ func TestStorageDailyHistoryGroupsByMountAndHonoursTheWindow(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		day := now.AddDate(0, 0, -i).Format("2006-01-02")
 		for _, partition := range partitions {
-			if _, err := s.db.Exec(`INSERT INTO storage_daily
+			if _, execErr := s.db.Exec(`INSERT INTO storage_daily
 				(device_id, mount, day, total_bytes, used_bytes, free_bytes, inodes_used, inodes_total, updated_at)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				device.ID, partition.Mount, day, partition.TotalBytes,
-				partition.UsedBytes+uint64(i), partition.FreeBytes, partition.InodesUsed, partition.InodesTotal, day); err != nil {
+				partition.UsedBytes+uint64(i), partition.FreeBytes, partition.InodesUsed, partition.InodesTotal, day); execErr != nil {
 				s.mu.Unlock()
-				t.Fatal(err)
+				t.Fatal(execErr)
 			}
 		}
 	}

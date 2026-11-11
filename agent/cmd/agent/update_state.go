@@ -116,16 +116,16 @@ func saveAgentUpdateState(state agentUpdateState) {
 	tmpName := tmp.Name()
 	_ = tmp.Chmod(0o644)
 	if _, err := tmp.Write(payload); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
 		return
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		return
 	}
 	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 	}
 }
 

@@ -1547,7 +1547,7 @@ func (s *Store) SavePreferenceBatch(deviceID string, inputs []PreferenceInput) (
 
 	// One transaction per batch: a failure partway through must not leave the
 	// device with a half-applied set of files.
-	tx, err := s.db.Begin()
+	tx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -3784,7 +3784,7 @@ func (s *Store) AgentUsageSeries(ownerID string, from, to time.Time, maxPerDevic
 	result := make(map[string][]AgentUsagePoint, len(devices))
 	for _, device := range devices {
 		var total int
-		if err := s.db.QueryRow(
+		if err := s.db.QueryRowContext(context.Background(),
 			"SELECT COUNT(*) FROM telemetry_raw WHERE device_id = ? AND received_at >= ? AND received_at <= ?",
 			device.ID, timeText(from), timeText(to),
 		).Scan(&total); err != nil {
@@ -3798,7 +3798,7 @@ func (s *Store) AgentUsageSeries(ownerID string, from, to time.Time, maxPerDevic
 			stride = (total + maxPerDevice - 1) / maxPerDevice
 		}
 
-		rows, err := s.db.Query(
+		rows, err := s.db.QueryContext(context.Background(),
 			"SELECT payload, received_at FROM telemetry_raw WHERE device_id = ? AND received_at >= ? AND received_at <= ? ORDER BY id ASC",
 			device.ID, timeText(from), timeText(to),
 		)
@@ -3810,7 +3810,7 @@ func (s *Store) AgentUsageSeries(ownerID string, from, to time.Time, maxPerDevic
 		for rows.Next() {
 			var payload, received string
 			if err := rows.Scan(&payload, &received); err != nil {
-				rows.Close()
+				_ = rows.Close()
 				return nil, err
 			}
 			if index%stride != 0 {
@@ -3836,10 +3836,10 @@ func (s *Store) AgentUsageSeries(ownerID string, from, to time.Time, maxPerDevic
 			})
 		}
 		if err := rows.Err(); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, err
 		}
-		rows.Close()
+		_ = rows.Close()
 		if len(points) > 0 {
 			result[device.ID] = points
 		}
@@ -3871,11 +3871,11 @@ func (s *Store) UpsertStorageDaily(deviceID string, partitions []DiskPartition, 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	tx, err := s.db.Begin()
+	tx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
 		return err
 	}
-	stmt, err := tx.Prepare(`INSERT INTO storage_daily
+	stmt, err := tx.PrepareContext(context.Background(), `INSERT INTO storage_daily
 		(device_id, mount, day, total_bytes, used_bytes, free_bytes, inodes_used, inodes_total, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(device_id, mount, day) DO UPDATE SET
@@ -3889,12 +3889,12 @@ func (s *Store) UpsertStorageDaily(deviceID string, partitions []DiskPartition, 
 		_ = tx.Rollback()
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 	for _, partition := range partitions {
 		if partition.TotalBytes == 0 {
 			continue
 		}
-		if _, err := stmt.Exec(deviceID, partition.Mount, day, partition.TotalBytes,
+		if _, err := stmt.ExecContext(context.Background(), deviceID, partition.Mount, day, partition.TotalBytes,
 			partition.UsedBytes, partition.FreeBytes, partition.InodesUsed, partition.InodesTotal, now); err != nil {
 			_ = tx.Rollback()
 			return err
@@ -3902,7 +3902,7 @@ func (s *Store) UpsertStorageDaily(deviceID string, partitions []DiskPartition, 
 	}
 	// The screen offers 90 days; a year of rows is the ceiling this table keeps.
 	if s.storagePrunedAt.IsZero() || at.Sub(s.storagePrunedAt) > 24*time.Hour {
-		if _, err := tx.Exec("DELETE FROM storage_daily WHERE day < ?", at.UTC().AddDate(0, 0, -400).Format("2006-01-02")); err != nil {
+		if _, err := tx.ExecContext(context.Background(), "DELETE FROM storage_daily WHERE day < ?", at.UTC().AddDate(0, 0, -400).Format("2006-01-02")); err != nil {
 			_ = tx.Rollback()
 			return err
 		}
@@ -3920,12 +3920,12 @@ func (s *Store) StorageDailyHistory(deviceID string, days int) (map[string][]Sto
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	rows, err := s.db.Query(`SELECT mount, day, total_bytes, used_bytes, free_bytes, inodes_used, inodes_total
+	rows, err := s.db.QueryContext(context.Background(), `SELECT mount, day, total_bytes, used_bytes, free_bytes, inodes_used, inodes_total
 		FROM storage_daily WHERE device_id = ? AND day >= ? ORDER BY mount, day`, deviceID, from)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := make(map[string][]StorageDailyPoint)
 	for rows.Next() {

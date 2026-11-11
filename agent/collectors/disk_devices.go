@@ -139,7 +139,7 @@ func readDiskStats() map[string]diskCounters {
 	if err != nil {
 		return nil
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	stats := make(map[string]diskCounters)
 	scanner := bufio.NewScanner(file)

@@ -32,17 +32,17 @@ func TestAgentUsageSeriesReadsOnlyReportedSamples(t *testing.T) {
 
 	report := func(deviceID string, rss uint64, cpu float64) {
 		t.Helper()
-		payload, err := json.Marshal(map[string]any{
+		payload, marshalErr := json.Marshal(map[string]any{
 			"cpu_usage_percent":  12.0,
 			"memory_total_bytes": 16 << 30,
 			"agent_memory_bytes": rss,
 			"agent_cpu_usage":    cpu,
 		})
-		if err != nil {
-			t.Fatal(err)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
 		}
-		if err := s.AppendTelemetry(deviceID, payload); err != nil {
-			t.Fatal(err)
+		if appendErr := s.AppendTelemetry(deviceID, payload); appendErr != nil {
+			t.Fatal(appendErr)
 		}
 	}
 
@@ -51,8 +51,8 @@ func TestAgentUsageSeriesReadsOnlyReportedSamples(t *testing.T) {
 	// An agent that never reports its own cost must not appear as a flat zero
 	// line: absent is not idle.
 	payload, _ := json.Marshal(map[string]any{"cpu_usage_percent": 9.0})
-	if err := s.AppendTelemetry(silent.ID, payload); err != nil {
-		t.Fatal(err)
+	if appendErr := s.AppendTelemetry(silent.ID, payload); appendErr != nil {
+		t.Fatal(appendErr)
 	}
 
 	now := time.Now().UTC()
@@ -100,12 +100,12 @@ func TestAgentUsageSeriesDownsamplesToTheCap(t *testing.T) {
 			"agent_cpu_usage":    0.4,
 		})
 		at := base.Add(time.Duration(i) * time.Second)
-		if _, err := s.db.Exec(
+		if _, execErr := s.db.Exec(
 			"INSERT INTO telemetry_raw (device_id, payload, received_at) VALUES (?, ?, ?)",
 			device.ID, string(payload), timeText(at),
-		); err != nil {
+		); execErr != nil {
 			s.mu.Unlock()
-			t.Fatal(err)
+			t.Fatal(execErr)
 		}
 	}
 	s.mu.Unlock()

@@ -132,7 +132,7 @@ func TestStorageHistoryClampsAndReportsTheEffectiveWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	if payload.Days != 400 {
-		t.Fatalf("days = %d, want the clamped 400 the store actually honours", payload.Days)
+		t.Fatalf("days = %d, want the clamped 400 the store actually honors", payload.Days)
 	}
 }
 

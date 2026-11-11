@@ -2081,8 +2081,8 @@ func (s *Server) handleStorageHistory(w http.ResponseWriter, r *http.Request, de
 
 	days := 90
 	if v := r.URL.Query().Get("days"); v != "" {
-		parsed, err := strconv.Atoi(v)
-		if err != nil || parsed <= 0 {
+		parsed, parseErr := strconv.Atoi(v)
+		if parseErr != nil || parsed <= 0 {
 			s.writeError(w, http.StatusBadRequest, errors.New("invalid 'days' (expected a positive integer)"))
 			return
 		}
