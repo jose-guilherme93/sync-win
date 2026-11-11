@@ -152,6 +152,65 @@ func TestLoadEmbeddedContract(t *testing.T) {
 	}
 }
 
+// The Processes tab needs a bounded, declared budget and a fail-closed set of
+// signal rules. These assertions pin the contract values the agent and server
+// both branch on, so an edit cannot silently widen the security boundary.
+func TestProcessesContract(t *testing.T) {
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ContractVersion != "1.10.0" {
+		t.Errorf("contract_version = %q, want 1.10.0", c.ContractVersion)
+	}
+	if c.AgentVersion != "0.11.4" {
+		t.Errorf("agent_version = %q, want 0.11.4", c.AgentVersion)
+	}
+	if c.Processes.MaxRows != 250 {
+		t.Errorf("processes.max_rows = %d, want 250", c.Processes.MaxRows)
+	}
+	if c.Processes.RateLimitPerMinute != 10 {
+		t.Errorf("processes.rate_limit_per_minute = %d, want 10", c.Processes.RateLimitPerMinute)
+	}
+	if c.Processes.PayloadMaxBytes != 4096 {
+		t.Errorf("processes.payload_max_bytes = %d, want 4096", c.Processes.PayloadMaxBytes)
+	}
+	for _, sig := range []string{"TERM", "KILL", "STOP", "CONT"} {
+		if !containsField(c.Processes.AllowedSignals, sig) {
+			t.Errorf("processes.allowed_signals must include %q", sig)
+		}
+	}
+	for _, name := range []string{"systemd", "init", "dockerd", "containerd", "systemd-journald", "sshd", "sync-win-agent"} {
+		if !containsField(c.Processes.ProtectedNames, name) {
+			t.Errorf("processes.protected_names must include %q", name)
+		}
+	}
+	if len(c.Processes.ProtectedUnits) == 0 {
+		t.Error("processes.protected_units required")
+	}
+	if c.Commands.PolicyDefaults.AllowProcessSignals {
+		t.Error("allow_process_signals must default to false")
+	}
+	for _, cmd := range []string{"process_signal", "process_renice", "process_ionice"} {
+		if !containsField(c.Commands.SupportedTypes, cmd) {
+			t.Errorf("commands.supported_types must include %q", cmd)
+		}
+	}
+	if c.Processes.MinPID != 2 || c.Processes.MaxPID != 4194304 {
+		t.Errorf("pid bounds = %d..%d, want 2..4194304", c.Processes.MinPID, c.Processes.MaxPID)
+	}
+	if c.Processes.HistorySamples != 60 || c.Processes.HistoryEvents != 200 {
+		t.Errorf("history caps = %d/%d, want 60/200", c.Processes.HistorySamples, c.Processes.HistoryEvents)
+	}
+
+	// Accessors must fall back to the same safe values when the JSON is absent.
+	empty := &Contract{}
+	if empty.MaxProcessRows() != 250 || empty.ProcessRateLimit() != 10 || empty.ProcessPayloadMaxBytes() != 4096 {
+		t.Errorf("process accessor defaults drifted: %d/%d/%d",
+			empty.MaxProcessRows(), empty.ProcessRateLimit(), empty.ProcessPayloadMaxBytes())
+	}
+}
+
 func containsField(list []string, want string) bool {
 	for _, item := range list {
 		if item == want {
@@ -216,6 +275,7 @@ func TestDurationHelpers(t *testing.T) {
 				AllowDockerCompose    bool `json:"allow_docker_compose"`
 				AllowDockerImages     bool `json:"allow_docker_images"`
 				AllowRemoteAccess     bool `json:"allow_remote_access"`
+				AllowProcessSignals   bool `json:"allow_process_signals"`
 				CommandTimeoutSeconds int  `json:"command_timeout_seconds"`
 			} `json:"policy_defaults"`
 		}{TimeoutSecondsDefault: 900},

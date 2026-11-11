@@ -833,7 +833,7 @@ func TestSystemMetadataCollection(t *testing.T) {
 		t.Fatalf("fallback should detect KDE via kdeglobals, got %q", got)
 	}
 
-	stats, _, err := collectHardwareStats(&hardwareSample{}, time.Now(), false)
+	stats, _, err := collectHardwareStats(&hardwareSample{}, time.Now(), false, nil)
 	if err != nil {
 		t.Fatalf("collectHardwareStats: %v", err)
 	}

@@ -69,7 +69,7 @@ export function formatAbsolute(value: Timestamp): string {
 export function formatBytes(value: number | null | undefined, digits = 1): string {
   if (value == null || !Number.isFinite(value) || value <= 0) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
-  const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1)
+  const index = value < 1024 ? 0 : Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1)
   return `${(value / 1024 ** index).toFixed(index === 0 ? 0 : digits)} ${units[index]}`
 }
 

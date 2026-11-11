@@ -1,6 +1,6 @@
 {
-  "contract_version": "1.9.0",
-  "agent_version": "0.11.3",
+  "contract_version": "1.10.0",
+  "agent_version": "0.11.4",
   "collection": {
     "max_file_bytes": 524288,
     "default_preference_files": [
@@ -14,7 +14,15 @@
     ],
     "extra_allowlist_path": "~/.config/sync-win/allowed-files",
     "excluded_files_path": "~/.config/sync-win/excluded-files",
-    "categories": ["kde", "desktop", "shell", "app", "general", "workspace", "saves"],
+    "categories": [
+      "kde",
+      "desktop",
+      "shell",
+      "app",
+      "general",
+      "workspace",
+      "saves"
+    ],
     "rejected_content_rules": {
       "binary_or_invalid_utf8": true,
       "empty_content": true,
@@ -26,7 +34,16 @@
         "stripe_live_key",
         "google_api_key"
       ],
-      "sensitive_filenames": ["id_rsa*", "id_dsa*", "id_ecdsa*", "id_ed25519*", "*.pem", "*.key", "*.p12", "*.pfx"]
+      "sensitive_filenames": [
+        "id_rsa*",
+        "id_dsa*",
+        "id_ecdsa*",
+        "id_ed25519*",
+        "*.pem",
+        "*.key",
+        "*.p12",
+        "*.pfx"
+      ]
     },
     "saves": {
       "roots": [
@@ -39,30 +56,78 @@
         "$HOME/.config/unity3d"
       ],
       "include_extensions": [
-        ".save", ".sav", ".sgm", ".srm", ".mcr", ".mcd", ".savemeta",
-        ".bin", ".dat", ".cfg", ".ini", ".json", ".yaml", ".yml", ".xml",
-        ".txt", ".vdf", ".prof", ".litematic"
+        ".save",
+        ".sav",
+        ".sgm",
+        ".srm",
+        ".mcr",
+        ".mcd",
+        ".savemeta",
+        ".bin",
+        ".dat",
+        ".cfg",
+        ".ini",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".xml",
+        ".txt",
+        ".vdf",
+        ".prof",
+        ".litematic"
       ],
       "excluded_dirs": [
-        "Temp", "temp", "Cache", "Code Cache", "GPUCache", "DawnGraphiteCache",
-        "DawnWebGPUCache", "INetCache", "INetCookies", "History", "Crashpad",
-        "blob_storage", "Shared Dictionary", "content", "Content", "CommonRedist",
-        "redist", "__installer", "shadercache"
+        "Temp",
+        "temp",
+        "Cache",
+        "Code Cache",
+        "GPUCache",
+        "DawnGraphiteCache",
+        "DawnWebGPUCache",
+        "INetCache",
+        "INetCookies",
+        "History",
+        "Crashpad",
+        "blob_storage",
+        "Shared Dictionary",
+        "content",
+        "Content",
+        "CommonRedist",
+        "redist",
+        "__installer",
+        "shadercache"
       ],
-      "excluded_extensions": [".tmp", ".log", ".dmp", ".bak", ".old", ".lock"],
+      "excluded_extensions": [
+        ".tmp",
+        ".log",
+        ".dmp",
+        ".bak",
+        ".old",
+        ".lock"
+      ],
       "max_save_file_bytes": 1048576,
       "max_total_bytes_per_cycle": 16777216,
       "max_depth": 12
     },
     "workspace": {
-      "files": [".vscode/settings.json", ".vscode/tasks.json", ".vscode/launch.json"],
+      "files": [
+        ".vscode/settings.json",
+        ".vscode/tasks.json",
+        ".vscode/launch.json"
+      ],
       "max_file_bytes": 262144,
       "max_total_bytes": 2097152
     }
   },
   "telemetry": {
     "interval_seconds_default": 2,
-    "interval_seconds_allowed": [2, 5, 10, 30, 60],
+    "interval_seconds_allowed": [
+      2,
+      5,
+      10,
+      30,
+      60
+    ],
     "fields": [
       "cpu_usage_percent",
       "memory_used_bytes",
@@ -106,22 +171,44 @@
         "kube-ipvs"
       ],
       "rationale": "Container and VM plumbing reports the same bytes on the veth pair, its bridge and docker0. Summing them inflates network totals several times over. Real NICs and deliberate tunnels (tailscale, wireguard, tun/tap) are kept.",
-      "kept_examples": ["eth0", "wlan0", "enp3s0", "tailscale0", "wg0", "tun0", "tap0"],
+      "kept_examples": [
+        "eth0",
+        "wlan0",
+        "enp3s0",
+        "tailscale0",
+        "wg0",
+        "tun0",
+        "tap0"
+      ],
       "reported": true,
       "metadata": "Every interface is reported, with kind (physical, wifi, tunnel, bridge, veth, loopback, virtual) and counted. counted=false means the interface is container or VM plumbing: it is shown on the dashboard but never enters the fleet totals. Alongside mac, mtu, oper_state, speed_mbps and addresses (CIDR), each interface carries driver, duplex, carrier_changes, rx_fifo_errors, tx_fifo_errors, rx_collisions, tx_carrier_errors and multicast. Addresses and link state come from net.Interfaces() and /sys/class/net; every field is best-effort and may be empty."
     },
     "network_health": {
       "enabled": true,
-      "sources": ["/proc/net/snmp", "/proc/net/tcp", "/proc/net/tcp6", "/proc/net/udp", "/proc/sys/net/netfilter/nf_conntrack_count"]
+      "sources": [
+        "/proc/net/snmp",
+        "/proc/net/tcp",
+        "/proc/net/tcp6",
+        "/proc/net/udp",
+        "/proc/sys/net/netfilter/nf_conntrack_count"
+      ]
     },
     "disk_partition_dedup": {
       "by_device": true,
-      "exempt_filesystems": ["btrfs"],
+      "exempt_filesystems": [
+        "btrfs"
+      ],
       "rationale": "ext4 reports /home, /root, /srv and friends as separate mounts of one device, which listed the same disk several times. Btrfs subvolumes are independent mounts and are kept."
     }
   },
   "apps_inventory": {
-    "sources": ["apt", "flatpak", "pacman", "aur", "appimage"],
+    "sources": [
+      "apt",
+      "flatpak",
+      "pacman",
+      "aur",
+      "appimage"
+    ],
     "refresh_interval_seconds": 300,
     "pending_updates": {
       "refresh_interval_seconds": 300,
@@ -134,13 +221,23 @@
     "services": {
       "max_units": 400,
       "timeout_seconds": 10,
-      "states": ["running", "failed", "stopped"],
-      "enabled_states": ["enabled", "enabled-runtime"]
+      "states": [
+        "running",
+        "failed",
+        "stopped"
+      ],
+      "enabled_states": [
+        "enabled",
+        "enabled-runtime"
+      ]
     },
     "ports": {
       "max_ports": 200,
       "timeout_seconds": 10,
-      "listening_states": ["LISTEN", "UNCONN"]
+      "listening_states": [
+        "LISTEN",
+        "UNCONN"
+      ]
     },
     "users": {
       "max_users": 50,
@@ -157,6 +254,42 @@
       "rationale": "The topology travels with the system inventory, on the slow cadence. The caps bound the payload a device with a large routing table or a busy segment can push. The agent reads only what an unprivileged user can read: the routing table, the resolver configuration, the neighbour table, the radio quality, the tunnel interfaces and the Tailscale local API socket (which is world readable on a default install). Firewall rules, WireGuard keys and other overlay daemons are out of reach without root, so only what the daemon exposes is reported. An overlay the daemon refuses to describe is sent with an error instead of an empty peer list."
     }
   },
+  "processes": {
+    "max_rows": 250,
+    "rate_limit_per_minute": 10,
+    "payload_max_bytes": 4096,
+    "allowed_signals": [
+      "TERM",
+      "KILL",
+      "STOP",
+      "CONT"
+    ],
+    "protected_names": [
+      "systemd",
+      "init",
+      "dockerd",
+      "containerd",
+      "containerd-shim",
+      "systemd-journald",
+      "sshd",
+      "sync-win-agent"
+    ],
+    "protected_units": [
+      "ssh.service",
+      "docker.service",
+      "containerd.service",
+      "systemd-journald.service",
+      "sync-win-agent.service"
+    ],
+    "min_pid": 2,
+    "max_pid": 4194304,
+    "history_samples": 60,
+    "history_events": 200,
+    "max_top": 20,
+    "max_problem": 10,
+    "max_cmdline_chars": 200,
+    "rationale": "The agent reads one /proc/<pid>/stat per process (no extra pass for comm/status) and enriches only the reported top consumers and problem states with user, command, threads and age. This keeps the per-cycle cost lower than the old three-file read while making the Processes tab diagnosable."
+  },
   "preferences_sync": {
     "interval_seconds_default": 300,
     "state_path": "~/.local/state/sync-win/agent-state.json"
@@ -164,15 +297,35 @@
   "commands": {
     "transport": "pull_only",
     "supported_types": [
-      "exclude_file", "install_app", "restore_saves",
-      "docker_list_containers", "docker_container_stats", "docker_container_logs",
-      "docker_container_start", "docker_container_stop", "docker_container_restart",
-      "docker_container_kill", "docker_container_remove", "docker_system_prune",
-      "docker_image_prune", "docker_container_prune", "docker_network_prune",
+      "exclude_file",
+      "install_app",
+      "restore_saves",
+      "docker_list_containers",
+      "docker_container_stats",
+      "docker_container_logs",
+      "docker_container_start",
+      "docker_container_stop",
+      "docker_container_restart",
+      "docker_container_kill",
+      "docker_container_remove",
+      "docker_system_prune",
+      "docker_image_prune",
+      "docker_container_prune",
+      "docker_network_prune",
       "docker_exec",
-      "docker_compose_read", "docker_compose_write", "docker_compose_up",
-      "docker_compose_down", "docker_compose_ps", "docker_compose_logs",
-      "lynis_audit", "restart_agent", "update_packages", "reboot_device"
+      "docker_compose_read",
+      "docker_compose_write",
+      "docker_compose_up",
+      "docker_compose_down",
+      "docker_compose_ps",
+      "docker_compose_logs",
+      "lynis_audit",
+      "restart_agent",
+      "update_packages",
+      "reboot_device",
+      "process_signal",
+      "process_renice",
+      "process_ionice"
     ],
     "timeout_seconds_default": 900,
     "output_cap_bytes": 65536,
@@ -192,8 +345,9 @@
       "allow_docker_exec": false,
       "allow_docker_prune": false,
       "allow_docker_compose": false,
-    "allow_docker_images": false,
+      "allow_docker_images": false,
       "allow_remote_access": false,
+      "allow_process_signals": false,
       "command_timeout_seconds": 900
     },
     "docker_exec_timeout_seconds": 30,
