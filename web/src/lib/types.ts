@@ -331,3 +331,98 @@ export function swapPercent(hw?: HardwareStats): number {
   if (!hw?.swap_total_bytes) return 0
   return Math.min(100, Math.max(0, ((hw.swap_used_bytes || 0) / hw.swap_total_bytes) * 100))
 }
+
+// ---- Processes ----------------------------------------------------------
+//
+// Wire shapes for `GET /api/devices/{id}/processes` and its history route (see
+// docs/process-tab-spec.md §2). Everything here is what the agent sends; the
+// screen must not invent a field the agent does not report.
+
+export type ProcessState = 'R' | 'S' | 'D' | 'Z' | 'T' | 'I'
+
+export type ProcessPort = { proto: 'tcp' | 'tcp6' | 'udp' | 'udp6'; port: number; addr: string }
+
+export type ProcessRow = {
+  pid: number
+  ppid: number
+  name: string
+  cmd: string
+  user: string
+  uid: number
+  state: ProcessState
+  threads: number
+  rss_bytes: number
+  vsz_bytes: number
+  swap_bytes: number
+  cpu_percent: number
+  cpu_time_seconds: number
+  // Exact start instant from /proc/<pid>/stat. It travels with a signal so the
+  // agent can reject a command aimed at a reused pid.
+  start_time_unix: number
+  uptime_seconds: number
+  io_read_bps: number
+  io_write_bps: number
+  fd_count: number
+  oom_score: number
+  nice: number
+  prio: number
+  cgroup: string
+  unit: string
+  container: string
+  ports: ProcessPort[]
+  kernel: boolean
+}
+
+export type ProcessStats = {
+  total: number
+  threads: number
+  running: number
+  sleeping: number
+  stopped: number
+  zombie: number
+  blocked: number
+  idle: number
+  load1: number
+  load5: number
+  load15: number
+  psi_cpu_some_avg10: number
+  psi_mem_some_avg10: number
+  psi_io_some_avg10: number
+  oom_kills_24h: number
+}
+
+export type ProcessSnapshot = {
+  processes: ProcessRow[]
+  stats: ProcessStats | null
+  collected_at: string
+  io_available: boolean
+  signals_enabled: boolean
+  // false means the agent could not read /proc at all; the screen says "not
+  // collected" instead of drawing an empty list that reads like an idle host.
+  collected: boolean
+}
+
+export type ProcessEventType = 'started' | 'exited' | 'oom_killed' | 'restarted'
+
+export type ProcessEvent = {
+  t: number
+  type: ProcessEventType
+  pid: number
+  name: string
+  exit_code?: number
+}
+
+/** [unix seconds, cpu percent of capacity, rss MiB] */
+export type ProcessHistoryPoint = [number, number, number]
+
+export type ProcessHistorySeries = { name: string; points: ProcessHistoryPoint[] }
+
+export type ProcessHistoryBucket = { t: number; top: { name: string; cpu: number }[] }
+
+export type ProcessHistory = {
+  series: ProcessHistorySeries[]
+  events: ProcessEvent[]
+  buckets: ProcessHistoryBucket[]
+}
+
+export type ProcessSignal = 'TERM' | 'KILL' | 'STOP' | 'CONT'
