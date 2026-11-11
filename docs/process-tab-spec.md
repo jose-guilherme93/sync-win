@@ -23,7 +23,7 @@ type ProcessRow = {
   state: 'R'|'S'|'D'|'Z'|'T'|'I';   // first letter of /proc/pid/stat
   threads: number;
   rss_bytes: number; vsz_bytes: number; swap_bytes: number;
-  cpu_percent: number;          // delta over the window, machine capacity = 100 (same rule as today)
+  cpu_percent: number;          // delta over the window, ONE core = 100 (top/ps semantics)
   cpu_time_seconds: number;     // utime+stime / USER_HZ
   start_time_unix: number;      // from /proc/pid/stat field 22 + boot time; MUST be exact (see §4)
   uptime_seconds: number;
