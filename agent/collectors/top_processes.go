@@ -3,6 +3,7 @@ package collectors
 import (
 	"bufio"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,8 +31,11 @@ type ProcessCPUSample map[int]uint64
 // total.
 //
 // The returned sample must be fed back in on the next call.
-func CollectTopProcesses(limit int, cpuCores int, prev ProcessCPUSample, elapsed time.Duration) (byCPU []ProcessInfo, byMem []ProcessInfo, next ProcessCPUSample) {
-	entries, err := os.ReadDir("/proc")
+func CollectTopProcesses(procRoot string, limit int, cpuCores int, prev ProcessCPUSample, elapsed time.Duration) (byCPU []ProcessInfo, byMem []ProcessInfo, next ProcessCPUSample) {
+	if procRoot == "" {
+		procRoot = "/proc"
+	}
+	entries, err := os.ReadDir(procRoot)
 	if err != nil {
 		return nil, nil, prev
 	}
@@ -54,7 +58,7 @@ func CollectTopProcesses(limit int, cpuCores int, prev ProcessCPUSample, elapsed
 		}
 
 		// Read comm (name)
-		commPath := "/proc/" + entry.Name() + "/comm"
+		commPath := filepath.Join(procRoot, entry.Name(), "comm")
 		commData, err := os.ReadFile(commPath)
 		if err != nil {
 			continue
@@ -63,7 +67,7 @@ func CollectTopProcesses(limit int, cpuCores int, prev ProcessCPUSample, elapsed
 
 		// Read status for memory
 		var memRSS uint64
-		statusPath := "/proc/" + entry.Name() + "/status"
+		statusPath := filepath.Join(procRoot, entry.Name(), "status")
 		if file, err := os.Open(statusPath); err == nil {
 			scanner := bufio.NewScanner(file)
 			for scanner.Scan() {
@@ -81,7 +85,7 @@ func CollectTopProcesses(limit int, cpuCores int, prev ProcessCPUSample, elapsed
 		}
 
 		// Read stat for CPU time (utime + stime)
-		statPath := "/proc/" + entry.Name() + "/stat"
+		statPath := filepath.Join(procRoot, entry.Name(), "stat")
 		var cpuTime uint64
 		if file, err := os.Open(statPath); err == nil {
 			scanner := bufio.NewScanner(file)

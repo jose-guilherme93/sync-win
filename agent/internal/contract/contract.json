@@ -1,6 +1,6 @@
 {
-  "contract_version": "1.9.0",
-  "agent_version": "0.11.3",
+  "contract_version": "1.10.0",
+  "agent_version": "0.11.4",
   "collection": {
     "max_file_bytes": 524288,
     "default_preference_files": [
@@ -172,7 +172,8 @@
       "docker_exec",
       "docker_compose_read", "docker_compose_write", "docker_compose_up",
       "docker_compose_down", "docker_compose_ps", "docker_compose_logs",
-      "lynis_audit", "restart_agent", "update_packages", "reboot_device"
+      "lynis_audit", "restart_agent", "update_packages", "reboot_device",
+      "process_signal", "process_renice", "process_ionice"
     ],
     "timeout_seconds_default": 900,
     "output_cap_bytes": 65536,
@@ -194,6 +195,7 @@
       "allow_docker_compose": false,
     "allow_docker_images": false,
       "allow_remote_access": false,
+      "allow_process_signals": false,
       "command_timeout_seconds": 900
     },
     "docker_exec_timeout_seconds": 30,
@@ -226,5 +228,19 @@
     "max_request_bytes": 2097152,
     "max_file_bytes_server": 262144,
     "max_save_bytes_server": 1048576
+  }
+
+  ,
+  "processes": {
+    "max_rows": 250,
+    "rate_limit_per_minute": 10,
+    "payload_max_bytes": 4096,
+    "allowed_signals": ["TERM", "KILL", "STOP", "CONT"],
+    "protected_names": ["systemd", "init", "dockerd", "containerd", "containerd-shim", "systemd-journald", "sshd", "sync-win-agent"],
+    "protected_units": ["ssh.service", "docker.service", "containerd.service", "systemd-journald.service", "sync-win-agent.service"],
+    "min_pid": 2,
+    "max_pid": 4194304,
+    "history_samples": 60,
+    "history_events": 200
   }
 }

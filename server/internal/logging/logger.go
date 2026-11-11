@@ -92,6 +92,11 @@ func (l *Logger) Stop() {
 }
 
 // Log logs a structured event without request context.
+// Flush waits for queued log entries to be written to the store.
+func (l *Logger) Flush() {
+	l.flushQueue()
+}
+
 func (l *Logger) Log(level Level, category Category, event Event, msg string, metadata map[string]any) {
 	l.log(level, category, event, msg, metadata, "", "")
 }

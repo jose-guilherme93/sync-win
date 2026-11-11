@@ -143,6 +143,7 @@ type Contract struct {
 			AllowDockerCompose    bool `json:"allow_docker_compose"`
 			AllowDockerImages     bool `json:"allow_docker_images"`
 			AllowRemoteAccess     bool `json:"allow_remote_access"`
+			AllowProcessSignals   bool `json:"allow_process_signals"`
 			CommandTimeoutSeconds int  `json:"command_timeout_seconds"`
 		} `json:"policy_defaults"`
 	} `json:"commands"`
@@ -173,6 +174,18 @@ type Contract struct {
 		LynisTimeoutSeconds int  `json:"lynis_timeout_seconds"`
 		ReportMaxBytes      int  `json:"report_max_bytes"`
 	} `json:"security_audit"`
+	Processes struct {
+		MaxRows            int      `json:"max_rows"`
+		RateLimitPerMinute int      `json:"rate_limit_per_minute"`
+		PayloadMaxBytes    int      `json:"payload_max_bytes"`
+		AllowedSignals     []string `json:"allowed_signals"`
+		ProtectedNames     []string `json:"protected_names"`
+		ProtectedUnits     []string `json:"protected_units"`
+		MinPID             int      `json:"min_pid"`
+		MaxPID             int      `json:"max_pid"`
+		HistorySamples     int      `json:"history_samples"`
+		HistoryEvents      int      `json:"history_events"`
+	} `json:"processes"`
 }
 
 // MaxLoginUsers caps how many target accounts the agent reports.
@@ -412,4 +425,29 @@ func (c *Contract) MaxOverlayPeers() int {
 		return c.SystemInventory.Network.MaxOverlayPeers
 	}
 	return 128
+}
+
+
+// MaxProcessRows caps how many process rows a collection may report.
+func (c *Contract) MaxProcessRows() int {
+	if c.Processes.MaxRows > 0 {
+		return c.Processes.MaxRows
+	}
+	return 250
+}
+
+// ProcessRateLimit is the per-device signal cap per minute.
+func (c *Contract) ProcessRateLimit() int {
+	if c.Processes.RateLimitPerMinute > 0 {
+		return c.Processes.RateLimitPerMinute
+	}
+	return 10
+}
+
+// ProcessPayloadMaxBytes caps a process command payload.
+func (c *Contract) ProcessPayloadMaxBytes() int {
+	if c.Processes.PayloadMaxBytes > 0 {
+		return c.Processes.PayloadMaxBytes
+	}
+	return 4096
 }
