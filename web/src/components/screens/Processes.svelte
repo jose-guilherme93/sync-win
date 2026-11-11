@@ -28,7 +28,7 @@
     type SortDir,
     type TableEntry
   } from '../../lib/processes'
-  import type { Device, ProcessHistory, ProcessRow, ProcessSnapshot, ProcessState, ProcessStats } from '../../lib/types'
+  import type { Device, ProcessHistory, ProcessInfo, ProcessRow, ProcessSnapshot, ProcessState, ProcessStats, ProcessSummary } from '../../lib/types'
   import {
     fetchProcessHistory,
     fetchProcessSnapshot,
@@ -45,6 +45,19 @@
 
   $: id = device?.id ?? deviceId
   $: agentVersion = device?.hardware?.agent_version ?? ''
+
+  function stateMeaning(s: string): string {
+    switch (s) {
+      case 'R': return 'on CPU'
+      case 'S': return 'sleeping'
+      case 'D': return 'disk wait'
+      case 'T':
+      case 't': return 'SIGSTOP / traced'
+      case 'Z': return 'zombie'
+      case 'I': return 'idle'
+      default: return s
+    }
+  }
 
   // ---- view state ----
   let view: 'live' | 'history' = 'live'
@@ -93,7 +106,21 @@
   } as ProcessFilter
 
   $: stats = snapshot?.stats ?? null
+  $: hw = device?.hardware
   $: rows = snapshot?.processes ?? []
+  $: processSummary = hw?.process_summary ?? null
+  $: reported = mergeReported(hw)
+  function mergeReported(hardware: Device['hardware']): ProcessInfo[] {
+    if (!hardware) return []
+    const byPid = new Map<number, ProcessInfo>()
+    for (const list of [hardware.top_cpu_processes, hardware.top_mem_processes, hardware.stopped_processes, hardware.zombie_processes]) {
+      for (const proc of list ?? []) {
+        const existing = byPid.get(proc.pid)
+        byPid.set(proc.pid, existing ? { ...existing, ...proc } : proc)
+      }
+    }
+    return [...byPid.values()]
+  }
   $: filteredRows = filterRows(rows, filter)
   $: tableEntries = buildTable(filteredRows, { mode, sortKey, sortDir, expanded })
   $: ioAvailable = snapshot?.io_available ?? false
@@ -319,6 +346,16 @@
       <button class:active={view === 'history'} on:click={() => (view = 'history')}>History</button>
     </span>
   </div>
+
+  {#if hw}
+    <div class="status-strip">
+      {#if processSummary}
+        <span>{reported.length} reported of {processSummary.total} processes</span>
+      {:else}
+        <span class="warn-text">Counts are the reported subset; this agent predates the full process tally.</span>
+      {/if}
+    </div>
+  {/if}
 
   {#if loading && !loaded}
     <p class="loading">Loading processes…</p>
@@ -547,7 +584,7 @@
       <div class="cmdblock"><code>{selected.cmd || selected.name}</code></div>
       <dl class="facts">
         <div><dt>User</dt><dd>{selected.user} ({selected.uid})</dd></div>
-        <div><dt>State</dt><dd>{selected.state} · {selected.threads} thr</dd></div>
+        <div><dt>State</dt><dd>{selected.state} · {stateMeaning(selected.state)} · {selected.threads} thr</dd></div>
         <div><dt>CPU</dt><dd>{formatCpuPercent(selected.cpu_percent)} · {selected.cpu_time_seconds.toFixed(1)}s</dd></div>
         <div><dt>RSS</dt><dd>{formatBytes(selected.rss_bytes)} · VSZ {formatBytes(selected.vsz_bytes)}</dd></div>
         <div><dt>Swap</dt><dd>{formatBytes(selected.swap_bytes)}</dd></div>

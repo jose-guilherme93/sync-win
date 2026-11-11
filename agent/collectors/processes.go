@@ -517,7 +517,6 @@ func CollectProcesses(procRoot string, limit, cpuCores int, prev ProcessSampleMa
 	seconds := elapsed.Seconds()
 	boot := readBootTime(procRoot)
 	users := readPasswd(procRoot)
-	table := netTable(procRoot)
 
 	var stats ProcessStats
 	stats.OOMKills24h = -1
@@ -527,9 +526,21 @@ func CollectProcesses(procRoot string, limit, cpuCores int, prev ProcessSampleMa
 	stats.PSIIOSomeAvg10 = readPSI(procRoot, "io")
 
 	next := make(ProcessSampleMap, len(entries))
-	rows := make([]ProcessRow, 0, len(entries))
+
+	type cand struct {
+		pid        int
+		name       string
+		stat       procStat
+		cpuPercent float64
+		cpuTime    uint64
+	}
+	cands := make([]cand, 0, len(entries))
 	nowUnix := now.Unix()
 
+	// Bulk pass: one /proc/<pid>/stat read per process. Only the state
+	// counts and the CPU delta are computed here; the expensive per-process
+	// reads (status, cmdline, cgroup, fd, io, oom_score) are deferred to the
+	// survivors below.
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -542,20 +553,10 @@ func CollectProcesses(procRoot string, limit, cpuCores int, prev ProcessSampleMa
 		if err != nil {
 			continue
 		}
-		commData, err := os.ReadFile(filepath.Join(procRoot, entry.Name(), "comm"))
-		if err != nil {
-			continue
-		}
+		commData, _ := os.ReadFile(filepath.Join(procRoot, entry.Name(), "comm"))
 		name := truncateName(string(commData))
 		if name == "" {
 			name = stat.Name
-		}
-		statusData, _ := os.ReadFile(filepath.Join(procRoot, entry.Name(), "status"))
-		status := string(statusData)
-		uid := readStatusUID(status)
-		user, ok := users[uid]
-		if !ok {
-			user = "uid:" + strconv.Itoa(uid)
 		}
 
 		cpuTime := stat.Utime + stat.Stime
@@ -572,72 +573,7 @@ func CollectProcesses(procRoot string, limit, cpuCores int, prev ProcessSampleMa
 			}
 		}
 
-		readBytes, writeBytes, ioOK := readProcIO(procRoot, pid)
-		if ioOK {
-			stats.IOAvailable = true
-		}
-		var readBps, writeBps float64
-		if seconds > 0 && ioOK {
-			if before, ok := prev[pid]; ok {
-				if readBytes > before.ReadBytes {
-					readBps = float64(readBytes-before.ReadBytes) / seconds
-				}
-				if writeBytes > before.WriteBytes {
-					writeBps = float64(writeBytes-before.WriteBytes) / seconds
-				}
-			}
-		}
-
-		next[pid] = ProcessSample{CPUJiffies: cpuTime, ReadBytes: readBytes, WriteBytes: writeBytes}
-
-		cmdData, _ := os.ReadFile(filepath.Join(procRoot, entry.Name(), "cmdline"))
-		cmd := truncateCmd(string(cmdData))
-		cgroupData, _ := os.ReadFile(filepath.Join(procRoot, entry.Name(), "cgroup"))
-		cgroup := truncateCgroup(strings.TrimSpace(string(cgroupData)))
-		unit, container := parseCgroup(cgroup)
-
-		kernel := len(strings.TrimSpace(string(cmdData))) == 0 && stat.PPID == 2
-		rssPages := stat.RSSPages
-		if rssPages < 0 {
-			rssPages = 0
-		}
-
-		cpuSeconds := float64(cpuTime) / clockTicks
-		startUnix := ProcessStartTimeUnix(boot, stat.StartTicks)
-		var uptime int64
-		if startUnix > 0 && nowUnix > startUnix {
-			uptime = nowUnix - startUnix
-		}
-
-		row := ProcessRow{
-			PID:            pid,
-			PPID:           stat.PPID,
-			Name:           name,
-			Cmd:            cmd,
-			User:           user,
-			UID:            uid,
-			State:          string(stat.State),
-			Threads:        stat.Threads,
-			RSSBytes:       readMemValue(status, "VmRSS"),
-			VSZBytes:       stat.VSize,
-			SwapBytes:      readMemValue(status, "VmSwap"),
-			CPUPercent:     cpuPercent,
-			CPUTimeSeconds: cpuSeconds,
-			StartTimeUnix:  startUnix,
-			UptimeSeconds:  uptime,
-			IOReadBps:      readBps,
-			IOWriteBps:     writeBps,
-			FDCount:        countFDs(procRoot, pid),
-			OOMScore:       readOOMScore(procRoot, pid),
-			Nice:           stat.Nice,
-			Prio:           stat.Priority,
-			Cgroup:         cgroup,
-			Unit:           unit,
-			Container:      container,
-			Ports:          processPorts(procRoot, pid, table),
-			Kernel:         kernel,
-		}
-		rows = append(rows, row)
+		next[pid] = ProcessSample{CPUJiffies: cpuTime}
 
 		stats.Total++
 		stats.Threads += stat.Threads
@@ -655,18 +591,100 @@ func CollectProcesses(procRoot string, limit, cpuCores int, prev ProcessSampleMa
 		case 'I':
 			stats.Idle++
 		}
+
+		cands = append(cands, cand{pid: pid, name: name, stat: stat, cpuPercent: cpuPercent, cpuTime: cpuTime})
 	}
 
-	sort.Slice(rows, func(i, j int) bool {
-		if rows[i].CPUPercent != rows[j].CPUPercent {
-			return rows[i].CPUPercent > rows[j].CPUPercent
+	sort.Slice(cands, func(i, j int) bool {
+		if cands[i].cpuPercent != cands[j].cpuPercent {
+			return cands[i].cpuPercent > cands[j].cpuPercent
 		}
-		return rows[i].RSSBytes > rows[j].RSSBytes
+		return cands[i].stat.RSSPages > cands[j].stat.RSSPages
 	})
-	if limit <= 0 || limit > len(rows) {
-		limit = len(rows)
+	if limit <= 0 || limit > len(cands) {
+		limit = len(cands)
 	}
-	return rows[:limit], stats, next, nil
+	selected := cands[:limit]
+
+	// Enrich only the survivors.
+	table := netTable(procRoot)
+	rows := make([]ProcessRow, 0, len(selected))
+	for _, c := range selected {
+		pid := c.pid
+		stat := c.stat
+
+		statusData, _ := os.ReadFile(filepath.Join(procRoot, strconv.Itoa(pid), "status"))
+		status := string(statusData)
+		uid := readStatusUID(status)
+		user, ok := users[uid]
+		if !ok {
+			user = "uid:" + strconv.Itoa(uid)
+		}
+
+		readBytes, writeBytes, ioOK := readProcIO(procRoot, pid)
+		if ioOK {
+			stats.IOAvailable = true
+		}
+		var readBps, writeBps float64
+		if seconds > 0 && ioOK {
+			if before, ok := prev[pid]; ok {
+				if readBytes > before.ReadBytes {
+					readBps = float64(readBytes-before.ReadBytes) / seconds
+				}
+				if writeBytes > before.WriteBytes {
+					writeBps = float64(writeBytes-before.WriteBytes) / seconds
+				}
+			}
+		}
+		next[pid] = ProcessSample{CPUJiffies: c.cpuTime, ReadBytes: readBytes, WriteBytes: writeBytes}
+
+		cmdData, _ := os.ReadFile(filepath.Join(procRoot, strconv.Itoa(pid), "cmdline"))
+		cmd := truncateCmd(string(cmdData))
+		cgroupData, _ := os.ReadFile(filepath.Join(procRoot, strconv.Itoa(pid), "cgroup"))
+		cgroup := truncateCgroup(strings.TrimSpace(string(cgroupData)))
+		unit, container := parseCgroup(cgroup)
+
+		kernel := len(strings.TrimSpace(string(cmdData))) == 0 && stat.PPID == 2
+		cpuSeconds := float64(c.cpuTime) / clockTicks
+		startUnix := ProcessStartTimeUnix(boot, stat.StartTicks)
+		var uptime int64
+		if startUnix > 0 && nowUnix > startUnix {
+			uptime = nowUnix - startUnix
+		}
+
+		row := ProcessRow{
+			PID:            pid,
+			PPID:           stat.PPID,
+			Name:           c.name,
+			Cmd:            cmd,
+			User:           user,
+			UID:            uid,
+			State:          string(stat.State),
+			Threads:        stat.Threads,
+			RSSBytes:       readMemValue(status, "VmRSS"),
+			VSZBytes:       stat.VSize,
+			SwapBytes:      readMemValue(status, "VmSwap"),
+			CPUPercent:     c.cpuPercent,
+			CPUTimeSeconds: cpuSeconds,
+			StartTimeUnix:  startUnix,
+			UptimeSeconds:  uptime,
+			IOReadBps:      readBps,
+			IOWriteBps:     writeBps,
+			FDCount:        countFDs(procRoot, pid),
+			OOMScore:       readOOMScore(procRoot, pid),
+			Nice:           stat.Nice,
+			Prio:           stat.Priority,
+			Cgroup:         cgroup,
+			Unit:           unit,
+			Container:      container,
+			Ports:          processPorts(procRoot, pid, table),
+			Kernel:         kernel,
+		}
+		// ensure RSS from status if stat rss 0? keep stat
+		rows = append(rows, row)
+	}
+
+	return rows, stats, next, nil
 }
 
 // ProcessHistory mirrors the wire shape for the slow-cycle process history.

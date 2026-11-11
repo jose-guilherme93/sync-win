@@ -1,8 +1,10 @@
 package collectors
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -328,5 +330,54 @@ func TestTruncateCmd(t *testing.T) {
 	runes := []rune(got)
 	if string(runes[len(runes)-1:]) != "…" {
 		t.Errorf("truncated command must end with an ellipsis, got %q", string(runes[len(runes)-1:]))
+	}
+}
+
+// BenchmarkCollectProcesses measures the per-cycle cost of collecting over a
+// synthetic /proc tree with ~400 processes, so the "single stat line first,
+// enrich survivors only" claim is measured rather than asserted.
+func BenchmarkCollectProcesses(b *testing.B) {
+	root := b.TempDir()
+	write := func(rel, content string) {
+		path := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			b.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			b.Fatal(err)
+		}
+	}
+	mkdir := func(rel string) {
+		if err := os.MkdirAll(filepath.Join(root, rel), 0o755); err != nil {
+			b.Fatal(err)
+		}
+	}
+	write("stat", "cpu  1 2 3 4\nbtime 1000\n")
+	write("loadavg", "0.50 0.40 0.30 1/100 1234\n")
+	write("pressure/cpu", "some avg10=1.50 avg60=1.00 avg300=0.50 total=1234\n")
+	write("pressure/memory", "some avg10=2.50 avg60=2.00 avg300=1.50 total=1234\n")
+	write("pressure/io", "some avg10=0.25 avg60=0.20 avg300=0.10 total=1234\n")
+	write("vmstat", "nr_free_pages 1\noom_kill 3\n")
+	for i := 0; i < 400; i++ {
+		pid := 1000 + i
+		dir := filepath.Join(strconv.Itoa(pid))
+		mkdir(dir)
+		write(filepath.Join(dir, "stat"), fmt.Sprintf("%d (proc%d) S 1 0 0 0 0 0 0 0 0 0 %d %d 0 0 20 0 4 0 %d 123456 10 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n", pid, pid, i+1, i+2, 1000+i))
+		write(filepath.Join(dir, "comm"), fmt.Sprintf("proc%d\n", pid))
+		write(filepath.Join(dir, "status"), fmt.Sprintf("Name:\tproc%d\nUid:\t1000\t1000\t1000\t1000\nVmRSS:\t1024 kB\nVmSwap:\t0 kB\n", pid))
+		write(filepath.Join(dir, "cmdline"), fmt.Sprintf("/usr/bin/proc%d --flag\\x00", pid))
+		write(filepath.Join(dir, "cgroup"), "0::/system.slice/test.service\n")
+		write(filepath.Join(dir, "io"), "read_bytes: 4096\nwrite_bytes: 8192\n")
+		// fd dir
+		fdDir := filepath.Join(dir, "fd")
+		if err := os.MkdirAll(filepath.Join(root, fdDir), 0o755); err != nil {
+			b.Fatal(err)
+		}
+	}
+	// need strconv/fmt imports; add via init? Use fully qualified not possible. Instead rely on imports added below.
+	_ = root
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _, _, _ = CollectProcesses(root, 250, 4, nil, 10*time.Second, time.Unix(2000, 0))
 	}
 }

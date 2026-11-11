@@ -175,6 +175,9 @@ type Contract struct {
 		ReportMaxBytes      int  `json:"report_max_bytes"`
 	} `json:"security_audit"`
 	Processes struct {
+		MaxTop             int      `json:"max_top"`
+		MaxProblem         int      `json:"max_problem"`
+		MaxCmdlineLen      int      `json:"max_cmdline_chars"`
 		MaxRows            int      `json:"max_rows"`
 		RateLimitPerMinute int      `json:"rate_limit_per_minute"`
 		PayloadMaxBytes    int      `json:"payload_max_bytes"`
@@ -186,6 +189,23 @@ type Contract struct {
 		HistorySamples     int      `json:"history_samples"`
 		HistoryEvents      int      `json:"history_events"`
 	} `json:"processes"`
+}
+
+// ProcessLimits returns the caps for the process snapshot. The top lists are
+// the diagnosable consumers; problem states (stopped/zombie) get their own
+// allowance so a busy machine cannot crowd them out.
+func (c *Contract) ProcessLimits() (top, problem, cmdline int) {
+	top, problem, cmdline = c.Processes.MaxTop, c.Processes.MaxProblem, c.Processes.MaxCmdlineLen
+	if top <= 0 {
+		top = 20
+	}
+	if problem <= 0 {
+		problem = 10
+	}
+	if cmdline <= 0 {
+		cmdline = 200
+	}
+	return top, problem, cmdline
 }
 
 // MaxLoginUsers caps how many target accounts the agent reports.
