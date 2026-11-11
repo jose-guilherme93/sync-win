@@ -232,11 +232,11 @@ func TestProcessesEndpointAuthAndShape(t *testing.T) {
 		t.Fatalf("GET processes = %d: %s", rec.Code, rec.Body.String())
 	}
 	var body struct {
-		Processes       []store.ProcessRow `json:"processes"`
-		Stats           *store.ProcessStats `json:"stats"`
-		CollectedAt     string             `json:"collected_at"`
-		IOAvailable     bool               `json:"io_available"`
-		SignalsEnabled  bool               `json:"signals_enabled"`
+		Processes      []store.ProcessRow  `json:"processes"`
+		Stats          *store.ProcessStats `json:"stats"`
+		CollectedAt    string              `json:"collected_at"`
+		IOAvailable    bool                `json:"io_available"`
+		SignalsEnabled bool                `json:"signals_enabled"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
@@ -265,8 +265,8 @@ func TestProcessHistoryEndpoint(t *testing.T) {
 	now := time.Now().UTC()
 	if err := s.store.RecordProcessHistory(deviceID, store.ProcessHistory{
 		IntervalSeconds: 60,
-		Samples: []store.ProcessHistorySample{{T: now.Unix(), Rows: []store.ProcessHistoryPoint{{PID: 1000, Name: "firefox", CPU: 12.5, RSS: 2048}}}},
-		Events:  []store.ProcessHistoryEvent{{T: now.Unix(), Type: "started", PID: 1001, Name: "vim"}},
+		Samples:         []store.ProcessHistorySample{{T: now.Unix(), Rows: []store.ProcessHistoryPoint{{PID: 1000, Name: "firefox", CPU: 12.5, RSS: 2048}}}},
+		Events:          []store.ProcessHistoryEvent{{T: now.Unix(), Type: "started", PID: 1001, Name: "vim"}},
 	}, now); err != nil {
 		t.Fatal(err)
 	}

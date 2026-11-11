@@ -2,11 +2,11 @@ package store
 
 import (
 	"bytes"
-	"io"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"time"
 )
 
@@ -68,11 +68,11 @@ type ProcessStats struct {
 
 // ProcessSnapshot is the stored process state for a device.
 type ProcessSnapshot struct {
-	Processes   []ProcessRow   `json:"processes"`
-	Stats       *ProcessStats  `json:"stats"`
-	CollectedAt string         `json:"collected_at"`
-	IOAvailable bool           `json:"io_available"`
-	Collected   bool           `json:"collected"`
+	Processes   []ProcessRow  `json:"processes"`
+	Stats       *ProcessStats `json:"stats"`
+	CollectedAt string        `json:"collected_at"`
+	IOAvailable bool          `json:"io_available"`
+	Collected   bool          `json:"collected"`
 }
 
 // ProcessHistory is the slow-cycle history payload.
@@ -95,7 +95,7 @@ type ProcessHistoryPoint struct {
 }
 
 type ProcessHistoryEvent struct {
-	T        int64 `json:"t"`
+	T        int64  `json:"t"`
 	Type     string `json:"type"`
 	PID      int    `json:"pid"`
 	Name     string `json:"name"`
@@ -103,8 +103,8 @@ type ProcessHistoryEvent struct {
 }
 
 type ProcessHistoryResult struct {
-	Series  []ProcessHistorySeries  `json:"series"`
-	Events  []ProcessHistoryEvent   `json:"events"`
+	Series  []ProcessHistorySeries `json:"series"`
+	Events  []ProcessHistoryEvent  `json:"events"`
 	Buckets []ProcessHistoryBucket `json:"buckets"`
 }
 
@@ -114,7 +114,7 @@ type ProcessHistorySeries struct {
 }
 
 type ProcessHistoryBucket struct {
-	T   int64                    `json:"t"`
+	T   int64                     `json:"t"`
 	Top []ProcessHistoryBucketTop `json:"top"`
 }
 
@@ -211,8 +211,8 @@ func (s *Store) QueueProcessCommand(deviceID, cmdType, payload string) (DeviceCo
 		}
 	case "process_renice":
 		var p struct {
-			PID           int `json:"pid"`
-			Nice          int `json:"nice"`
+			PID           int   `json:"pid"`
+			Nice          int   `json:"nice"`
 			StartTimeUnix int64 `json:"start_time_unix"`
 		}
 		if err := strictDecodeString(payload, &p); err != nil {
@@ -226,9 +226,9 @@ func (s *Store) QueueProcessCommand(deviceID, cmdType, payload string) (DeviceCo
 		}
 	case "process_ionice":
 		var p struct {
-			PID           int `json:"pid"`
-			Class         int `json:"class"`
-			Level         int `json:"level"`
+			PID           int   `json:"pid"`
+			Class         int   `json:"class"`
+			Level         int   `json:"level"`
 			StartTimeUnix int64 `json:"start_time_unix"`
 		}
 		if err := strictDecodeString(payload, &p); err != nil {

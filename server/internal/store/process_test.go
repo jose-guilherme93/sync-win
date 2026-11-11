@@ -42,8 +42,8 @@ func TestProcessStateRoundTrips(t *testing.T) {
 	}
 
 	snapshot := ProcessSnapshot{
-		Processes: []ProcessRow{{PID: 1000, PPID: 1, Name: "firefox", CPUPercent: 12.5, RSSBytes: 2048}},
-		Stats:     &ProcessStats{Total: 2, Running: 1, Sleeping: 1, Load1: 0.5},
+		Processes:   []ProcessRow{{PID: 1000, PPID: 1, Name: "firefox", CPUPercent: 12.5, RSSBytes: 2048}},
+		Stats:       &ProcessStats{Total: 2, Running: 1, Sleeping: 1, Load1: 0.5},
 		CollectedAt: "2026-11-11T10:00:00Z",
 		IOAvailable: true,
 		Collected:   true,

@@ -207,30 +207,30 @@ type HardwareStats struct {
 	NetTxRate          float64        `json:"net_tx_rate"`
 	// NetworkHealth is the packet level health of the stack. It travels with
 	// the telemetry because the counters move every second.
-	NetworkHealth      *NetworkHealth    `json:"network_health,omitempty"`
-	DiskReadBytes      uint64            `json:"disk_read_bytes"`
-	DiskWriteBytes     uint64            `json:"disk_write_bytes"`
-	DiskReadRate       float64           `json:"disk_read_rate"`
-	DiskWriteRate      float64           `json:"disk_write_rate"`
-	DiskPartitions     []DiskPartition   `json:"disk_partitions,omitempty"`
-	SwapUsedBytes      uint64            `json:"swap_used_bytes"`
-	SwapTotalBytes     uint64            `json:"swap_total_bytes"`
-	MemoryBuffersBytes uint64            `json:"memory_buffers_bytes"`
-	MemoryCachedBytes  uint64            `json:"memory_cached_bytes"`
-	CPUCoreUsage       []float64         `json:"cpu_core_usage,omitempty"`
-	TopCPUProcesses    []ProcessInfo     `json:"top_cpu_processes,omitempty"`
-	TopMemProcesses    []ProcessInfo     `json:"top_mem_processes,omitempty"`
-	Processes          []ProcessRow      `json:"processes,omitempty"`
-	ProcessStats        *ProcessStats     `json:"process_stats,omitempty"`
-	ProcessHistory     *ProcessHistory   `json:"process_history,omitempty"`
-	ProcessesCollected  bool             `json:"processes_collected"`
-	ProcessIOAvailable  bool            `json:"process_io_available"`
-	StoppedProcesses   []ProcessInfo     `json:"stopped_processes,omitempty"`
-	ZombieProcesses    []ProcessInfo     `json:"zombie_processes,omitempty"`
-	ProcessSummary     *ProcessSummary   `json:"process_summary,omitempty"`
+	NetworkHealth      *NetworkHealth  `json:"network_health,omitempty"`
+	DiskReadBytes      uint64          `json:"disk_read_bytes"`
+	DiskWriteBytes     uint64          `json:"disk_write_bytes"`
+	DiskReadRate       float64         `json:"disk_read_rate"`
+	DiskWriteRate      float64         `json:"disk_write_rate"`
+	DiskPartitions     []DiskPartition `json:"disk_partitions,omitempty"`
+	SwapUsedBytes      uint64          `json:"swap_used_bytes"`
+	SwapTotalBytes     uint64          `json:"swap_total_bytes"`
+	MemoryBuffersBytes uint64          `json:"memory_buffers_bytes"`
+	MemoryCachedBytes  uint64          `json:"memory_cached_bytes"`
+	CPUCoreUsage       []float64       `json:"cpu_core_usage,omitempty"`
+	TopCPUProcesses    []ProcessInfo   `json:"top_cpu_processes,omitempty"`
+	TopMemProcesses    []ProcessInfo   `json:"top_mem_processes,omitempty"`
+	Processes          []ProcessRow    `json:"processes,omitempty"`
+	ProcessStats       *ProcessStats   `json:"process_stats,omitempty"`
+	ProcessHistory     *ProcessHistory `json:"process_history,omitempty"`
+	ProcessesCollected bool            `json:"processes_collected"`
+	ProcessIOAvailable bool            `json:"process_io_available"`
+	StoppedProcesses   []ProcessInfo   `json:"stopped_processes,omitempty"`
+	ZombieProcesses    []ProcessInfo   `json:"zombie_processes,omitempty"`
+	ProcessSummary     *ProcessSummary `json:"process_summary,omitempty"`
 
-	DockerAvailable    bool              `json:"docker_available"`
-	DockerContainers   []DockerContainer `json:"docker_containers,omitempty"`
+	DockerAvailable  bool              `json:"docker_available"`
+	DockerContainers []DockerContainer `json:"docker_containers,omitempty"`
 	// True only when the agent actually listed containers on this sample. The
 	// list is sampled slowly; without this flag the handler cannot distinguish
 	// "not sampled" from "Docker now has no containers" and either keeps stale
