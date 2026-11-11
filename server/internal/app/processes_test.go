@@ -139,6 +139,58 @@ func TestProcessSignalQueuesWithSnapshotStartTime(t *testing.T) {
 	}
 }
 
+// The dashboard client sends start_time_unix in the body; the server compares
+// it against its own snapshot. Without this the strict decoder rejected every
+// real request with 400 while the tests below only ever sent {"signal":...}.
+func TestProcessMutationAcceptsWebClientBodies(t *testing.T) {
+	s, token, deviceID := processFixture(t)
+	s.flags.EnableRemoteMutations = true
+
+	cases := []struct {
+		name string
+		path string
+		body string
+	}{
+		{"signal", "/processes/1000/signal", `{"signal":"TERM","start_time_unix":1005}`},
+		{"signal KILL", "/processes/1001/signal", `{"signal":"KILL","start_time_unix":1006}`},
+		{"nice", "/processes/1000/nice", `{"nice":10,"start_time_unix":1005}`},
+		{"ionice", "/processes/1000/ionice", `{"class":2,"level":7,"start_time_unix":1005}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := processRequest(s, http.MethodPost, "/api/devices/"+deviceID+tc.path, token, tc.body)
+			if rec.Code != http.StatusAccepted {
+				t.Fatalf("%s = %d, want 202: %s", tc.name, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+// A start time that no longer matches the snapshot means the pid was reused
+// (or the tab is stale): the command must not be queued.
+func TestProcessMutationRejectsStaleStartTime(t *testing.T) {
+	s, token, deviceID := processFixture(t)
+	s.flags.EnableRemoteMutations = true
+
+	cases := []struct {
+		name string
+		path string
+		body string
+	}{
+		{"signal", "/processes/1000/signal", `{"signal":"TERM","start_time_unix":999}`},
+		{"nice", "/processes/1000/nice", `{"nice":10,"start_time_unix":999}`},
+		{"ionice", "/processes/1000/ionice", `{"class":2,"level":7,"start_time_unix":999}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := processRequest(s, http.MethodPost, "/api/devices/"+deviceID+tc.path, token, tc.body)
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("%s = %d, want 409: %s", tc.name, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestProcessSignalAttemptsAreAudited(t *testing.T) {
 	s, token, deviceID := processFixture(t)
 	s.flags.EnableRemoteMutations = true
