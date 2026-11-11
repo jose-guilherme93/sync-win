@@ -11,6 +11,34 @@ Versions are decided by release-please: it reads the Conventional Commits on
 version, and a breaking change increases the major version. Merging that pull
 request publishes the image and creates the tag.
 
+## [0.17.0](https://github.com/jose-guilherme93/sync-win/compare/v0.16.1...v0.17.0) (2026-11-11)
+
+
+### Features
+
+* implement processes tab backend ([88a52fd](https://github.com/jose-guilherme93/sync-win/commit/88a52fde60adc4a28f0e915ab6fc04ff81915bb9))
+* implement Processes tab web UI (variant A + tree toggle) ([5f3fd04](https://github.com/jose-guilherme93/sync-win/commit/5f3fd04db4298e26e0c03816ec4f0f26edd51cc5))
+* **network:** let the operator arrange the panels ([b673d72](https://github.com/jose-guilherme93/sync-win/commit/b673d72c76ab6a93e5391f4080ccc0fe13d0afc4))
+* **network:** let the operator arrange the panels ([1a0d465](https://github.com/jose-guilherme93/sync-win/commit/1a0d4656812888d1a9e86a60bc5381c736fde8fc))
+* **network:** open a stat tile into a live inspector ([28eaf89](https://github.com/jose-guilherme93/sync-win/commit/28eaf89d81778cac2d6ccc712b72d419fefa6485))
+* process diagnostics and a network inspector from feat/terminal-tabs ([c681119](https://github.com/jose-guilherme93/sync-win/commit/c681119e88c47ead99759d9bb8b1b9900a2b2a09))
+* Processes tab — live table, tree, kill actions, history ([9741c7e](https://github.com/jose-guilherme93/sync-win/commit/9741c7ed3f5801437677cb92099e42e256a5d6b6))
+* **processes:** diagnose the machine with states, identity and detail ([e276fba](https://github.com/jose-guilherme93/sync-win/commit/e276fbafd50dcdb059429ea9a6841fcf8443372b))
+* **processes:** live table, guarded signals, process history and IO ([a1f6ca5](https://github.com/jose-guilherme93/sync-win/commit/a1f6ca5637ab206bf6a1709e27bcd4a975a44c9d))
+
+
+### Bug Fixes
+
+* **agent:** collector edge cases and updater timeouts ([a70c78f](https://github.com/jose-guilherme93/sync-win/commit/a70c78fb56a2a30b2e92e544566e990510079d9d))
+* **ci:** clear lint findings and follow the new toolbar in e2e ([515e660](https://github.com/jose-guilherme93/sync-win/commit/515e6609ddc23d51c14457ce697045352959792e))
+* **ci:** context-aware retention deletes and test shadowing ([0b9ba3a](https://github.com/jose-guilherme93/sync-win/commit/0b9ba3afe04e49e54f658cffc7160d129faba5a2))
+* **ci:** context-aware store calls and case-insensitive e2e check ([f3e45a1](https://github.com/jose-guilherme93/sync-win/commit/f3e45a148f8362a1c00b15d56b8ae6d01da54a67))
+* clear golangci findings in the process collector ([f5adc56](https://github.com/jose-guilherme93/sync-win/commit/f5adc56c21a722a3f24ccb32ea259aa7ad5ea78b))
+* gofmt the process store and handler after the merge ([3238bbe](https://github.com/jose-guilherme93/sync-win/commit/3238bbeb3d08abe9d28e44c92921b807677117f5))
+* harden SyncWin process mutation guard and cross-lane contract ([bc47da7](https://github.com/jose-guilherme93/sync-win/commit/bc47da7add2ecc6d78282aff557a27d14679fa1f))
+* **web:** draw the chart skeleton as an area, not a bar chart ([1f3927d](https://github.com/jose-guilherme93/sync-win/commit/1f3927d68a1a1c2d4506a32ea62fdf336ad2e897))
+* **web:** draw the chart skeleton as an area, not a bar chart ([ffcdd61](https://github.com/jose-guilherme93/sync-win/commit/ffcdd613b4d2e7b4ff985137279ea2198dfff364))
+
 ## [0.16.1](https://github.com/jose-guilherme93/sync-win/compare/v0.16.0...v0.16.1) (2026-10-31)
 
 
