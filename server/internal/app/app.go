@@ -2,6 +2,7 @@ package app
 
 import (
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -1085,6 +1086,24 @@ func (s *Server) handleDeviceDetail(w http.ResponseWriter, r *http.Request) {
 		s.handleDockerSubRequest(w, r, parts[0], parts[2])
 		return
 	}
+	// Processes endpoints
+	if len(parts) == 2 && parts[1] == "processes" {
+		s.handleProcesses(w, r, parts[0])
+		return
+	}
+	if len(parts) == 3 && parts[1] == "processes" && parts[2] == "history" {
+		s.handleProcessesHistory(w, r, parts[0])
+		return
+	}
+	if len(parts) == 4 && parts[1] == "processes" && (parts[3] == "signal" || parts[3] == "nice" || parts[3] == "ionice") {
+		pid, err := strconv.Atoi(parts[2])
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, errors.New("invalid pid"))
+			return
+		}
+		s.handleProcessMutation(w, r, parts[0], pid, parts[3])
+		return
+	}
 	s.handleDeviceFiles(w, r, parts[0])
 }
 
@@ -1381,7 +1400,7 @@ func (s *Server) handleFileDelete(w http.ResponseWriter, r *http.Request, device
 
 func isRemoteMutationCommand(cmdType string) bool {
 	switch cmdType {
-	case "install_app", "restore_saves", "exclude_file", "restart_agent", "update_packages", "reboot_device":
+	case "install_app", "restore_saves", "exclude_file", "restart_agent", "update_packages", "reboot_device", "process_signal", "process_renice", "process_ionice":
 		return true
 	default:
 		return false
@@ -1852,6 +1871,35 @@ func (s *Server) handleTelemetry(w http.ResponseWriter, r *http.Request, deviceI
 	}
 	req.Hardware.DockerContainers = nil
 	req.Hardware.DockerContainersSampled = false
+
+	// Process table is sampled on the fast cycle but stored in its own column,
+	// mirroring the Docker state handling above.
+	if req.Hardware.ProcessesCollected {
+		snapshot := store.ProcessSnapshot{
+			Processes:   req.Hardware.Processes,
+			Stats:       req.Hardware.ProcessStats,
+			CollectedAt: req.Hardware.CollectedAt,
+			IOAvailable: req.Hardware.ProcessIOAvailable,
+			Collected:   true,
+		}
+		if snapshot.Processes == nil {
+			snapshot.Processes = []store.ProcessRow{}
+		}
+		if derr := s.store.UpdateProcessState(deviceID, snapshot); derr != nil {
+			s.log.Warn(logging.CatDevice, logging.EventSyncError, "process state store failed",
+				map[string]any{"device_id": deviceID, "error": derr.Error()})
+		}
+	}
+	req.Hardware.Processes = nil
+	req.Hardware.ProcessStats = nil
+	req.Hardware.ProcessesCollected = false
+	if req.Hardware.ProcessHistory != nil {
+		if herr := s.store.RecordProcessHistory(deviceID, *req.Hardware.ProcessHistory, time.Now().UTC()); herr != nil {
+			s.log.Warn(logging.CatDevice, logging.EventSyncError, "process history store failed",
+				map[string]any{"device_id": deviceID, "error": herr.Error()})
+		}
+	}
+	req.Hardware.ProcessHistory = nil
 
 	updated, err := s.store.UpdateHardwareStats(deviceID, req.Hardware)
 	if err != nil {
@@ -4021,3 +4069,310 @@ func (s *Server) handleSecurityAuditDelete(w http.ResponseWriter, r *http.Reques
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// handleProcesses serves the latest process table for a device.
+func (s *Server) handleProcesses(w http.ResponseWriter, r *http.Request, deviceID string) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	owner := s.ownerID(r)
+	if owner == "" {
+		s.writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
+		return
+	}
+	device, deviceErr := s.store.GetDevice(deviceID)
+	if deviceErr != nil || device.OwnerID != owner {
+		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
+		return
+	}
+	state, err := s.store.GetProcessState(deviceID)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if state.Processes == nil {
+		state.Processes = []store.ProcessRow{}
+	}
+	resp := map[string]any{
+		"processes":       state.Processes,
+		"stats":           state.Stats,
+		"collected_at":    state.CollectedAt,
+		"io_available":    state.IOAvailable,
+		"signals_enabled": s.flags.EnableRemoteMutations,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// handleProcessesHistory serves process history.
+func (s *Server) handleProcessesHistory(w http.ResponseWriter, r *http.Request, deviceID string) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	owner := s.ownerID(r)
+	if owner == "" {
+		s.writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
+		return
+	}
+	device, deviceErr := s.store.GetDevice(deviceID)
+	if deviceErr != nil || device.OwnerID != owner {
+		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
+		return
+	}
+	rangeParam := r.URL.Query().Get("range")
+	var from time.Time
+	now := time.Now().UTC()
+	switch rangeParam {
+	case "1h":
+		from = now.Add(-time.Hour)
+	case "24h":
+		from = now.Add(-24 * time.Hour)
+	case "7d":
+		from = now.Add(-7 * 24 * time.Hour)
+	default:
+		s.writeError(w, http.StatusBadRequest, errors.New("invalid range"))
+		return
+	}
+	result, err := s.store.GetProcessHistory(deviceID, from)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+// handleProcessMutation handles signal/nice/ionice requests.
+func (s *Server) handleProcessMutation(w http.ResponseWriter, r *http.Request, deviceID string, pid int, kind string) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	owner := s.ownerID(r)
+	if owner == "" {
+		s.writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
+		return
+	}
+	if !s.flags.EnableRemoteMutations {
+		s.writeError(w, http.StatusServiceUnavailable, errors.New("remote mutations are disabled"))
+		return
+	}
+	device, deviceErr := s.store.GetDevice(deviceID)
+	if deviceErr != nil || device.OwnerID != owner {
+		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
+		return
+	}
+
+	rejected := true
+	defer func() {
+		if rejected && s.log != nil {
+			s.log.Warn(logging.CatDevice, logging.EventCmdRejected, "process command rejected",
+				map[string]any{"device_id": deviceID, "pid": pid, "process_kind": kind})
+		}
+	}()
+
+	// strict decode
+	body, bodyErr := io.ReadAll(r.Body)
+	if bodyErr != nil {
+		s.writeError(w, http.StatusBadRequest, bodyErr)
+		return
+	}
+	if len(body) > 4096 {
+		s.writeError(w, http.StatusBadRequest, errors.New("payload too large"))
+		return
+	}
+
+	cmdType := ""
+	var payloadMap map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+
+	switch kind {
+	case "signal":
+		cmdType = "process_signal"
+		var req struct {
+			Signal        string `json:"signal"`
+			StartTimeUnix int64  `json:"start_time_unix"`
+		}
+		if err := decoder.Decode(&req); err != nil {
+			s.writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		var extra any
+		if err := decoder.Decode(&extra); err != io.EOF {
+			s.writeError(w, http.StatusBadRequest, errors.New("request body must contain one JSON value"))
+			return
+		}
+		switch req.Signal {
+		case "TERM", "KILL", "STOP", "CONT":
+		default:
+			s.writeError(w, http.StatusBadRequest, errors.New("signal not allowed"))
+			return
+		}
+		// pid bounds
+		if pid < 2 || pid > 4194304 || pid == 1 {
+			s.writeError(w, http.StatusBadRequest, errors.New("pid out of range"))
+			return
+		}
+		// snapshot membership + start time
+		state, err := s.store.GetProcessState(deviceID)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		var found *store.ProcessRow
+		for i := range state.Processes {
+			if state.Processes[i].PID == pid {
+				found = &state.Processes[i]
+				break
+			}
+		}
+		if found == nil {
+			s.writeError(w, http.StatusNotFound, errors.New("process not found"))
+			return
+		}
+		if req.StartTimeUnix != 0 && req.StartTimeUnix != found.StartTimeUnix {
+			s.writeError(w, http.StatusConflict, errors.New("stale process snapshot"))
+			return
+		}
+		payloadMap = map[string]any{
+			"pid":             pid,
+			"signal":          req.Signal,
+			"start_time_unix": found.StartTimeUnix,
+		}
+	case "nice":
+		cmdType = "process_renice"
+		var req struct {
+			Nice          int   `json:"nice"`
+			StartTimeUnix int64 `json:"start_time_unix"`
+		}
+		if err := decoder.Decode(&req); err != nil {
+			s.writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		var extra any
+		if err := decoder.Decode(&extra); err != io.EOF {
+			s.writeError(w, http.StatusBadRequest, errors.New("request body must contain one JSON value"))
+			return
+		}
+		if req.Nice < -20 || req.Nice > 19 {
+			s.writeError(w, http.StatusBadRequest, errors.New("nice out of range"))
+			return
+		}
+		if pid < 2 || pid > 4194304 || pid == 1 {
+			s.writeError(w, http.StatusBadRequest, errors.New("pid out of range"))
+			return
+		}
+		state, err := s.store.GetProcessState(deviceID)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		var found *store.ProcessRow
+		for i := range state.Processes {
+			if state.Processes[i].PID == pid {
+				found = &state.Processes[i]
+				break
+			}
+		}
+		if found == nil {
+			s.writeError(w, http.StatusNotFound, errors.New("process not found"))
+			return
+		}
+		if req.StartTimeUnix != 0 && req.StartTimeUnix != found.StartTimeUnix {
+			s.writeError(w, http.StatusConflict, errors.New("stale process snapshot"))
+			return
+		}
+		payloadMap = map[string]any{
+			"pid":             pid,
+			"nice":            req.Nice,
+			"start_time_unix": found.StartTimeUnix,
+		}
+	case "ionice":
+		cmdType = "process_ionice"
+		var req struct {
+			Class         int   `json:"class"`
+			Level         int   `json:"level"`
+			StartTimeUnix int64 `json:"start_time_unix"`
+		}
+		if err := decoder.Decode(&req); err != nil {
+			s.writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		var extra any
+		if err := decoder.Decode(&extra); err != io.EOF {
+			s.writeError(w, http.StatusBadRequest, errors.New("request body must contain one JSON value"))
+			return
+		}
+		if req.Class < 1 || req.Class > 3 {
+			s.writeError(w, http.StatusBadRequest, errors.New("ionice class out of range"))
+			return
+		}
+		if req.Level < 0 || req.Level > 7 {
+			s.writeError(w, http.StatusBadRequest, errors.New("ionice level out of range"))
+			return
+		}
+		if pid < 2 || pid > 4194304 || pid == 1 {
+			s.writeError(w, http.StatusBadRequest, errors.New("pid out of range"))
+			return
+		}
+		state, err := s.store.GetProcessState(deviceID)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		var found *store.ProcessRow
+		for i := range state.Processes {
+			if state.Processes[i].PID == pid {
+				found = &state.Processes[i]
+				break
+			}
+		}
+		if found == nil {
+			s.writeError(w, http.StatusNotFound, errors.New("process not found"))
+			return
+		}
+		if req.StartTimeUnix != 0 && req.StartTimeUnix != found.StartTimeUnix {
+			s.writeError(w, http.StatusConflict, errors.New("stale process snapshot"))
+			return
+		}
+		payloadMap = map[string]any{
+			"pid":             pid,
+			"class":           req.Class,
+			"level":           req.Level,
+			"start_time_unix": found.StartTimeUnix,
+		}
+	default:
+		s.writeError(w, http.StatusBadRequest, errors.New("unsupported"))
+		return
+	}
+
+	payloadBytes, err := json.Marshal(payloadMap)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	payload := string(payloadBytes)
+
+	command, err := s.store.QueueProcessCommand(deviceID, cmdType, payload)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	rejected = false
+
+	// audit
+	s.log.Info(logging.CatDevice, logging.EventCmdCreated,
+		"process command queued",
+		map[string]any{"device_id": deviceID, "command_id": command.ID, "pid": pid, "process_kind": kind},
+	)
+
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(command)
+}
+
+// audit denied attempts? The test checks EventCmdRejected or EventCmdCreated with metadata.
+// handleProcessMutation validates before queue, so denied attempts never reach here.
+// But test sends bad signal and expects audit entry. Need audit on rejection too.

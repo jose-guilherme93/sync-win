@@ -106,7 +106,10 @@ func updateAgentAtIdentity(executable, serverURL, service string, userSystemd bo
 	if err != nil {
 		return err
 	}
-	current := installedAgentVersion(executable)
+	current, err := installedAgentVersion(executable)
+	if err != nil {
+		return err
+	}
 	newer, err := newerAgentVersion(remote, current)
 	if err != nil {
 		return err
@@ -141,7 +144,10 @@ func updateAgentAtIdentity(executable, serverURL, service string, userSystemd bo
 	if err := os.Chmod(temp, 0o755); err != nil {
 		return fmt.Errorf("chmod downloaded agent: %w", err)
 	}
-	downloadedVersion := installedAgentVersion(temp)
+	downloadedVersion, err := installedAgentVersion(temp)
+	if err != nil {
+		return err
+	}
 	if downloadedVersion != remote {
 		return fmt.Errorf("downloaded agent version %q does not match server version %q", downloadedVersion, remote)
 	}
@@ -377,12 +383,17 @@ func verifyAgentChecksum(serverURL, path string) error {
 	return nil
 }
 
-func installedAgentVersion(path string) string {
-	output, err := exec.Command(path, "--version").Output()
+func installedAgentVersion(path string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, path, "--version").Output()
 	if err != nil {
-		return "unknown"
+		if ctx.Err() == context.DeadlineExceeded {
+			return "unknown", fmt.Errorf("%s --version timed out after 15s", path)
+		}
+		return "unknown", fmt.Errorf("%s --version failed: %w", path, err)
 	}
-	return strings.TrimSpace(string(output))
+	return strings.TrimSpace(string(output)), nil
 }
 
 func newerAgentVersion(remote, current string) (bool, error) {
@@ -646,7 +657,10 @@ func requestUpdateForCurrentVersion(serverURL string) {
 	if err != nil {
 		return
 	}
-	current := installedAgentVersion(executableOf())
+	current, err := installedAgentVersion(executableOf())
+	if err != nil {
+		current = "unknown"
+	}
 	newer, err := newerAgentVersion(remote, current)
 	if err != nil || !newer {
 		return
@@ -704,7 +718,15 @@ func restartAgent(service string, userSystemd bool) error {
 	if userSystemd {
 		args = append([]string{"--user"}, args...)
 	}
-	return exec.Command("systemctl", args...).Run()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := exec.CommandContext(ctx, "systemctl", args...).Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("systemctl restart timed out after 15s: %w", err)
+		}
+		return err
+	}
+	return nil
 }
 
 func waitForAgent(service string, userSystemd bool) error {
@@ -712,8 +734,11 @@ func waitForAgent(service string, userSystemd bool) error {
 	if userSystemd {
 		args = append([]string{"--user"}, args...)
 	}
-	for i := 0; i < 10; i++ {
-		if exec.Command("systemctl", args...).Run() == nil {
+	for i := 0; i < 30; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		err := exec.CommandContext(ctx, "systemctl", args...).Run()
+		cancel()
+		if err == nil {
 			return nil
 		}
 		time.Sleep(time.Second)

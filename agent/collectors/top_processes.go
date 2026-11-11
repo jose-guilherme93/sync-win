@@ -18,7 +18,7 @@ const clockTicks = 100.0
 // counter into a real percentage.
 type ProcessCPUSample map[int]uint64
 
-type procStat struct {
+type procStatSnapshot struct {
 	pid        int
 	name       string
 	state      string
@@ -30,20 +30,20 @@ type procStat struct {
 	rss        uint64
 }
 
-// parseProcStat reads the fields the Process tab needs from one /proc/<pid>/stat
+// parseProcStatLine reads the fields the Process tab needs from one /proc/<pid>/stat
 // line. The comm field is wrapped in parentheses and may itself contain spaces
 // or parentheses, so the name is taken between the first "(" and the last ")".
-func parseProcStat(pid int, line string) (procStat, bool) {
+func parseProcStatLine(pid int, line string) (procStatSnapshot, bool) {
 	open := strings.IndexByte(line, '(')
 	close := strings.LastIndexByte(line, ')')
 	if open < 0 || close <= open {
-		return procStat{}, false
+		return procStatSnapshot{}, false
 	}
 	name := line[open+1 : close]
 	fields := strings.Fields(line[close+2:])
 	// state is field 3 in proc(5); after the name the array starts there.
 	if len(fields) < 22 {
-		return procStat{}, false
+		return procStatSnapshot{}, false
 	}
 	ppid, _ := strconv.Atoi(fields[1])
 	utime, _ := strconv.ParseUint(fields[11], 10, 64)
@@ -55,7 +55,7 @@ func parseProcStat(pid int, line string) (procStat, bool) {
 	if rssPages < 0 {
 		rssPages = 0
 	}
-	return procStat{
+	return procStatSnapshot{
 		pid:        pid,
 		name:       name,
 		state:      fields[0],
@@ -77,7 +77,7 @@ func parseProcStat(pid int, line string) (procStat, bool) {
 // a process saturating one core on a four-core machine reports 25. Threads are
 // reported separately so a multi-threaded process is not mistaken for a small
 // one.
-func CollectProcesses(topLimit, problemLimit, cmdlineChars, cpuCores int, prev ProcessCPUSample, elapsed time.Duration) (ProcessSnapshot, ProcessCPUSample) {
+func CollectProcessSnapshot(topLimit, problemLimit, cmdlineChars, cpuCores int, prev ProcessCPUSample, elapsed time.Duration) (ProcessSnapshot, ProcessCPUSample) {
 	var snap ProcessSnapshot
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
@@ -99,7 +99,7 @@ func CollectProcesses(topLimit, problemLimit, cmdlineChars, cpuCores int, prev P
 	seconds := elapsed.Seconds()
 
 	next := make(ProcessCPUSample, len(entries))
-	rows := make([]procStat, 0, len(entries))
+	rows := make([]procStatSnapshot, 0, len(entries))
 
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -113,7 +113,7 @@ func CollectProcesses(topLimit, problemLimit, cmdlineChars, cpuCores int, prev P
 		if err != nil {
 			continue // the process exited between readdir and read
 		}
-		stat, ok := parseProcStat(pid, string(data))
+		stat, ok := parseProcStatLine(pid, string(data))
 		if !ok {
 			continue
 		}
@@ -126,11 +126,13 @@ func CollectProcesses(topLimit, problemLimit, cmdlineChars, cpuCores int, prev P
 		case "S":
 			snap.Summary.Sleeping++
 		case "D":
-			snap.Summary.DiskSleep++
+			snap.Summary.Blocked++
 		case "T", "t":
 			snap.Summary.Stopped++
 		case "Z":
 			snap.Summary.Zombie++
+		case "I":
+			snap.Summary.Idle++
 		default:
 			snap.Summary.Other++
 		}

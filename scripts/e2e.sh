@@ -674,9 +674,9 @@ click_text 'Processes' >/dev/null
 sleep 2
 PROCESS_SORT=$(eval_js "(()=>{const b=[...document.querySelectorAll('th button')].find(x=>x.textContent.includes('CPU'));return b?'PRESENT':'ABSENT';})()")
 check "processes screen exposes a sort control" "$(unquote "${PROCESS_SORT}")" "PRESENT"
-PROCESS_STATES=$(eval_js "(()=>{const b=[...document.querySelectorAll('.filters button')].find(x=>x.textContent.includes('Stopped'));return b?'PRESENT':'ABSENT';})()")
+PROCESS_STATES=$(eval_js "(()=>{const b=[...document.querySelectorAll('[aria-label=\"Filter by state\"] button')].find(x=>/stopped/i.test(x.title||x.textContent));return b?'PRESENT':'ABSENT';})()")
 check "processes screen exposes state filters" "$(unquote "${PROCESS_STATES}")" "PRESENT"
-PROCESS_TALLY=$(eval_js "(()=>{const t=[...document.querySelectorAll('.tile')].find(x=>x.textContent.includes('Total'));return t?'PRESENT':'ABSENT';})()")
+PROCESS_TALLY=$(eval_js "(()=>{const t=[...document.querySelectorAll('.kpi-bar .sitem')].find(x=>x.textContent.includes('Processes'));return t?'PRESENT':'ABSENT';})()")
 check "processes screen shows the whole-machine tally" "$(unquote "${PROCESS_TALLY}")" "PRESENT"
 
 # Alerts: the reset control appears only when a filter is active. It is fleet

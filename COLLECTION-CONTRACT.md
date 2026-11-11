@@ -117,7 +117,7 @@ reportado quando um canal `hwmon` tem label de rail de CPU (`Vcore`, `CPU`,
 `VDDCR`, `SVI`) e leitura na faixa plausível de 0,4–2,5 V; caso contrário é
 omitido em vez de exibir um rail de 12 V como se fosse tensão de core.
 
-Campos adicionais coletados: `battery_percent`, `battery_status`, `network_ifaces[]` (inclui `rx_errors`/`tx_errors`), `disk_partitions[]`, `swap_used_bytes`/`swap_total_bytes`, `cpu_core_usage[]`, `top_cpu_processes[]`/`top_mem_processes[]`/`stopped_processes[]`/`zombie_processes[]`/`process_summary`, `docker_available`/`docker_containers[]`, `lynis_available` e `logs[]`. `power_watts` é a potência instantânea real (watts), não a porcentagem da bateria.
+Campos adicionais coletados: `battery_percent`, `battery_status`, `network_ifaces[]` (inclui `rx_errors`/`tx_errors`), `disk_partitions[]`, `swap_used_bytes`/`swap_total_bytes`, `cpu_core_usage[]`, `top_cpu_processes[]`/`top_mem_processes[]`/`stopped_processes[]`/`zombie_processes[]`/`process_summary`, `processes[]`/`process_stats`/`process_history`/`processes_collected`/`process_io_available`, `docker_available`/`docker_containers[]`, `lynis_available` e `logs[]`. `power_watts` é a potência instantânea real (watts), não a porcentagem da bateria.
 
 ### Taxas de rede são agregadas pelo agente
 

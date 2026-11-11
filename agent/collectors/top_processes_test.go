@@ -10,7 +10,7 @@ func TestParseProcStatLine(t *testing.T) {
 	// comm may contain spaces and parentheses; the parser must use the last ")".
 	line := "42 (weird (name)) S 7 0 0 0 -1 0 0 0 0 0 300 200 0 0 20 0 8 0 5000 123456 10 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0"
 
-	stat, ok := parseProcStat(42, line)
+	stat, ok := parseProcStatLine(42, line)
 	if !ok {
 		t.Fatal("valid stat line rejected")
 	}
@@ -30,7 +30,7 @@ func TestParseProcStatLine(t *testing.T) {
 		t.Errorf("virt/rss = %d/%d", stat.virt, stat.rss)
 	}
 
-	if _, ok := parseProcStat(42, "not a stat line"); ok {
+	if _, ok := parseProcStatLine(42, "not a stat line"); ok {
 		t.Fatal("malformed line accepted")
 	}
 }
@@ -38,7 +38,7 @@ func TestParseProcStatLine(t *testing.T) {
 // The first sample has no delta to work from and must report 0 rather than a
 // lifetime total.
 func TestCollectProcessesFirstSampleReportsZeroCPU(t *testing.T) {
-	snapshot, next := CollectProcesses(5, 5, 200, 4, nil, 0)
+	snapshot, next := CollectProcessSnapshot(5, 5, 200, 4, nil, 0)
 	if next == nil {
 		t.Fatal("expected a sample to feed into the next cycle")
 	}
@@ -57,12 +57,12 @@ func TestCollectProcessesFirstSampleReportsZeroCPU(t *testing.T) {
 // The second sample derives a real percentage from the jiffies consumed during
 // the window and never exceeds the machine-share cap.
 func TestCollectProcessesDerivesCPUFromDelta(t *testing.T) {
-	_, prev := CollectProcesses(5, 5, 200, 1, nil, 0)
+	_, prev := CollectProcessSnapshot(5, 5, 200, 1, nil, 0)
 	if len(prev) == 0 {
 		t.Skip("no readable /proc processes in this environment")
 	}
 
-	snapshot, next := CollectProcesses(5, 5, 200, 1, prev, 10*time.Second)
+	snapshot, next := CollectProcessSnapshot(5, 5, 200, 1, prev, 10*time.Second)
 	lists := append(append([]ProcessInfo{}, snapshot.ByCPU...), snapshot.ByMem...)
 	for _, p := range lists {
 		if p.CPUPercent < 0 || p.CPUPercent > 100 {
@@ -78,13 +78,13 @@ func TestCollectProcessesDerivesCPUFromDelta(t *testing.T) {
 // contain their own states. A top-ten list shown as "the machine" is exactly
 // the misleading impression this guards against.
 func TestCollectProcessesSummarizesEveryState(t *testing.T) {
-	snapshot, _ := CollectProcesses(5, 5, 200, 4, nil, 0)
+	snapshot, _ := CollectProcessSnapshot(5, 5, 200, 4, nil, 0)
 
 	summary := snapshot.Summary
 	if summary.Total == 0 {
 		t.Skip("no readable /proc processes in this environment")
 	}
-	counted := summary.Running + summary.Sleeping + summary.DiskSleep + summary.Stopped + summary.Zombie + summary.Other
+	counted := summary.Running + summary.Sleeping + summary.Blocked + summary.Stopped + summary.Zombie + summary.Idle + summary.Other
 	if counted != summary.Total {
 		t.Errorf("state counts = %d, total = %d", counted, summary.Total)
 	}
@@ -109,7 +109,7 @@ func TestCollectProcessesSummarizesEveryState(t *testing.T) {
 
 // The enriched rows carry the facts a human needs to identify a process.
 func TestCollectProcessesReportsUserAndCommandForTopRows(t *testing.T) {
-	snapshot, _ := CollectProcesses(3, 3, 80, 4, nil, 0)
+	snapshot, _ := CollectProcessSnapshot(3, 3, 80, 4, nil, 0)
 	if len(snapshot.ByCPU) == 0 {
 		t.Skip("no readable /proc processes in this environment")
 	}

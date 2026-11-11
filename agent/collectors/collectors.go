@@ -92,6 +92,8 @@ type ProcessSummary struct {
 	Running   int `json:"running"`
 	Sleeping  int `json:"sleeping"`
 	DiskSleep int `json:"disk_sleep"`
+	Blocked   int `json:"blocked"`
+	Idle      int `json:"idle"`
 	Stopped   int `json:"stopped"`
 	Zombie    int `json:"zombie"`
 	Other     int `json:"other"`
