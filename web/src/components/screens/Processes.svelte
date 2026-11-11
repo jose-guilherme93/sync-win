@@ -83,6 +83,9 @@
   let density: 'comfy' | 'compact' = 'compact'
   let expanded = new Set<number>()
   let collapsed = new Set<number>()
+  // One sentence, shown once: the gate lives in two places and neither is on
+  // this screen, so the reason has to travel with the disabled control.
+  const ACTIONS_OFF = 'actions off · set SYNCWIN_ENABLE_REMOTE_MUTATIONS on the server and allow_process_signals in the agent policy'
   let selected: ProcessRow | null = null
   let drawerOpen = false
 
@@ -755,6 +758,9 @@
         <button class="chip" class:active={hideKernel} on:click={() => (hideKernel = !hideKernel)} title={hideKernel ? 'Kernel threads are hidden' : 'Kernel threads are shown'}>
           kernel
         </button>
+        {#if !signalsEnabled}
+          <span class="chip off" title={ACTIONS_OFF}>actions off</span>
+        {/if}
         {#if options.users.length}
           <select bind:value={user} aria-label="All users">
             <option value="">All users</option>
@@ -886,7 +892,7 @@
                   <th class="sortable"><button type="button" on:click={() => toggleSort('name')}>Name{sortKey === 'name' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}</button></th>
                   <th class="w-user">User</th>
                   <th class="w-st">St</th>
-                  <th class="w-cpu r sortable"><button type="button" on:click={() => toggleSort('cpu')}>CPU%{sortKey === 'cpu' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}</button></th>
+                  <th class="w-cpu r sortable"><button type="button" title="share of one core, like top" on:click={() => toggleSort('cpu')}>CPU%{sortKey === 'cpu' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}</button></th>
                   <th class="w-mem r sortable"><button type="button" on:click={() => toggleSort('rss')}>MEM{sortKey === 'rss' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}</button></th>
                   <th class="w-io r sortable"><button type="button" on:click={() => toggleSort('io')}>IO r / w{sortKey === 'io' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}</button></th>
                   <th class="w-thr r sortable"><button type="button" on:click={() => toggleSort('threads')}>THR{sortKey === 'threads' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}</button></th>
@@ -959,10 +965,10 @@
                       </td>
                       <td class="qacell">
                         <span class="qa">
-                          <button class="qab" title="TERM" on:click|stopPropagation={() => doSignal(row, 'TERM')}>T</button>
-                          <button class="qab crit" title="KILL" on:click|stopPropagation={() => openKill(row)}>K</button>
-                          <button class="qab" title="STOP" on:click|stopPropagation={() => doSignal(row, 'STOP')}>S</button>
-                          <button class="qab" title="CONT" on:click|stopPropagation={() => doSignal(row, 'CONT')}>C</button>
+                          <button class="qab" disabled={!signalsEnabled} title={signalsEnabled ? 'TERM' : ACTIONS_OFF} on:click|stopPropagation={() => doSignal(row, 'TERM')}>T</button>
+                          <button class="qab crit" disabled={!signalsEnabled} title={signalsEnabled ? 'KILL' : ACTIONS_OFF} on:click|stopPropagation={() => openKill(row)}>K</button>
+                          <button class="qab" disabled={!signalsEnabled} title={signalsEnabled ? 'STOP' : ACTIONS_OFF} on:click|stopPropagation={() => doSignal(row, 'STOP')}>S</button>
+                          <button class="qab" disabled={!signalsEnabled} title={signalsEnabled ? 'CONT' : ACTIONS_OFF} on:click|stopPropagation={() => doSignal(row, 'CONT')}>C</button>
                         </span>
                       </td>
                     </tr>
@@ -1266,6 +1272,7 @@
   .chip { display: inline-flex; align-items: center; gap: 0.16rem; padding: 0.1rem 0.32rem; background: transparent; border: 1px solid var(--border); border-radius: 999px; color: var(--text-muted); font: inherit; font-size: 10.5px; cursor: pointer; white-space: nowrap; }
   .chip:hover { border-color: var(--accent-border); }
   .chip.active, .chip.on { background: var(--accent-dim); border-color: var(--accent-border); color: var(--text); }
+  .chip.off { color: var(--warn); border-color: rgba(251, 191, 36, 0.35); cursor: help; }
   .chip .dot { width: 0.4rem; height: 0.4rem; border-radius: 50%; background: var(--text-faint); flex: none; }
   .chip .n { color: var(--text-faint); font-variant-numeric: tabular-nums; }
   .chip.active .n { color: var(--accent); }
@@ -1305,7 +1312,7 @@
   thead th.sortable { cursor: pointer; }
   thead th.sortable button { background: transparent; border: 0; padding: 0; margin: 0; font: inherit; color: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; }
   thead th.sortable button:hover { color: var(--text); }
-  .w-pid { width: 4.9rem; }
+  .w-pid { width: 6.6rem; }
   .w-user { width: 5.2rem; }
   .w-st { width: 2.1rem; }
   .w-cpu { width: 7.4rem; }
@@ -1359,7 +1366,8 @@
   tr.row:hover .qa, tr.row.sel .qa { opacity: 1; }
   @media (hover: none) { .qa { opacity: 0.75 } }
   .qab { width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: 5px; background: var(--card-inset); color: var(--text-muted); cursor: pointer; padding: 0; font-size: 9px; }
-  .qab:hover { color: var(--text); border-color: var(--border-strong); }
+  .qab:hover:not(:disabled) { color: var(--text); border-color: var(--border-strong); }
+  .qab:disabled { opacity: 0.4; cursor: not-allowed; }
   .qab.crit:hover { color: var(--crit); border-color: rgba(248, 113, 113, 0.5); }
   /* Tree layout: the same panel fills the viewport, split into the tree and the
      persistent inspector. Both panes scroll inside their own card. */
