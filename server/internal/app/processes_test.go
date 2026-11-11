@@ -265,7 +265,7 @@ func TestProcessHistoryEndpoint(t *testing.T) {
 	now := time.Now().UTC()
 	if err := s.store.RecordProcessHistory(deviceID, store.ProcessHistory{
 		IntervalSeconds: 60,
-		Samples:         []store.ProcessHistorySample{{T: now.Unix(), Rows: []store.ProcessHistoryPoint{{PID: 1000, Name: "firefox", CPU: 12.5, RSS: 2048}}}},
+		Samples:         []store.ProcessHistorySample{{T: now.Unix(), Rows: []store.ProcessHistoryPoint{{PID: 1000, Name: "firefox", CPU: 12.5, RSS: 2048, IOReadBps: 4096, IOWriteBps: 1024}}}},
 		Events:          []store.ProcessHistoryEvent{{T: now.Unix(), Type: "started", PID: 1001, Name: "vim"}},
 	}, now); err != nil {
 		t.Fatal(err)
@@ -287,6 +287,70 @@ func TestProcessHistoryEndpoint(t *testing.T) {
 			if len(body.Series) == 0 || len(body.Buckets) == 0 {
 				t.Fatalf("history body empty: %+v", body)
 			}
+			point := body.Series[0].Points[0]
+			if len(point) != 5 {
+				t.Fatalf("series point = %v, want [t cpu rss ioRead ioWrite]", point)
+			}
+			if point[3] != 4096 || point[4] != 1024 {
+				t.Fatalf("series point IO = %v/%v, want 4096/1024", point[3], point[4])
+			}
 		}
+	}
+}
+
+func TestTelemetryIngestPersistsProcessHistory(t *testing.T) {
+	s := newTestServer(t)
+	user, err := s.store.CreateUser("prochist@example.com", "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := s.store.CreateSession(user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	device, err := s.store.RegisterDevice("pc-prochist", user.ID, user.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC()
+	payload, err := json.Marshal(map[string]any{
+		"device_token": device.DeviceToken,
+		"hardware": store.HardwareStats{
+			CPUUsagePercent: 10,
+			ProcessHistory: &store.ProcessHistory{
+				IntervalSeconds: 60,
+				Samples: []store.ProcessHistorySample{{
+					T:    now.Unix(),
+					Rows: []store.ProcessHistoryPoint{{PID: 1000, Name: "firefox", CPU: 12.5, RSS: 2048}},
+				}},
+				Events: []store.ProcessHistoryEvent{{T: now.Unix(), Type: "started", PID: 1001, Name: "vim"}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/devices/"+device.ID+"/telemetry", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.handleTelemetry(rec, req, device.ID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("telemetry: %d %s", rec.Code, rec.Body.String())
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/devices/"+device.ID+"/processes/history?range=1h", nil)
+	getReq.Header.Set("Authorization", "Bearer "+session.Token)
+	getRec := httptest.NewRecorder()
+	s.handleProcessesHistory(getRec, getReq, device.ID)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("history: %d %s", getRec.Code, getRec.Body.String())
+	}
+	var body store.ProcessHistoryResult
+	if err := json.Unmarshal(getRec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Series) == 0 || len(body.Buckets) == 0 || len(body.Events) == 0 {
+		t.Fatalf("history not populated: %+v", body)
 	}
 }

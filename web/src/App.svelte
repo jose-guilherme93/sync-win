@@ -1593,7 +1593,7 @@
           </div>
         </div>
       {/if}
-      <main class="content">
+      <main class="content" class:fill={isDeviceSection && navState.section === 'processes'}>
         <div class="panel-inner">
           {#if toastMessage}
             <div class="toast {toastKind}" role="status">{toastMessage}</div>

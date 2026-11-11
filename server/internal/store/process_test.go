@@ -1,7 +1,9 @@
 package store
 
 import (
+	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -214,4 +216,110 @@ func TestProcessHistoryQuery(t *testing.T) {
 		t.Fatalf("series name = %q", got.Series[0].Name)
 	}
 	_ = fmt.Sprintf("%v", got)
+}
+
+// A database created before per-process IO existed must gain the columns
+// without losing the rows already in it.
+func TestProcessHistoryIOColumnsMigrateLegacyDatabase(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "data")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	legacy, err := sql.Open("sqlite", filepath.Join(root, "sync-win.db"))
+	if err != nil {
+		t.Fatalf("open legacy database: %v", err)
+	}
+	if _, err := legacy.Exec(`CREATE TABLE process_history (
+		device_id TEXT NOT NULL,
+		bucket TEXT NOT NULL,
+		resolution TEXT NOT NULL,
+		name TEXT NOT NULL,
+		pid INTEGER NOT NULL,
+		cpu_sum REAL NOT NULL DEFAULT 0,
+		cpu_max REAL NOT NULL DEFAULT 0,
+		rss_max INTEGER NOT NULL DEFAULT 0,
+		samples INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (device_id, name, pid, resolution, bucket)
+	)`); err != nil {
+		t.Fatalf("legacy schema: %v", err)
+	}
+	bucket := time.Now().UTC().Format("2006-01-02T15:04:05Z")
+	if _, err := legacy.Exec(`INSERT INTO process_history
+		(device_id, bucket, resolution, name, pid, cpu_sum, cpu_max, rss_max, samples)
+		VALUES ('old-device', ?, '1m', 'legacy', 42, 1, 1, 1024, 1)`, bucket); err != nil {
+		t.Fatalf("legacy row: %v", err)
+	}
+	legacy.Close()
+
+	s, err := NewStore(root)
+	if err != nil {
+		t.Fatalf("NewStore over a legacy database: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	for _, column := range []string{"io_read_bps", "io_write_bps"} {
+		var count int
+		if err := s.DB().QueryRow("SELECT COUNT(*) FROM pragma_table_info('process_history') WHERE name = ?", column).Scan(&count); err != nil {
+			t.Fatalf("inspect %s: %v", column, err)
+		}
+		if count != 1 {
+			t.Fatalf("column %s missing after migration", column)
+		}
+	}
+	// Running the migration twice must stay a no-op.
+	if err := s.migrateAddProcessHistoryIOColumns(); err != nil {
+		t.Fatalf("second migration run: %v", err)
+	}
+
+	result, err := s.GetProcessHistory("old-device", time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("GetProcessHistory: %v", err)
+	}
+	if len(result.Series) != 1 || len(result.Series[0].Points) != 1 {
+		t.Fatalf("legacy row lost: %+v", result)
+	}
+	point := result.Series[0].Points[0]
+	if len(point) != 5 {
+		t.Fatalf("point = %v, want [t cpu rss ioRead ioWrite]", point)
+	}
+	if point[3] != 0 || point[4] != 0 {
+		t.Fatalf("legacy point IO = %v/%v, want 0/0", point[3], point[4])
+	}
+}
+
+func TestProcessHistoryAggregatesIO(t *testing.T) {
+	s := newProcessStore(t)
+	device, err := s.RegisterDevice("proc-io", "user", "owner", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	// Two samples in the same minute bucket: CPU averages, IO keeps the peak.
+	h := ProcessHistory{
+		IntervalSeconds: 60,
+		Samples: []ProcessHistorySample{
+			{T: now.Unix(), Rows: []ProcessHistoryPoint{{PID: 7, Name: "bash", CPU: 3, RSS: 1024, IOReadBps: 2048, IOWriteBps: 1024}}},
+			{T: now.Unix(), Rows: []ProcessHistoryPoint{{PID: 7, Name: "bash", CPU: 5, RSS: 2048, IOReadBps: 8192, IOWriteBps: 512}}},
+		},
+	}
+	if err := s.RecordProcessHistory(device.ID, h, now); err != nil {
+		t.Fatalf("RecordProcessHistory: %v", err)
+	}
+	got, err := s.GetProcessHistory(device.ID, now.Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("GetProcessHistory: %v", err)
+	}
+	if len(got.Series) != 1 || len(got.Series[0].Points) != 1 {
+		t.Fatalf("series = %+v", got.Series)
+	}
+	point := got.Series[0].Points[0]
+	if len(point) != 5 {
+		t.Fatalf("point = %v, want 5 values", point)
+	}
+	if point[1] != 4 || point[2] != 2048 {
+		t.Fatalf("cpu/rss = %v/%v, want 4/2048", point[1], point[2])
+	}
+	if point[3] != 8192 || point[4] != 1024 {
+		t.Fatalf("io = %v/%v, want peak 8192/1024", point[3], point[4])
+	}
 }

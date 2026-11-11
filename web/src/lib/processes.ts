@@ -212,7 +212,12 @@ function parsePoint(raw: unknown): ProcessHistory['series'][number]['points'][nu
   if (typeof t !== 'number' || !Number.isFinite(t) || t <= 0) return null
   if (typeof cpu !== 'number' || !Number.isFinite(cpu)) return null
   if (typeof rss !== 'number' || !Number.isFinite(rss)) return null
-  return [t, cpu, rss]
+  // A server built before per-process IO history sends three values. That is
+  // absent data, not a zero: null keeps the chart from drawing a flat line at
+  // the bottom, and the UI says the metric is not recorded instead.
+  const ioValue = (value: unknown): number | null =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+  return { t, cpu, rss, ioRead: ioValue(raw[3]), ioWrite: ioValue(raw[4]) }
 }
 
 function parseSeries(raw: unknown): ProcessHistorySeries | null {
@@ -313,6 +318,12 @@ export type ProcessFilter = {
   states: ProcessState[]
   hideKernel: boolean
   listeningOnly: boolean
+  // The toolbar's three selects. Empty means "all". The API has no facet
+  // endpoint, so the options come from the rows it already returned and the
+  // narrowing happens here; a select is never drawn without values behind it.
+  user: string
+  unit: string
+  container: string
   /** Names present in a history heatmap cell the user clicked, or null. */
   windowNames: string[] | null
 }
@@ -322,6 +333,9 @@ export const EMPTY_FILTER: ProcessFilter = {
   states: [],
   hideKernel: true,
   listeningOnly: false,
+  user: '',
+  unit: '',
+  container: '',
   windowNames: null
 }
 
@@ -344,9 +358,36 @@ export function filterRows(rows: readonly ProcessRow[], filter: ProcessFilter): 
     if (filter.hideKernel && row.kernel) return false
     if (states.size > 0 && !states.has(row.state)) return false
     if (filter.listeningOnly && row.ports.length === 0) return false
+    if (filter.user && row.user !== filter.user) return false
+    if (filter.unit && row.unit !== filter.unit) return false
+    if (filter.container && row.container !== filter.container) return false
     if (filter.windowNames && !filter.windowNames.includes(row.name)) return false
     return matchesSearch(row, needle)
   })
+}
+
+// Options for the three selects, taken from the rows the agent just reported.
+// A value nobody has would be a control that can only empty the table.
+export function filterOptions(rows: readonly ProcessRow[]): {
+  users: string[]
+  units: string[]
+  containers: string[]
+} {
+  const unique = (values: string[]) => [...new Set(values.filter((value) => value !== ''))].sort((a, b) => a.localeCompare(b))
+  return {
+    users: unique(rows.map((row) => row.user)),
+    units: unique(rows.map((row) => row.unit)),
+    containers: unique(rows.map((row) => row.container))
+  }
+}
+
+// How many rows each state chip would keep, counted with every other filter
+// applied. The number is the promise the chip makes when it is clicked.
+export function stateCounts(rows: readonly ProcessRow[], filter: ProcessFilter): Record<ProcessState, number> {
+  const withoutStates = filterRows(rows, { ...filter, states: [] })
+  const counts: Record<ProcessState, number> = { R: 0, S: 0, D: 0, Z: 0, T: 0, I: 0 }
+  for (const row of withoutStates) counts[row.state] += 1
+  return counts
 }
 
 // ---- Flat table and ppid tree, one renderer ------------------------------
@@ -400,10 +441,86 @@ export function buildTable(rows: readonly ProcessRow[], options: TableOptions): 
   }
 
   const roots =
-    options.mode === 'tree' ? sorted.filter((row) => !present.has(row.ppid)) : sorted
+    options.mode === 'tree'
+      ? sorted.filter((row) => !present.has(row.ppid) || row.ppid === row.pid)
+      : sorted
   for (const row of roots) emit(row, 0)
 
   return out
+}
+
+// The inspector pane's tree: every process, nested, with no collapse state.
+// Children inherit their parent's place; a row whose parent is missing (a
+// short-lived process, or one the agent did not report) starts a root of its
+// own instead of vanishing. The trailing pass covers a ppid cycle, which would
+// otherwise emit nothing at all.
+export function treeEntries(
+  rows: readonly ProcessRow[],
+  sortKey: SortKey = 'cpu',
+  sortDir: SortDir = 'desc'
+): TableEntry[] {
+  const sorted = sortRows(rows, sortKey, sortDir)
+  const present = new Set(rows.map((row) => row.pid))
+  const children = new Map<number, ProcessRow[]>()
+  for (const row of sorted) {
+    const list = children.get(row.ppid)
+    if (list) list.push(row)
+    else children.set(row.ppid, [row])
+  }
+
+  const out: TableEntry[] = []
+  const seen = new Set<number>()
+
+  const walk = (row: ProcessRow, depth: number) => {
+    if (seen.has(row.pid)) return
+    seen.add(row.pid)
+    const kids = children.get(row.pid) ?? []
+    out.push({ row, depth, hasChildren: kids.length > 0, expanded: true })
+    for (const child of kids) walk(child, depth + 1)
+  }
+
+  for (const row of sorted) if (!present.has(row.ppid) || row.ppid === row.pid) walk(row, 0)
+  for (const row of sorted) if (!seen.has(row.pid)) walk(row, 0)
+
+  return out
+}
+
+// The ancestry walk for the detail pane, oldest first. It stops at the first
+// pid it has already seen, so a reused ppid cannot loop forever.
+export function parentChain(rows: readonly ProcessRow[], row: ProcessRow, limit = 6): ProcessRow[] {
+  const byPid = new Map(rows.map((entry) => [entry.pid, entry]))
+  const chain: ProcessRow[] = []
+  const seen = new Set<number>()
+  let current: ProcessRow | null = row
+  while (current && seen.size < limit && !seen.has(current.pid)) {
+    seen.add(current.pid)
+    chain.unshift(current)
+    if (current.ppid === current.pid) break
+    current = byPid.get(current.ppid) ?? null
+  }
+  return chain
+}
+
+export type ProcessGroup = { label: string; rows: ProcessRow[]; cpu: number; rss: number }
+
+// Grouped layouts keep the same rows and only add a header every few of them;
+// the header totals are the sum of what it contains, never a separate query.
+export function groupRows(rows: readonly ProcessRow[], by: 'unit' | 'container'): ProcessGroup[] {
+  const groups = new Map<string, ProcessRow[]>()
+  for (const row of rows) {
+    const label = by === 'unit' ? row.unit || 'no unit' : row.container || 'host processes'
+    const list = groups.get(label)
+    if (list) list.push(row)
+    else groups.set(label, [row])
+  }
+  return [...groups.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([label, groupRows]) => ({
+      label: by === 'unit' && label !== 'no unit' ? `${label} (unit)` : label,
+      rows: groupRows,
+      cpu: groupRows.reduce((total, row) => total + row.cpu_percent, 0),
+      rss: groupRows.reduce((total, row) => total + row.rss_bytes, 0)
+    }))
 }
 
 // ---- Signal gate ---------------------------------------------------------
@@ -441,6 +558,9 @@ export function formatUptime(seconds: number): string {
 }
 
 export function formatCpuPercent(value: number): string {
+  if (!Number.isFinite(value)) return '—'
+  if (value === 0) return '0.0%'
+  if (value < 0.1) return '<0.1%'
   return `${value.toFixed(1)}%`
 }
 
@@ -449,58 +569,306 @@ export function memoryShare(rssBytes: number, totalBytes: number): number {
   return Math.min(100, Math.max(0, (rssBytes / totalBytes) * 100))
 }
 
+// Clock time of the sample, in the browser's zone. An unset start time is not
+// midnight in 1970: it stays absent.
+export function formatClock(unixSeconds: number): string {
+  if (!Number.isFinite(unixSeconds) || unixSeconds <= 0) return '—'
+  return new Date(unixSeconds * 1000).toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  })
+}
+
+// How long a process has used the CPU, in the shape top prints it.
+export function formatCpuTime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '0s'
+  if (seconds < 60) return `${Math.round(seconds)}s`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}:${String(Math.round(seconds % 60)).padStart(2, '0')}`
+  if (seconds < 86_400) {
+    return `${Math.floor(seconds / 3600)}:${String(Math.floor((seconds % 3600) / 60)).padStart(2, '0')}:${String(
+      Math.round(seconds % 60)
+    ).padStart(2, '0')}`
+  }
+  return `${Math.floor(seconds / 86_400)}d ${Math.floor((seconds % 86_400) / 3600)}h`
+}
+
 // ---- History -------------------------------------------------------------
 
+// The heatmap is a fixed grid: 288 columns of five minutes is 24 hours, drawn
+// as 3 px bars with a 1 px gap. The grid keeps its width even when the device
+// has only been reporting for an hour, because a short window drawn wide would
+// read as a busy day.
+export const HEAT_COLUMN_SECONDS = 300
+export const HEAT_COLUMNS = 288
+export const HEAT_CELL_WIDTH = 4
+
+export type HeatmapColumn = { from: number; to: number }
+
+export type HeatmapRow = {
+  name: string
+  /** The single pid behind the name, when there is exactly one. */
+  pid: number | null
+  cells: (number | null)[]
+  /** Σ of each column's average CPU, in core-minutes of a 5-minute bucket. */
+  coreMin: number
+  peak: number
+}
+
 export type Heatmap = {
-  names: string[]
-  rows: { name: string; cells: (number | null)[] }[]
+  columns: HeatmapColumn[]
+  rows: HeatmapRow[]
   max: number
 }
 
-// Rows are the busiest names in the window, columns are the server's buckets.
-// A name with no CPU in a bucket is a gap (null), never a zero: a process that
-// was not running did not use nothing, it was not there.
-export function buildHeatmap(buckets: readonly ProcessHistoryBucket[], limit = 8): Heatmap {
-  const peaks = new Map<string, number>()
+export type HeatmapOptions = {
+  /** Right edge of the grid, unix seconds. Defaults to the end of the newest bucket. */
+  end?: number
+  columns?: number
+  limit?: number
+  /** Current pid per name, so a row can show which process it is. */
+  pids?: ReadonlyMap<string, number>
+}
+
+// A minute bucket's CPU is already an average over that minute; a five-minute
+// column is the mean of the minutes it holds, and a minute with no row is a gap
+// (the process was not alive), never a zero.
+export function buildHeatmap(
+  buckets: readonly ProcessHistoryBucket[],
+  options: HeatmapOptions = {}
+): Heatmap {
+  const count = Math.max(1, options.columns ?? HEAT_COLUMNS)
+  const step = HEAT_COLUMN_SECONDS
+  const newest = buckets.reduce((acc, bucket) => Math.max(acc, bucket.t), 0)
+  const end =
+    options.end ??
+    (newest > 0
+      ? Math.ceil((newest + 1) / step) * step
+      : Math.ceil(Date.now() / 1000 / step) * step)
+  const start = end - count * step
+
+  const sums = new Map<string, number[]>()
+  const samples = new Map<string, number[]>()
   for (const bucket of buckets) {
+    const column = Math.floor((bucket.t - start) / step)
+    if (column < 0 || column >= count) continue
     for (const entry of bucket.top) {
-      peaks.set(entry.name, Math.max(peaks.get(entry.name) ?? 0, entry.cpu))
+      let sum = sums.get(entry.name)
+      let seen = samples.get(entry.name)
+      if (!sum || !seen) {
+        sum = new Array<number>(count).fill(0)
+        seen = new Array<number>(count).fill(0)
+        sums.set(entry.name, sum)
+        samples.set(entry.name, seen)
+      }
+      sum[column] += entry.cpu
+      seen[column] += 1
     }
   }
-  const names = [...peaks.entries()]
-    .sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]))
+
+  const averages = new Map<string, (number | null)[]>()
+  const peaks = new Map<string, number>()
+  for (const [name, sum] of sums) {
+    const seen = samples.get(name)!
+    let peak = 0
+    const cells = sum.map((value, index) => {
+      if (seen[index] === 0) return null
+      const average = value / seen[index]
+      peak = Math.max(peak, average)
+      return average
+    })
+    averages.set(name, cells)
+    peaks.set(name, peak)
+  }
+
+  const ranked = [...peaks.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+  // Idle noise: a row whose peak is under 2% of the busiest one says nothing
+  // about the window and only widens the grid.
+  const top = ranked.length > 0 ? ranked[0][1] : 0
+  const limit = options.limit ?? 10
+  const names = ranked
+    .filter(([, peak], index) => index === 0 || peak >= top * 0.02)
     .slice(0, limit)
     .map(([name]) => name)
 
   let max = 0
-  const rows = names.map((name) => {
-    const cells = buckets.map((bucket) => {
-      const hits = bucket.top.filter((entry) => entry.name === name)
-      if (hits.length === 0) return null
-      const value = Math.max(...hits.map((entry) => entry.cpu))
+  const rows: HeatmapRow[] = names.map((name) => {
+    const cells = averages.get(name) ?? new Array<number | null>(count).fill(null)
+    let coreMin = 0
+    for (const value of cells) {
+      if (value == null) continue
+      coreMin += (value / 100) * (step / 60)
       max = Math.max(max, value)
-      return value
-    })
-    return { name, cells }
+    }
+    return {
+      name,
+      pid: options.pids?.get(name) ?? null,
+      cells,
+      coreMin,
+      peak: peaks.get(name) ?? 0
+    }
   })
 
-  return { names, rows, max }
+  const columns: HeatmapColumn[] = Array.from({ length: count }, (_, index) => ({
+    from: start + index * step,
+    to: start + (index + 1) * step
+  }))
+
+  return { columns, rows, max }
 }
 
-// Event markers positioned on the same linear time domain the plots use, so a
-// spike and the event that caused it line up. Events outside the window are
-// dropped rather than pinned to an edge.
+// The single busiest cell in the heatmap, for the annotation line. Returns null
+// when there is no data, so the screen can say "collecting" instead of a zero.
+export function busiestCell(
+  heatmap: Heatmap
+): { value: number; name: string; index: number; from: number; to: number } | null {
+  let best: { value: number; name: string; index: number } | null = null
+  for (const row of heatmap.rows) {
+    row.cells.forEach((cell, index) => {
+      if (cell == null) return
+      if (!best || cell > best.value) best = { value: cell, name: row.name, index }
+    })
+  }
+  if (!best) return null
+  const cell = best as { value: number; name: string; index: number }
+  const column = heatmap.columns[cell.index]
+  const from = column?.from ?? 0
+  return { value: cell.value, name: cell.name, index: cell.index, from, to: column?.to ?? from + 300 }
+}
+
+// Ruler labels sit on the bar grid, one every four hours, plus the right edge.
+// They are placed in pixels, not percentages: a percentage of a scrolled grid
+// drifts away from the bars it is supposed to mark.
+export function heatTicks(
+  columns: readonly HeatmapColumn[],
+  spacingHours = 4
+): { column: number; left: number; label: string }[] {
+  if (columns.length === 0) return []
+  const spacingSeconds = spacingHours * 3600
+  const offset = new Date(columns[0].from * 1000).getTimezoneOffset() * 60
+  const out: { column: number; left: number; label: string }[] = []
+  columns.forEach((column, index) => {
+    const local = column.from - offset
+    if (local % spacingSeconds !== 0) return
+    const date = new Date(column.from * 1000)
+    out.push({
+      column: index,
+      left: index * HEAT_CELL_WIDTH,
+      label: date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    })
+  })
+  if (out.length >= 2) return out
+  // A zone whose offset does not land on the grid still gets a ruler, spaced
+  // by columns instead of by the clock.
+  out.length = 0
+  const spacing = Math.max(1, Math.round(spacingSeconds / HEAT_COLUMN_SECONDS))
+  for (let index = 0; index < columns.length; index += spacing) {
+    const date = new Date(columns[index].from * 1000)
+    out.push({
+      column: index,
+      left: index * HEAT_CELL_WIDTH,
+      label: date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    })
+  }
+  return out
+}
+
+export function bucketRangeLabel(t: number, seconds = HEAT_COLUMN_SECONDS): string {
+  const from = new Date(t * 1000)
+  const to = new Date((t + seconds) * 1000)
+  const fmt = (d: Date) => d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  return `${fmt(from)}–${fmt(to)}`
+}
+
+// Absolute share of capacity, so a cell means the same thing on every row and
+// two screenshots are comparable. The square root lifts the long idle tail: a
+// host using 0.4% still draws a visible bar instead of a black hole, while the
+// order and the 0–95% scale are kept.
+// The colour answers "where in this window was the host hottest", so it is
+// relative to the busiest cell of the window: an absolute 0-95% ramp leaves an
+// idle-but-real host as one faint texture, which is exactly what made the grid
+// unreadable. The absolute value stays in the tooltip and in the row summary.
+export function heatCellAlpha(value: number, max = 0): number {
+  if (!(max > 0)) return 0.5
+  const ratio = Math.max(0, Math.min(1, value / max))
+  return Math.min(0.96, 0.18 + 0.78 * Math.sqrt(ratio))
+}
+
+export function heatCellColor(value: number, max = 0): string {
+  return `rgba(96,165,250,${heatCellAlpha(value, max).toFixed(2)})`
+}
+
+// A share of capacity in one decimal below ten percent. An idle machine has
+// rows at 0.1%, and "peak 0%" would read as no data instead of little use.
+export function formatShare(value: number): string {
+  if (!Number.isFinite(value)) return '—'
+  if (value > 0 && value < 1) return value.toFixed(2)
+  if (value < 10) return value.toFixed(1)
+  return value.toFixed(0)
+}
+
+export function formatCoreMin(value: number): string {
+  if (!Number.isFinite(value)) return '—'
+  return value > 0 && value < 10 ? value.toFixed(1) : value.toFixed(0)
+}
+
+// One marker per notable event: a machine churns through hundreds of
+// started/exited pairs an hour, and drawing all of them turns the plot into a
+// wall of red lines. OOM kills, restarts and failed exits are what explain a
+// spike; everything else stays in the event list.
+const NOTABLE_EVENTS: Record<ProcessEventType, boolean> = {
+  started: false,
+  exited: false,
+  oom_killed: true,
+  restarted: true
+}
+
 export function eventMarkers(
   events: readonly ProcessEvent[],
   from: number,
-  to: number
+  to: number,
+  limit = 12
 ): { event: ProcessEvent; left: number }[] {
   if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return []
   const span = to - from
-  return events
-    .filter((event) => event.t >= from / 1000 && event.t <= to / 1000)
-    .sort((a, b) => a.t - b.t)
-    .map((event) => ({ event, left: ((event.t * 1000 - from) / span) * 100 }))
+  const seen = new Set<string>()
+  const picked: ProcessEvent[] = []
+  for (const event of events) {
+    if (event.t < from / 1000 || event.t > to / 1000) continue
+    const notable = NOTABLE_EVENTS[event.type] || (event.type === 'exited' && (event.exit_code ?? 0) !== 0)
+    if (!notable) continue
+    const key = `${Math.floor(event.t / 60)}:${event.type}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    picked.push(event)
+  }
+  picked.sort((a, b) => a.t - b.t)
+  const capped = picked.length > limit ? picked.slice(picked.length - limit) : picked
+  return capped.map((event) => ({ event, left: ((event.t * 1000 - from) / span) * 100 }))
+}
+
+// A systemd host restarts the same helper every few seconds; unrolled, those
+// pairs bury the one OOM kill that matters. Repeated identical events inside
+// one window collapse into a count, newest timestamp kept.
+export type CollapsedEvent = ProcessEvent & { count: number }
+
+export function collapseEvents(events: readonly ProcessEvent[], windowSeconds = 300): CollapsedEvent[] {
+  const groups = new Map<string, CollapsedEvent>()
+  for (const event of events) {
+    // Same event, same name, same window: one row with a count. Binned by the
+    // window so two incidents hours apart never merge into one.
+    const key = `${event.type}:${event.name}:${Math.floor(event.t / windowSeconds)}`
+    const group = groups.get(key)
+    if (group) {
+      group.count += 1
+      group.t = Math.max(group.t, event.t)
+      group.pid = event.pid
+      if (event.exit_code != null) group.exit_code = event.exit_code
+      continue
+    }
+    groups.set(key, { ...event, count: 1 })
+  }
+  return [...groups.values()].sort((a, b) => a.t - b.t)
 }
 
 // One label per lifecycle event, one word where one word is enough.
@@ -513,10 +881,15 @@ export const EVENT_LABELS: Record<ProcessEventType, string> = {
 
 // The saved views the toolbar offers. Each is a filter preset, not a separate
 // query, so it can never disagree with the table below it.
-export type SavedView = { id: string; label: string; filter: Partial<ProcessFilter> }
+export type SavedView = {
+  id: string
+  label: string
+  filter: Partial<ProcessFilter>
+  sort?: { key: SortKey; dir: SortDir }
+}
 
 export const SAVED_VIEWS: SavedView[] = [
-  { id: 'web', label: 'web', filter: { search: 'nginx', states: [] } },
-  { id: 'zombies', label: 'zombies', filter: { states: ['Z'], hideKernel: false } },
-  { id: 'topio', label: 'top IO', filter: { search: '', listeningOnly: true } }
+  { id: 'web', label: 'Web Stack', filter: { search: 'nginx', states: [] } },
+  { id: 'zombies', label: 'Zombies', filter: { states: ['Z'], hideKernel: false } },
+  { id: 'topio', label: 'Top IO', filter: { search: '', listeningOnly: false }, sort: { key: 'io', dir: 'desc' } }
 ]

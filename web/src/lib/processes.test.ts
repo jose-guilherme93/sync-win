@@ -2,18 +2,27 @@ import { describe, expect, it } from 'vitest'
 import type { ProcessRow } from './types'
 import {
   EMPTY_FILTER,
+  HEAT_CELL_WIDTH,
   buildHeatmap,
   buildTable,
+  collapseEvents,
   canSignal,
   eventMarkers,
+  filterOptions,
   filterRows,
+  formatCpuTime,
   formatUptime,
+  groupRows,
+  heatCellColor,
+  heatTicks,
   historyWindowMs,
   ioText,
   parseProcessHistory,
   parseProcessSnapshot,
   signalBlockReason,
   sortRows,
+  stateCounts,
+  treeEntries,
   type ProcessFilter
 } from './processes'
 
@@ -232,6 +241,85 @@ describe('filterRows', () => {
   it('is case insensitive and trims the search', () => {
     expect(withFilter({ search: '  POSTGRES ' })).toEqual(['postgres'])
   })
+
+  it('narrows by the toolbar selects and ignores an empty value', () => {
+    expect(withFilter({ user: 'deploy' })).toEqual(['node'])
+    expect(withFilter({ unit: 'postgresql.service' })).toEqual(['postgres'])
+    expect(withFilter({ user: '' })).toContain('systemd')
+  })
+})
+
+describe('filterOptions', () => {
+  const rows = [
+    row({ pid: 1, user: 'root', unit: 'init.scope' }),
+    row({ pid: 2, user: 'www-data', unit: '' }),
+    row({ pid: 3, user: 'root', unit: 'nginx.service' }),
+    row({ pid: 4, user: 'root', unit: 'init.scope', container: 'web' })
+  ]
+
+  it('offers each value once, sorted, and never an empty option', () => {
+    const options = filterOptions(rows)
+    expect(options.users).toEqual(['root', 'www-data'])
+    expect(options.units).toEqual(['init.scope', 'nginx.service'])
+    expect(options.containers).toEqual(['web'])
+  })
+})
+
+describe('stateCounts', () => {
+  const rows = [
+    row({ pid: 1, state: 'S' }),
+    row({ pid: 2, state: 'R' }),
+    row({ pid: 3, state: 'R' }),
+    row({ pid: 4, state: 'Z' })
+  ]
+
+  it('counts with the other filters applied but ignores the state chips', () => {
+    expect(stateCounts(rows, { ...EMPTY_FILTER })).toEqual({ R: 2, S: 1, D: 0, Z: 1, T: 0, I: 0 })
+    expect(stateCounts(rows, { ...EMPTY_FILTER, states: ['Z'] }).R).toBe(2)
+  })
+})
+
+describe('treeEntries', () => {
+  const rows = [
+    row({ pid: 1, ppid: 1, name: 'systemd', cpu_percent: 0.1 }),
+    row({ pid: 100, ppid: 1, name: 'nginx', cpu_percent: 0.4 }),
+    row({ pid: 101, ppid: 100, name: 'nginx', cpu_percent: 2.2 }),
+    row({ pid: 900, ppid: 999, name: 'orphan', cpu_percent: 0.2 })
+  ]
+
+  it('walks the tree and keeps an orphan as a root', () => {
+    const tree = treeEntries(rows)
+    expect(tree.map((entry) => entry.row.pid)).toEqual([900, 1, 100, 101])
+    expect(tree.find((entry) => entry.row.pid === 100)?.depth).toBe(1)
+    expect(tree.find((entry) => entry.row.pid === 101)?.depth).toBe(2)
+    expect(tree.find((entry) => entry.row.pid === 900)?.depth).toBe(0)
+  })
+})
+
+describe('groupRows', () => {
+  it('totals each group and names the host bucket', () => {
+    const groups = groupRows(
+      [
+        row({ pid: 1, name: 'a', unit: 'nginx.service', cpu_percent: 2, rss_bytes: 100 }),
+        row({ pid: 2, name: 'b', unit: 'nginx.service', cpu_percent: 3, rss_bytes: 200 }),
+        row({ pid: 3, name: 'c', unit: '', cpu_percent: 1, rss_bytes: 50 })
+      ],
+      'unit'
+    )
+    expect(groups.map((group) => group.label)).toEqual(['nginx.service (unit)', 'no unit'])
+    expect(groups[0].cpu).toBeCloseTo(5, 5)
+    expect(groups[0].rss).toBe(300)
+  })
+})
+
+describe('formatCpuTime', () => {
+  it('matches the shape top prints', () => {
+    expect(formatCpuTime(0)).toBe('0s')
+    expect(formatCpuTime(42)).toBe('42s')
+    expect(formatCpuTime(65)).toBe('1:05')
+    expect(formatCpuTime(3_725)).toBe('1:02:05')
+    expect(formatCpuTime(90_000)).toBe('1d 1h')
+  })
 })
 
 describe('buildTable', () => {
@@ -320,8 +408,8 @@ describe('parseProcessHistory', () => {
         {
           name: 'postgres',
           points: [
-            [1_700_000_000, 12.5, 512],
-            [1_700_000_060, 41.2, 530]
+            [1_700_000_000, 12.5, 512, 4096, 1024],
+            [1_700_000_060, 41.2, 530, 0, 2048]
           ]
         }
       ],
@@ -334,9 +422,27 @@ describe('parseProcessHistory', () => {
         { t: 1_700_000_000, top: [{ name: 'postgres', cpu: 12.5 }] }
       ]
     })
-    expect(history.series[0].points).toHaveLength(2)
+    expect(history.series[0].points).toEqual([
+      { t: 1_700_000_000, cpu: 12.5, rss: 512, ioRead: 4096, ioWrite: 1024 },
+      { t: 1_700_000_060, cpu: 41.2, rss: 530, ioRead: 0, ioWrite: 2048 }
+    ])
     expect(history.events.map((e) => e.type)).toEqual(['started', 'exited'])
     expect(history.buckets.map((b) => b.t)).toEqual([1_700_000_000, 1_700_000_060])
+  })
+
+  it('reads a three-value point from an older server with IO absent, not zero', () => {
+    const history = parseProcessHistory({
+      series: [{ name: 'nginx', points: [[1_700_000_000, 1.5, 64]] }],
+      events: [],
+      buckets: []
+    })
+    expect(history.series[0].points[0]).toEqual({
+      t: 1_700_000_000,
+      cpu: 1.5,
+      rss: 64,
+      ioRead: null,
+      ioWrite: null
+    })
   })
 
   it('rejects a payload that is not an object', () => {
@@ -350,7 +456,9 @@ describe('parseProcessHistory', () => {
       events: [{ t: 1, type: 'exploded', pid: 1, name: 'x' }, { t: 2, type: 'started', pid: 2, name: 'y' }],
       buckets: []
     })
-    expect(history.series[0].points).toEqual([[1_700_000_060, 2, 30]])
+    expect(history.series[0].points).toEqual([
+      { t: 1_700_000_060, cpu: 2, rss: 30, ioRead: null, ioWrite: null }
+    ])
     expect(history.events).toHaveLength(1)
   })
 
@@ -370,29 +478,117 @@ describe('historyWindowMs', () => {
 })
 
 describe('buildHeatmap', () => {
-  it('orders names by peak CPU and leaves absent cells blank', () => {
+  // 2026-01-01 00:00:00 UTC rounded to a five-minute boundary; every bucket
+  // below sits on a real minute inside one of the two columns.
+  const base = 1_767_225_000
+
+  it('folds minute buckets into five-minute columns and keeps gaps as null', () => {
     const map = buildHeatmap(
       [
-        { t: 1, top: [{ name: 'a', cpu: 10 }] },
-        { t: 2, top: [{ name: 'a', cpu: 0 }, { name: 'b', cpu: 80 }] },
-        { t: 3, top: [] }
+        { t: base, top: [{ name: 'a', cpu: 10 }] },
+        { t: base + 60, top: [{ name: 'a', cpu: 20 }] },
+        { t: base + 300, top: [{ name: 'a', cpu: 0 }, { name: 'b', cpu: 80 }] }
       ],
-      8
+      { columns: 2, end: base + 600 }
     )
-    expect(map.names).toEqual(['b', 'a'])
-    expect(map.rows[0].cells).toEqual([null, 80, null])
-    expect(map.rows[1].cells).toEqual([10, 0, null])
+    expect(map.rows.map((row) => row.name)).toEqual(['b', 'a'])
+    expect(map.rows[0].cells).toEqual([null, 80])
+    expect(map.rows[1].cells).toEqual([15, 0])
     expect(map.max).toBe(80)
+    expect(map.columns).toEqual([
+      { from: base, to: base + 300 },
+      { from: base + 300, to: base + 600 }
+    ])
   })
 
-  it('caps the number of rows', () => {
+  it('reports core-minutes and the peak of a row', () => {
+    const map = buildHeatmap(
+      [
+        { t: base, top: [{ name: 'a', cpu: 50 }] },
+        { t: base + 300, top: [{ name: 'a', cpu: 100 }] }
+      ],
+      { columns: 2, end: base + 600 }
+    )
+    const row = map.rows[0]
+    // 50% of capacity for five minutes is 2.5 core-min, 100% is 5.
+    expect(row.coreMin).toBeCloseTo(7.5, 5)
+    expect(row.peak).toBe(100)
+  })
+
+  it('draws the fixed 288-column grid even with no data', () => {
+    const map = buildHeatmap([])
+    expect(map.columns).toHaveLength(288)
+    expect(map.rows).toHaveLength(0)
+    expect(map.columns[1].from - map.columns[0].from).toBe(300)
+  })
+
+  it('caps the number of rows at the busiest few', () => {
     const buckets = [
       {
-        t: 1,
+        t: base,
         top: Array.from({ length: 12 }, (_, i) => ({ name: `p${i}`, cpu: i }))
       }
     ]
-    expect(buildHeatmap(buckets, 8).names).toHaveLength(8)
+    const map = buildHeatmap(buckets, { columns: 1, end: base + 300, limit: 8 })
+    expect(map.rows).toHaveLength(8)
+    expect(map.rows[0].name).toBe('p11')
+  })
+
+  it('carries a pid only when the caller knows one', () => {
+    const buckets = [{ t: base, top: [{ name: 'a', cpu: 10 }] }]
+    const map = buildHeatmap(buckets, { columns: 1, end: base + 300, pids: new Map([['a', 42]]) })
+    expect(map.rows[0].pid).toBe(42)
+    expect(buildHeatmap(buckets, { columns: 1, end: base + 300 }).rows[0].pid).toBeNull()
+  })
+})
+
+describe('heatTicks', () => {
+  it('places a ruler tick every four hours, in pixels on the bar grid', () => {
+    const start = Math.floor(new Date(2026, 0, 1, 4, 0, 0).getTime() / 1000 / 300) * 300
+    const columns = Array.from({ length: 288 }, (_, i) => ({ from: start + i * 300, to: start + (i + 1) * 300 }))
+    const ticks = heatTicks(columns)
+    expect(ticks).toHaveLength(6)
+    expect(ticks.map((tick) => tick.column)).toEqual([0, 48, 96, 144, 192, 240])
+    expect(ticks[1].left).toBe(48 * HEAT_CELL_WIDTH)
+    for (const tick of ticks) expect(tick.label).toMatch(/\d/)
+  })
+})
+
+describe('heatCellColor', () => {
+  const alpha = (value: number, max = 0) =>
+    Number(heatCellColor(value, max).replace(/^rgba\(96,165,250,/, '').replace(/\)$/, ''))
+
+  it('ramps relative to the busiest cell of the window', () => {
+    expect(alpha(0, 95)).toBeCloseTo(0.18, 2)
+    expect(alpha(0.2, 0.4)).toBeGreaterThan(0.6)
+    expect(alpha(0.4, 0.4)).toBeCloseTo(0.96, 2)
+    expect(alpha(50, 95)).toBeGreaterThan(alpha(0.4, 95))
+  })
+
+  it('keeps an idle-but-real cell visible when the window has no scale', () => {
+    expect(alpha(0, 0)).toBeGreaterThan(0.3)
+  })
+})
+
+describe('collapseEvents', () => {
+  it('folds repeated identical events inside the window and keeps the newest time', () => {
+    const collapsed = collapseEvents([
+      { t: 10, type: 'exited', pid: 5, name: 'timedatectl' },
+      { t: 40, type: 'exited', pid: 6, name: 'timedatectl' },
+      { t: 70, type: 'started', pid: 7, name: 'timedatectl' },
+      { t: 80, type: 'oom_killed', pid: 8, name: 'python3' }
+    ])
+    expect(collapsed).toHaveLength(3)
+    expect(collapsed[0]).toMatchObject({ type: 'exited', name: 'timedatectl', count: 2, t: 40, pid: 6 })
+    expect(collapsed[2]).toMatchObject({ type: 'oom_killed', count: 1 })
+  })
+
+  it('does not fold events further apart than the window', () => {
+    const collapsed = collapseEvents([
+      { t: 0, type: 'exited', pid: 1, name: 'a' },
+      { t: 900, type: 'exited', pid: 2, name: 'a' }
+    ])
+    expect(collapsed.map((entry) => entry.count)).toEqual([1, 1])
   })
 })
 
@@ -400,9 +596,9 @@ describe('eventMarkers', () => {
   it('positions markers inside the window and drops the rest', () => {
     const markers = eventMarkers(
       [
-        { t: 50, type: 'started', pid: 1, name: 'a' },
-        { t: 150, type: 'exited', pid: 2, name: 'b' },
-        { t: 900, type: 'started', pid: 3, name: 'c' }
+        { t: 50, type: 'oom_killed', pid: 1, name: 'a' },
+        { t: 150, type: 'restarted', pid: 2, name: 'b' },
+        { t: 900, type: 'oom_killed', pid: 3, name: 'c' }
       ],
       0,
       200_000
@@ -410,8 +606,32 @@ describe('eventMarkers', () => {
     expect(markers.map((m) => Math.round(m.left))).toEqual([25, 75])
   })
 
+  it('keeps only events that explain a spike', () => {
+    const markers = eventMarkers(
+      [
+        { t: 50, type: 'started', pid: 1, name: 'a' },
+        { t: 60, type: 'exited', pid: 2, name: 'b' },
+        { t: 70, type: 'exited', pid: 3, name: 'c', exit_code: 1 },
+        { t: 80, type: 'oom_killed', pid: 4, name: 'd' }
+      ],
+      0,
+      200_000
+    )
+    expect(markers.map((m) => m.event.type)).toEqual(['exited', 'oom_killed'])
+  })
+
+  it('caps the markers so a busy hour cannot become a wall of lines', () => {
+    const events = Array.from({ length: 40 }, (_, i) => ({
+      t: i * 120,
+      type: 'oom_killed' as const,
+      pid: i,
+      name: `p${i}`
+    }))
+    expect(eventMarkers(events, 0, 10_000_000)).toHaveLength(12)
+  })
+
   it('returns nothing for an empty or inverted window', () => {
-    expect(eventMarkers([{ t: 5, type: 'started', pid: 1, name: 'a' }], 10, 10)).toEqual([])
+    expect(eventMarkers([{ t: 5, type: 'oom_killed', pid: 1, name: 'a' }], 10, 10)).toEqual([])
   })
 })
 

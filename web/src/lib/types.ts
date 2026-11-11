@@ -435,7 +435,18 @@ export type ProcessEvent = {
 }
 
 /** [unix seconds, cpu percent of capacity, rss MiB] */
-export type ProcessHistoryPoint = [number, number, number]
+// One point of a process series, as the dashboard draws it. The wire shape is
+// `[unix, cpu, rss, ioReadBps?, ioWriteBps?]`; the parser promotes it to named
+// fields and keeps IO at null when an older server sends only three values.
+export type ProcessHistoryPoint = {
+  t: number
+  cpu: number
+  rss: number
+  /** Bytes per second read in the bucket, or null when the server has no IO history. */
+  ioRead: number | null
+  /** Bytes per second written in the bucket, or null when the server has no IO history. */
+  ioWrite: number | null
+}
 
 export type ProcessHistorySeries = { name: string; points: ProcessHistoryPoint[] }
 

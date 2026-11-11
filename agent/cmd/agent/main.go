@@ -569,6 +569,8 @@ type processSummary struct {
 	Running   int `json:"running"`
 	Sleeping  int `json:"sleeping"`
 	DiskSleep int `json:"disk_sleep"`
+	Blocked   int `json:"blocked"`
+	Idle      int `json:"idle"`
 	Stopped   int `json:"stopped"`
 	Zombie    int `json:"zombie"`
 	Other     int `json:"other"`
@@ -799,6 +801,7 @@ func cmdDaemon(args []string) {
 	lastAppInventoryAttempt := time.Time{}
 	lastPendingUpdatesAttempt := time.Time{}
 	lastSystemInventoryAttempt := time.Time{}
+	processSampler := collectors.NewProcessHistorySampler()
 	lastSaveAttempt := time.Time{}
 	lastWorkspaceAttempt := time.Time{}
 	lastRemoteSignature := ""
@@ -855,8 +858,10 @@ func cmdDaemon(args []string) {
 			}
 		}
 
+		includeProcessHistory := false
 		if lastSystemInventoryAttempt.IsZero() || now.Sub(lastSystemInventoryAttempt) >= *systemInterval {
 			lastSystemInventoryAttempt = now
+			includeProcessHistory = true
 			if err := syncSystemInventory(*serverURL, *deviceID, *deviceToken, state); err != nil {
 				log.Printf("system inventory sync failed: %v", err)
 				hadError = true
@@ -892,8 +897,13 @@ func cmdDaemon(args []string) {
 		if sampleSlow {
 			logCycle = 0
 		}
-		stats, sample, err := collectHardwareStats(&previous, now, sampleSlow)
+		stats, sample, err := collectHardwareStats(&previous, now, sampleSlow, processSampler)
 		previous = sample
+		if err == nil && includeProcessHistory && processSampler != nil {
+			if ph := processSampler.Drain(); ph != nil {
+				stats.ProcessHistory = ph
+			}
+		}
 		if err == nil {
 			if sampleSlow {
 				// A journal read failure is not fatal: telemetry continues with
@@ -1221,6 +1231,8 @@ func executeCommand(cmd agentCommand, serverURL, deviceID, deviceToken string) c
 			return commandResult{"failed", err.Error()}
 		}
 		return commandResult{"completed", fmt.Sprintf("installed %s package %s", cmd.Source, cmd.Name)}
+	case "process_signal", "process_renice", "process_ionice":
+		return executeProcessCommand(cmd.Type, cmd.Payload, policy)
 	default:
 		return commandResult{"failed", "unsupported command type: " + cmd.Type}
 	}
@@ -1546,6 +1558,7 @@ type hardwareSample struct {
 	NetTX          map[string]uint64
 	NetRetrans     uint64
 	CPUCores       []uint64
+	CPUCoresIdle   []uint64
 	Processes      collectors.ProcessCPUSample
 	ProcessSamples collectors.ProcessSampleMap
 	AgentImpact    collectors.AgentImpact
@@ -1555,7 +1568,7 @@ type hardwareSample struct {
 // collectHardwareStats collects real hardware data from /proc, /sys, and collectors.
 // Independent data sources are collected in parallel using goroutines.
 // It returns the telemetry payload and the sample to feed into the next call.
-func collectHardwareStats(prev *hardwareSample, now time.Time, sampleDocker bool) (telemetryStats, hardwareSample, error) {
+func collectHardwareStats(prev *hardwareSample, now time.Time, sampleDocker bool, sampler *collectors.ProcessHistorySampler) (telemetryStats, hardwareSample, error) {
 	var stats telemetryStats
 	next := hardwareSample{
 		At:          now,
@@ -1594,12 +1607,12 @@ func collectHardwareStats(prev *hardwareSample, now time.Time, sampleDocker bool
 	var wg sync.WaitGroup
 
 	// CPU cores + core usage
-	var newCPUCores []uint64
+	var newCPUCores, newCPUCoresIdle []uint64
 	var corePercents []float64
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		newCPUCores, corePercents = collectors.CollectCPUCores(prev.CPUCores)
+		newCPUCores, newCPUCoresIdle, corePercents = collectors.CollectCPUCores(prev.CPUCores, prev.CPUCoresIdle)
 	}()
 
 	// CPU temperature
@@ -1935,6 +1948,8 @@ func collectHardwareStats(prev *hardwareSample, now time.Time, sampleDocker bool
 		Running:   procSnapshot.Summary.Running,
 		Sleeping:  procSnapshot.Summary.Sleeping,
 		DiskSleep: procSnapshot.Summary.DiskSleep,
+		Blocked:   procSnapshot.Summary.Blocked,
+		Idle:      procSnapshot.Summary.Idle,
 		Stopped:   procSnapshot.Summary.Stopped,
 		Zombie:    procSnapshot.Summary.Zombie,
 		Other:     procSnapshot.Summary.Other,
@@ -1947,6 +1962,9 @@ func collectHardwareStats(prev *hardwareSample, now time.Time, sampleDocker bool
 		stats.ProcessStats = &procStats
 		stats.ProcessesCollected = true
 		stats.ProcessIOAvailable = procIOAvailable
+		if sampler != nil {
+			sampler.Observe(procRows, now)
+		}
 	} else {
 		stats.ProcessesCollected = false
 	}
@@ -2027,7 +2045,7 @@ func collectHardwareStats(prev *hardwareSample, now time.Time, sampleDocker bool
 
 	next.CPU, next.Idle = cpuTotal, idle
 	next.DiskRead, next.DiskWrite = diskRead, diskWrite
-	next.CPUCores, next.Processes, next.AgentImpact = newCPUCores, newProcSample, newImpact
+	next.CPUCores, next.CPUCoresIdle, next.Processes, next.AgentImpact = newCPUCores, newCPUCoresIdle, newProcSample, newImpact
 	next.ProcessSamples = procSampleMap
 
 	return stats, next, nil
@@ -2109,7 +2127,11 @@ func readMemoryInfo() (used, total uint64, err error) {
 	free := values["MemFree"]
 	buffers := values["Buffers"]
 	cached := values["Cached"]
+	reclaimable := values["SReclaimable"]
 	used = total - free - buffers - cached
+	if reclaimable <= used {
+		used -= reclaimable
+	}
 	return
 }
 

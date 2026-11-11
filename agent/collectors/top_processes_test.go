@@ -84,7 +84,7 @@ func TestCollectProcessesSummarizesEveryState(t *testing.T) {
 	if summary.Total == 0 {
 		t.Skip("no readable /proc processes in this environment")
 	}
-	counted := summary.Running + summary.Sleeping + summary.DiskSleep + summary.Stopped + summary.Zombie + summary.Other
+	counted := summary.Running + summary.Sleeping + summary.Blocked + summary.Stopped + summary.Zombie + summary.Idle + summary.Other
 	if counted != summary.Total {
 		t.Errorf("state counts = %d, total = %d", counted, summary.Total)
 	}

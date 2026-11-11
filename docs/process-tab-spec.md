@@ -48,7 +48,7 @@ type ProcessStats = {
 
 type ProcessHistory = {
   interval_seconds: 60;
-  samples: { t: number; rows: { pid:number; name:string; cpu:number; rss:number }[] }[];  // last 60, top 20 by avg cpu
+  samples: { t: number; rows: { pid:number; name:string; cpu:number; rss:number; io_read_bps:number; io_write_bps:number }[] }[];  // last 60, top 20 by avg cpu
   events:  { t: number; type:'started'|'exited'|'oom_killed'|'restarted'; pid:number; name:string; exit_code?:number }[];  // last 200
 };
 ```
@@ -58,7 +58,7 @@ type ProcessHistory = {
 | Route | Notes |
 |---|---|
 | `GET /api/devices/{id}/processes` | `{ processes, stats, collected_at, io_available, signals_enabled }` |
-| `GET /api/devices/{id}/processes/history?range=1h\|24h\|7d` | `{ series: [{name, points:[[unix_s, cpu, rss]]}], events: [...], buckets: [{t, top:[{name,cpu}]}] }` |
+| `GET /api/devices/{id}/processes/history?range=1h\|24h\|7d` | `{ series: [{name, points:[[unix_s, cpu, rss, io_read_bps, io_write_bps]]}], events: [...], buckets: [{t, top:[{name,cpu}]}] }`. The two IO values are absent from a server built before IO history: the web parser keeps them `null` rather than drawing a zero. |
 | `POST /api/devices/{id}/processes/{pid}/signal` | body `{"signal":"TERM\|KILL\|STOP\|CONT"}` |
 | `POST /api/devices/{id}/processes/{pid}/nice` | body `{"nice":-20..19}` |
 | `POST /api/devices/{id}/processes/{pid}/ionice` | body `{"class":1\|2\|3,"level":0..7}` |
@@ -67,7 +67,7 @@ Mutating routes: owner auth + `SYNCWIN_ENABLE_REMOTE_MUTATIONS` (same gate as de
 
 Queue command types: `process_signal`, `process_renice`, `process_ionice`. Payload is JSON as above; `path`/`name`/`source` are empty.
 
-New tables: `process_history` (device_id, bucket, resolution, name, pid, cpu_sum, cpu_max, rss_max, samples) and `process_events` (device_id, ts, type, pid, name, exit_code), following the `network_history` pattern, cleaned by the existing retention job.
+New tables: `process_history` (device_id, bucket, resolution, name, pid, cpu_sum, cpu_max, rss_max, io_read_bps, io_write_bps, samples; the IO columns hold the bucket's peak rate and are added by an idempotent boot migration) and `process_events` (device_id, ts, type, pid, name, exit_code), following the `network_history` pattern, cleaned by the existing retention job.
 
 ## 3. Agent command guard (the security boundary)
 
@@ -87,8 +87,10 @@ Fail closed. Every rule is a table test before the code exists.
 ## 4. Web rules
 
 - Layout: **variant A** (dense full-width table + detail drawer) as the default; a `Tree` toggle switches to a ppid tree with the same inspector. Both share one renderer.
+- The list owns the viewport. Toolbar, summary and pane live in one card: the toolbar is a single row of chips and selects, the summary is a one-line strip (≤ 56 px, label + value per item, sub-detail only when it is a number: shown rows, blocked, load, mem pressure), and the table/tree pane takes the remaining height with its own scroll and a sticky header. Rows default to the compact density (27 px); `Comfy` stays available.
+- Search is a corner icon that opens an anchored popover (`Ctrl/⌘ K`, `Esc` closes, `Enter` keeps). An active query leaves a dot on the icon and a clear control in the popover; there is no full-width search row.
 - Copy rule: **one word or one short phrase that adds real information. No explanatory paragraphs anywhere** — empty states, tooltips, footnotes, toasts. If a string does not help a decision, delete it.
-- Absent ≠ broken: no IO context renders `—`, not `0`; a young process renders no chart gap as zero; `processes_collected: false` renders the honest "not collected" state naming the agent version.
+- Absent ≠ broken: no IO context renders `—`, not `0`; an unknown OOM count renders `—`, not `-1`; a young process renders no chart gap as zero; `processes_collected: false` renders the honest "not collected" state naming the agent version.
 - Destructive actions are `--crit`, gated, and require typing the pid for SIGKILL. Disabled controls stay visible with a one-line reason.
 
 ## 5. Tests first (red before green)

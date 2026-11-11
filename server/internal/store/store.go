@@ -587,6 +587,9 @@ func NewStore(root string) (*Store, error) {
 	s.migrateAddMachineIDColumn()
 	s.migrateAddDockerStateColumn()
 	s.migrateAddProcessStateColumn()
+	if err := s.migrateAddProcessHistoryIOColumns(); err != nil {
+		return nil, err
+	}
 	if err := s.migrateAddSystemInventoryColumns(context.Background()); err != nil {
 		return nil, err
 	}
@@ -929,6 +932,8 @@ func (s *Store) initSchema() error {
 		cpu_sum REAL NOT NULL DEFAULT 0,
 		cpu_max REAL NOT NULL DEFAULT 0,
 		rss_max INTEGER NOT NULL DEFAULT 0,
+		io_read_bps REAL NOT NULL DEFAULT 0,
+		io_write_bps REAL NOT NULL DEFAULT 0,
 		samples INTEGER NOT NULL DEFAULT 0,
 		PRIMARY KEY (device_id, name, pid, resolution, bucket)
 	);

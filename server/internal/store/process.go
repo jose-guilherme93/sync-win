@@ -7,7 +7,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"time"
+)
+
+// The History surface only stays readable with a bounded set of names per
+// bucket and per legend: the busiest ones win.
+const (
+	maxHistoryTopPerBucket = 12
+	maxHistorySeries       = 12
 )
 
 // ProcessPort is one listening socket owned by a process.
@@ -88,10 +96,12 @@ type ProcessHistorySample struct {
 }
 
 type ProcessHistoryPoint struct {
-	PID  int     `json:"pid"`
-	Name string  `json:"name"`
-	CPU  float64 `json:"cpu"`
-	RSS  uint64  `json:"rss"`
+	PID        int     `json:"pid"`
+	Name       string  `json:"name"`
+	CPU        float64 `json:"cpu"`
+	RSS        uint64  `json:"rss"`
+	IOReadBps  float64 `json:"io_read_bps"`
+	IOWriteBps float64 `json:"io_write_bps"`
 }
 
 type ProcessHistoryEvent struct {
@@ -275,6 +285,39 @@ func strictDecodeString(payload string, dst any) error {
 	return nil
 }
 
+// nonNegativeRate clamps a per-process IO rate to zero. The agent derives it
+// from two counter reads, so a counter reset (or a malformed value) must not
+// store a negative peak that would then break the chart's axis.
+func nonNegativeRate(v float64) float64 {
+	if v > 0 {
+		return v
+	}
+	return 0
+}
+
+// migrateAddProcessHistoryIOColumns adds the per-process IO rates to a table
+// that was created before they existed. CREATE TABLE IF NOT EXISTS is a no-op
+// on an existing database, so the columns need adding explicitly, like the
+// other migrations in this file. It is safe to run on every boot.
+func (s *Store) migrateAddProcessHistoryIOColumns() error {
+	ctx := context.Background()
+	for _, column := range []struct{ name, definition string }{
+		{"io_read_bps", "REAL NOT NULL DEFAULT 0"},
+		{"io_write_bps", "REAL NOT NULL DEFAULT 0"},
+	} {
+		var count int
+		if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM pragma_table_info('process_history') WHERE name = ?", column.name).Scan(&count); err != nil {
+			return fmt.Errorf("inspect process_history.%s: %w", column.name, err)
+		}
+		if count == 0 {
+			if _, err := s.db.ExecContext(ctx, "ALTER TABLE process_history ADD COLUMN "+column.name+" "+column.definition); err != nil {
+				return fmt.Errorf("add process_history.%s: %w", column.name, err)
+			}
+		}
+	}
+	return nil
+}
+
 // RecordProcessHistory stores process history samples and events.
 func (s *Store) RecordProcessHistory(deviceID string, history ProcessHistory, now time.Time) error {
 	s.mu.Lock()
@@ -291,14 +334,17 @@ func (s *Store) RecordProcessHistory(deviceID string, history ProcessHistory, no
 		bucketText := timeText(bucket)
 		for _, row := range sample.Rows {
 			_, err := tx.Exec(`
-				INSERT INTO process_history (device_id, bucket, resolution, name, pid, cpu_sum, cpu_max, rss_max, samples)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+				INSERT INTO process_history (device_id, bucket, resolution, name, pid, cpu_sum, cpu_max, rss_max, io_read_bps, io_write_bps, samples)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
 				ON CONFLICT(device_id, name, pid, resolution, bucket) DO UPDATE SET
 					cpu_sum = cpu_sum + excluded.cpu_sum,
 					cpu_max = MAX(cpu_max, excluded.cpu_max),
 					rss_max = MAX(rss_max, excluded.rss_max),
+					io_read_bps = MAX(io_read_bps, excluded.io_read_bps),
+					io_write_bps = MAX(io_write_bps, excluded.io_write_bps),
 					samples = samples + 1`,
-				deviceID, bucketText, "1m", row.Name, row.PID, row.CPU, row.CPU, int64(row.RSS))
+				deviceID, bucketText, "1m", row.Name, row.PID, row.CPU, row.CPU, int64(row.RSS),
+				nonNegativeRate(row.IOReadBps), nonNegativeRate(row.IOWriteBps))
 			if err != nil {
 				return err
 			}
@@ -343,7 +389,7 @@ func (s *Store) GetProcessHistory(deviceID string, from time.Time) (ProcessHisto
 
 	// Build series + buckets from process_history.
 	rows, err := s.db.Query(`
-		SELECT bucket, name, pid, cpu_sum, cpu_max, rss_max, samples
+		SELECT bucket, name, pid, cpu_sum, cpu_max, rss_max, io_read_bps, io_write_bps, samples
 		FROM process_history
 		WHERE device_id = ? AND bucket >= ?
 		ORDER BY bucket ASC`,
@@ -353,24 +399,33 @@ func (s *Store) GetProcessHistory(deviceID string, from time.Time) (ProcessHisto
 	}
 	defer rows.Close()
 
-	type bucketKey struct{ t int64 }
-	seriesMap := make(map[string]*ProcessHistorySeries)
-	bucketMap := make(map[int64]*ProcessHistoryBucket)
+	// Rows are per (bucket, name, pid). A name with several pids (nginx
+	// workers, systemd helpers) and every sample inside the same bucket must
+	// fold into one point per name, otherwise the heatmap repeats a row and
+	// the legend repeats a series.
+	type aggKey struct {
+		bucket int64
+		name   string
+	}
+	type aggValue struct {
+		cpuSum, cpuMax, rssMax, ioReadMax, ioWriteMax float64
+		samples                                       int
+	}
+	aggs := make(map[aggKey]*aggValue)
 	var bucketOrder []int64
+	seenBucket := make(map[int64]struct{})
 
 	for rows.Next() {
 		var bucketText, name string
 		var pid int
-		var cpuSum, cpuMax float64
+		var cpuSum, cpuMax, ioReadMax, ioWriteMax float64
 		var rssMax int64
 		var samples int
-		if err := rows.Scan(&bucketText, &name, &pid, &cpuSum, &cpuMax, &rssMax, &samples); err != nil {
+		if err := rows.Scan(&bucketText, &name, &pid, &cpuSum, &cpuMax, &rssMax, &ioReadMax, &ioWriteMax, &samples); err != nil {
 			return result, err
 		}
 		bucketTime, _ := time.Parse("2006-01-02T15:04:05Z", bucketText)
-		// fallback parse via timeText? timeText format is RFC3339. Use parse.
 		if bucketTime.IsZero() {
-			// try RFC3339
 			if t2, err := time.Parse(time.RFC3339, bucketText); err == nil {
 				bucketTime = t2
 			}
@@ -379,40 +434,86 @@ func (s *Store) GetProcessHistory(deviceID string, from time.Time) (ProcessHisto
 		if bucketTime.IsZero() {
 			bucketUnix = 0
 		}
-		cpuAvg := cpuMax
-		if samples > 0 {
-			cpuAvg = cpuSum / float64(samples)
-		}
-
-		// series
-		series, ok := seriesMap[name]
+		key := aggKey{bucket: bucketUnix, name: name}
+		a, ok := aggs[key]
 		if !ok {
-			series = &ProcessHistorySeries{Name: name, Points: [][]float64{}}
-			seriesMap[name] = series
+			a = &aggValue{}
+			aggs[key] = a
 		}
-		series.Points = append(series.Points, []float64{float64(bucketUnix), cpuAvg, float64(rssMax)})
-
-		// bucket
-		bk, ok := bucketMap[bucketUnix]
-		if !ok {
-			bk = &ProcessHistoryBucket{T: bucketUnix, Top: []ProcessHistoryBucketTop{}}
-			bucketMap[bucketUnix] = bk
+		a.cpuSum += cpuSum
+		if cpuMax > a.cpuMax {
+			a.cpuMax = cpuMax
+		}
+		if float64(rssMax) > a.rssMax {
+			a.rssMax = float64(rssMax)
+		}
+		if ioReadMax > a.ioReadMax {
+			a.ioReadMax = ioReadMax
+		}
+		if ioWriteMax > a.ioWriteMax {
+			a.ioWriteMax = ioWriteMax
+		}
+		a.samples += samples
+		if _, ok := seenBucket[bucketUnix]; !ok {
+			seenBucket[bucketUnix] = struct{}{}
 			bucketOrder = append(bucketOrder, bucketUnix)
 		}
-		bk.Top = append(bk.Top, ProcessHistoryBucketTop{Name: name, CPU: cpuAvg})
 	}
 	if err := rows.Err(); err != nil {
 		return result, err
 	}
 
-	for _, s := range seriesMap {
-		result.Series = append(result.Series, *s)
+	avgOf := func(a *aggValue) float64 {
+		if a.samples > 0 {
+			return a.cpuSum / float64(a.samples)
+		}
+		return a.cpuMax
 	}
-	for _, bk := range bucketOrder {
-		b := bucketMap[bk]
-		// sort top by cpu desc
-		sortBucketTop(b.Top)
-		result.Buckets = append(result.Buckets, *b)
+
+	seriesMap := make(map[string]*ProcessHistorySeries)
+	peak := make(map[string]float64)
+	for _, bucketUnix := range bucketOrder {
+		bk := &ProcessHistoryBucket{T: bucketUnix, Top: []ProcessHistoryBucketTop{}}
+		for key, a := range aggs {
+			if key.bucket != bucketUnix {
+				continue
+			}
+			cpuAvg := avgOf(a)
+			if cpuAvg > peak[key.name] {
+				peak[key.name] = cpuAvg
+			}
+			series, ok := seriesMap[key.name]
+			if !ok {
+				series = &ProcessHistorySeries{Name: key.name, Points: [][]float64{}}
+				seriesMap[key.name] = series
+			}
+			// [unix, cpuAvg, rssMax, ioReadMax, ioWriteMax]. The first three
+			// keep their old positions so an older dashboard still reads them.
+			series.Points = append(series.Points, []float64{float64(bucketUnix), cpuAvg, a.rssMax, a.ioReadMax, a.ioWriteMax})
+			bk.Top = append(bk.Top, ProcessHistoryBucketTop{Name: key.name, CPU: cpuAvg})
+		}
+		sortBucketTop(bk.Top)
+		if len(bk.Top) > maxHistoryTopPerBucket {
+			bk.Top = bk.Top[:maxHistoryTopPerBucket]
+		}
+		result.Buckets = append(result.Buckets, *bk)
+	}
+
+	names := make([]string, 0, len(seriesMap))
+	for name := range seriesMap {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if peak[names[i]] != peak[names[j]] {
+			return peak[names[i]] > peak[names[j]]
+		}
+		return names[i] < names[j]
+	})
+	if len(names) > maxHistorySeries {
+		names = names[:maxHistorySeries]
+	}
+	for _, name := range names {
+		result.Series = append(result.Series, *seriesMap[name])
 	}
 
 	// Events

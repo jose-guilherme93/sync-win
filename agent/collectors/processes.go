@@ -573,7 +573,15 @@ func CollectProcesses(procRoot string, limit, cpuCores int, prev ProcessSampleMa
 			}
 		}
 
-		next[pid] = ProcessSample{CPUJiffies: cpuTime}
+		// Read the IO counters for every process here, not just the selected
+		// rows, so a process that was not selected in the previous cycle does
+		// not present a zero baseline and turn its lifetime counter into a
+		// spike the first time it is selected.
+		readBytes, writeBytes, ioOK := readProcIO(procRoot, pid)
+		if ioOK {
+			stats.IOAvailable = true
+		}
+		next[pid] = ProcessSample{CPUJiffies: cpuTime, ReadBytes: readBytes, WriteBytes: writeBytes}
 
 		stats.Total++
 		stats.Threads += stat.Threads
@@ -700,10 +708,12 @@ type ProcessHistorySample struct {
 }
 
 type ProcessHistoryPoint struct {
-	PID  int     `json:"pid"`
-	Name string  `json:"name"`
-	CPU  float64 `json:"cpu"`
-	RSS  uint64  `json:"rss"`
+	PID        int     `json:"pid"`
+	Name       string  `json:"name"`
+	CPU        float64 `json:"cpu"`
+	RSS        uint64  `json:"rss"`
+	IOReadBps  float64 `json:"io_read_bps"`
+	IOWriteBps float64 `json:"io_write_bps"`
 }
 
 type ProcessHistoryEvent struct {

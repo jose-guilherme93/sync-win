@@ -126,11 +126,13 @@ func CollectProcessSnapshot(topLimit, problemLimit, cmdlineChars, cpuCores int, 
 		case "S":
 			snap.Summary.Sleeping++
 		case "D":
-			snap.Summary.DiskSleep++
+			snap.Summary.Blocked++
 		case "T", "t":
 			snap.Summary.Stopped++
 		case "Z":
 			snap.Summary.Zombie++
+		case "I":
+			snap.Summary.Idle++
 		default:
 			snap.Summary.Other++
 		}

@@ -284,6 +284,26 @@ func TestCollectProcessesSortsByCPUThenRSS(t *testing.T) {
 	}
 }
 
+func TestCollectProcessesIOFirstSeenNoSpike(t *testing.T) {
+	root := buildProcFixture(t)
+	// First sample: no previous sample for pid 1000 -> no IO rate.
+	rows, _, next, err := CollectProcesses(root, 250, 1, nil, 10*time.Second, time.Unix(2000, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := findRow(rows, 1000); r == nil || r.IOReadBps != 0 || r.IOWriteBps != 0 {
+		t.Fatalf("first-seen io rates = %v/%v, want 0/0", r.IOReadBps, r.IOWriteBps)
+	}
+	// Second sample using the returned sample: counters unchanged -> zero delta.
+	rows2, _, _, err := CollectProcesses(root, 250, 1, next, 10*time.Second, time.Unix(2010, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := findRow(rows2, 1000); r == nil || r.IOReadBps != 0 || r.IOWriteBps != 0 {
+		t.Fatalf("unchanged io rates = %v/%v, want 0/0", r.IOReadBps, r.IOWriteBps)
+	}
+}
+
 func TestCollectProcessesMissingProc(t *testing.T) {
 	_, _, _, err := CollectProcesses(filepath.Join(t.TempDir(), "absent"), 10, 1, nil, 0, time.Now())
 	if err == nil {
