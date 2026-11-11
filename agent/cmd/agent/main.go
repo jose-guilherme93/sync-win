@@ -501,30 +501,30 @@ type telemetryStats struct {
 	// NetworkHealth is the packet-level health of the stack: TCP
 	// retransmissions, the socket state breakdown, conntrack usage. It is
 	// counters only, all readable from /proc without any privilege.
-	NetworkHealth      *networkHealth    `json:"network_health,omitempty"`
-	DiskReadBytes      uint64            `json:"disk_read_bytes,omitempty"`
-	DiskWriteBytes     uint64            `json:"disk_write_bytes,omitempty"`
-	DiskReadRate       float64           `json:"disk_read_rate,omitempty"`
-	DiskWriteRate      float64           `json:"disk_write_rate,omitempty"`
-	DiskPartitions     []diskPartition   `json:"disk_partitions,omitempty"`
-	SwapUsedBytes      uint64            `json:"swap_used_bytes,omitempty"`
-	SwapTotalBytes     uint64            `json:"swap_total_bytes,omitempty"`
-	MemoryBuffersBytes uint64            `json:"memory_buffers_bytes,omitempty"`
-	MemoryCachedBytes  uint64            `json:"memory_cached_bytes,omitempty"`
-	CPUCoreUsage       []float64         `json:"cpu_core_usage,omitempty"`
-	TopCPUProcesses    []processInfo     `json:"top_cpu_processes,omitempty"`
-	TopMemProcesses    []processInfo     `json:"top_mem_processes,omitempty"`
-	Processes            []collectors.ProcessRow `json:"processes,omitempty"`
-	ProcessStats         *collectors.ProcessStats `json:"process_stats,omitempty"`
-	ProcessHistory       *collectors.ProcessHistory `json:"process_history,omitempty"`
-	ProcessesCollected   bool                   `json:"processes_collected"`
-	ProcessIOAvailable   bool                   `json:"process_io_available"`
-	StoppedProcesses   []processInfo     `json:"stopped_processes,omitempty"`
-	ZombieProcesses    []processInfo     `json:"zombie_processes,omitempty"`
-	ProcessSummary     *processSummary   `json:"process_summary,omitempty"`
+	NetworkHealth      *networkHealth             `json:"network_health,omitempty"`
+	DiskReadBytes      uint64                     `json:"disk_read_bytes,omitempty"`
+	DiskWriteBytes     uint64                     `json:"disk_write_bytes,omitempty"`
+	DiskReadRate       float64                    `json:"disk_read_rate,omitempty"`
+	DiskWriteRate      float64                    `json:"disk_write_rate,omitempty"`
+	DiskPartitions     []diskPartition            `json:"disk_partitions,omitempty"`
+	SwapUsedBytes      uint64                     `json:"swap_used_bytes,omitempty"`
+	SwapTotalBytes     uint64                     `json:"swap_total_bytes,omitempty"`
+	MemoryBuffersBytes uint64                     `json:"memory_buffers_bytes,omitempty"`
+	MemoryCachedBytes  uint64                     `json:"memory_cached_bytes,omitempty"`
+	CPUCoreUsage       []float64                  `json:"cpu_core_usage,omitempty"`
+	TopCPUProcesses    []processInfo              `json:"top_cpu_processes,omitempty"`
+	TopMemProcesses    []processInfo              `json:"top_mem_processes,omitempty"`
+	Processes          []collectors.ProcessRow    `json:"processes,omitempty"`
+	ProcessStats       *collectors.ProcessStats   `json:"process_stats,omitempty"`
+	ProcessHistory     *collectors.ProcessHistory `json:"process_history,omitempty"`
+	ProcessesCollected bool                       `json:"processes_collected"`
+	ProcessIOAvailable bool                       `json:"process_io_available"`
+	StoppedProcesses   []processInfo              `json:"stopped_processes,omitempty"`
+	ZombieProcesses    []processInfo              `json:"zombie_processes,omitempty"`
+	ProcessSummary     *processSummary            `json:"process_summary,omitempty"`
 
-	DockerAvailable    bool              `json:"docker_available"`
-	DockerContainers   []dockerContainer `json:"docker_containers,omitempty"`
+	DockerAvailable  bool              `json:"docker_available"`
+	DockerContainers []dockerContainer `json:"docker_containers,omitempty"`
 	// True only on the cycles that actually listed containers. Without it the
 	// server cannot tell "not sampled this time" from "Docker has no containers"
 	// and either keeps stale rows or deletes the list every cycle.
@@ -1538,18 +1538,18 @@ func buildLynisCategories(executed map[string]bool, warnings, suggestions map[st
 // next. Every rate and percentage the agent reports is a delta against this
 // state, which is why it must be threaded through the collector.
 type hardwareSample struct {
-	CPU         uint64
-	Idle        uint64
-	DiskRead    uint64
-	DiskWrite   uint64
-	NetRX       map[string]uint64
-	NetTX       map[string]uint64
-	NetRetrans  uint64
-	CPUCores    []uint64
-	Processes       collectors.ProcessCPUSample
-	ProcessSamples  collectors.ProcessSampleMap
-	AgentImpact     collectors.AgentImpact
-	At          time.Time
+	CPU            uint64
+	Idle           uint64
+	DiskRead       uint64
+	DiskWrite      uint64
+	NetRX          map[string]uint64
+	NetTX          map[string]uint64
+	NetRetrans     uint64
+	CPUCores       []uint64
+	Processes      collectors.ProcessCPUSample
+	ProcessSamples collectors.ProcessSampleMap
+	AgentImpact    collectors.AgentImpact
+	At             time.Time
 }
 
 // collectHardwareStats collects real hardware data from /proc, /sys, and collectors.

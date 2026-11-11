@@ -68,22 +68,22 @@ type ProcessRow struct {
 // IOAvailable is internal bookkeeping: the wire field is derived from it so
 // the dashboard can render "—" instead of a zero that looks like a measurement.
 type ProcessStats struct {
-	Total            int     `json:"total"`
-	Threads          int     `json:"threads"`
-	Running          int     `json:"running"`
-	Sleeping         int     `json:"sleeping"`
-	Stopped          int     `json:"stopped"`
-	Zombie           int     `json:"zombie"`
-	Blocked          int     `json:"blocked"`
-	Idle             int     `json:"idle"`
-	Load1            float64 `json:"load1"`
-	Load5            float64 `json:"load5"`
-	Load15           float64 `json:"load15"`
-	PSICPUSomeAvg10  float64 `json:"psi_cpu_some_avg10"`
-	PSIMemSomeAvg10  float64 `json:"psi_mem_some_avg10"`
-	PSIIOSomeAvg10   float64 `json:"psi_io_some_avg10"`
-	OOMKills24h      int     `json:"oom_kills_24h"`
-	IOAvailable      bool    `json:"-"`
+	Total           int     `json:"total"`
+	Threads         int     `json:"threads"`
+	Running         int     `json:"running"`
+	Sleeping        int     `json:"sleeping"`
+	Stopped         int     `json:"stopped"`
+	Zombie          int     `json:"zombie"`
+	Blocked         int     `json:"blocked"`
+	Idle            int     `json:"idle"`
+	Load1           float64 `json:"load1"`
+	Load5           float64 `json:"load5"`
+	Load15          float64 `json:"load15"`
+	PSICPUSomeAvg10 float64 `json:"psi_cpu_some_avg10"`
+	PSIMemSomeAvg10 float64 `json:"psi_mem_some_avg10"`
+	PSIIOSomeAvg10  float64 `json:"psi_io_some_avg10"`
+	OOMKills24h     int     `json:"oom_kills_24h"`
+	IOAvailable     bool    `json:"-"`
 }
 
 // procStat is the subset of /proc/<pid>/stat the collector and the command
@@ -233,7 +233,7 @@ func isHexID(s string) bool {
 		return false
 	}
 	for _, r := range s[:12] {
-		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
 			return false
 		}
 	}
@@ -707,7 +707,7 @@ type ProcessHistoryPoint struct {
 }
 
 type ProcessHistoryEvent struct {
-	T        int64 `json:"t"`
+	T        int64  `json:"t"`
 	Type     string `json:"type"`
 	PID      int    `json:"pid"`
 	Name     string `json:"name"`

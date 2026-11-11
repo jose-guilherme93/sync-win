@@ -135,10 +135,3 @@ func strictDecode(payload string, dst any) error {
 	}
 	return nil
 }
-
-// checkProcessTarget is retained as a thin compatibility wrapper around the
-// shared ProcessGuard target check.
-func checkProcessTarget(pid int, startTimeUnix int64) error {
-	guard := newProcessGuard(localPolicy{AllowProcessSignals: true})
-	return guard.CheckTarget(pid, startTimeUnix)
-}

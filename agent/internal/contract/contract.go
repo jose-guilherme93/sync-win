@@ -447,7 +447,6 @@ func (c *Contract) MaxOverlayPeers() int {
 	return 128
 }
 
-
 // MaxProcessRows caps how many process rows a collection may report.
 func (c *Contract) MaxProcessRows() int {
 	if c.Processes.MaxRows > 0 {
