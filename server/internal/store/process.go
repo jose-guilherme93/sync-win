@@ -323,7 +323,9 @@ func (s *Store) RecordProcessHistory(deviceID string, history ProcessHistory, no
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	tx, err := s.db.Begin()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -333,7 +335,7 @@ func (s *Store) RecordProcessHistory(deviceID string, history ProcessHistory, no
 		bucket := time.Unix(sample.T, 0).UTC()
 		bucketText := timeText(bucket)
 		for _, row := range sample.Rows {
-			_, err := tx.Exec(`
+			_, err := tx.ExecContext(ctx, `
 				INSERT INTO process_history (device_id, bucket, resolution, name, pid, cpu_sum, cpu_max, rss_max, io_read_bps, io_write_bps, samples)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
 				ON CONFLICT(device_id, name, pid, resolution, bucket) DO UPDATE SET
@@ -365,7 +367,7 @@ func (s *Store) RecordProcessHistory(deviceID string, history ProcessHistory, no
 		} else {
 			ec = nil
 		}
-		_, err := tx.Exec(
+		_, err := tx.ExecContext(ctx,
 			"INSERT INTO process_events (device_id, ts, type, pid, name, exit_code) VALUES (?, ?, ?, ?, ?, ?)",
 			deviceID, timeText(ts), ev.Type, ev.PID, ev.Name, ec)
 		if err != nil {
@@ -388,7 +390,9 @@ func (s *Store) GetProcessHistory(deviceID string, from time.Time) (ProcessHisto
 	}
 
 	// Build series + buckets from process_history.
-	rows, queryErr := s.db.Query(`
+	qctx, qcancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer qcancel()
+	rows, queryErr := s.db.QueryContext(qctx, `
 		SELECT bucket, name, pid, cpu_sum, cpu_max, rss_max, io_read_bps, io_write_bps, samples
 		FROM process_history
 		WHERE device_id = ? AND bucket >= ?
@@ -517,7 +521,7 @@ func (s *Store) GetProcessHistory(deviceID string, from time.Time) (ProcessHisto
 	}
 
 	// Events
-	evRows, eventErr := s.db.Query(`
+	evRows, eventErr := s.db.QueryContext(qctx, `
 		SELECT ts, type, pid, name, exit_code
 		FROM process_events
 		WHERE device_id = ? AND ts >= ?

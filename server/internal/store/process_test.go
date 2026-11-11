@@ -38,9 +38,9 @@ func TestProcessTablesExist(t *testing.T) {
 
 func TestProcessStateRoundTrips(t *testing.T) {
 	s := newProcessStore(t)
-	device, err := s.RegisterDevice("proc-pc", "user", "owner", "")
-	if err != nil {
-		t.Fatal(err)
+	device, deviceErr := s.RegisterDevice("proc-pc", "user", "owner", "")
+	if deviceErr != nil {
+		t.Fatal(deviceErr)
 	}
 
 	snapshot := ProcessSnapshot{
@@ -82,7 +82,7 @@ func TestProcessStateNeverCollected(t *testing.T) {
 		t.Fatal("a device with no snapshot must report collected=false, not an empty list")
 	}
 	if got.Processes == nil {
-		// nil is acceptable internally, but the API must serialise it as [].
+		// nil is acceptable internally, but the API must serialize it as [].
 		got.Processes = []ProcessRow{}
 	}
 	if len(got.Processes) != 0 {
@@ -191,9 +191,9 @@ func TestProcessHistoryRetention(t *testing.T) {
 
 func TestProcessHistoryQuery(t *testing.T) {
 	s := newProcessStore(t)
-	device, err := s.RegisterDevice("proc-query", "user", "owner", "")
-	if err != nil {
-		t.Fatal(err)
+	device, deviceErr := s.RegisterDevice("proc-query", "user", "owner", "")
+	if deviceErr != nil {
+		t.Fatal(deviceErr)
 	}
 	now := time.Now().UTC()
 	h := ProcessHistory{
@@ -225,9 +225,9 @@ func TestProcessHistoryIOColumnsMigrateLegacyDatabase(t *testing.T) {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	legacy, err := sql.Open("sqlite", filepath.Join(root, "sync-win.db"))
-	if err != nil {
-		t.Fatalf("open legacy database: %v", err)
+	legacy, openErr := sql.Open("sqlite", filepath.Join(root, "sync-win.db"))
+	if openErr != nil {
+		t.Fatalf("open legacy database: %v", openErr)
 	}
 	if _, err := legacy.Exec(`CREATE TABLE process_history (
 		device_id TEXT NOT NULL,
@@ -289,9 +289,9 @@ func TestProcessHistoryIOColumnsMigrateLegacyDatabase(t *testing.T) {
 
 func TestProcessHistoryAggregatesIO(t *testing.T) {
 	s := newProcessStore(t)
-	device, err := s.RegisterDevice("proc-io", "user", "owner", "")
-	if err != nil {
-		t.Fatal(err)
+	device, deviceErr := s.RegisterDevice("proc-io", "user", "owner", "")
+	if deviceErr != nil {
+		t.Fatal(deviceErr)
 	}
 	now := time.Now().UTC()
 	// Two samples in the same minute bucket: CPU averages, IO keeps the peak.
