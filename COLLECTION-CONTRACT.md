@@ -230,14 +230,15 @@ RSS e o estado vêm do mesmo arquivo. Só as linhas reportadas pagam por
 vez por ciclo. É mais barato que a coleta anterior, que lia `comm`, `status` e
 `stat` de todo processo, e ainda entrega muito mais contexto.
 
-**CPU é delta e é participação na máquina**: `cpu_percent` é a porcentagem
+**CPU é delta e é participação em um core**: `cpu_percent` é a porcentagem
 consumida na janela entre dois ciclos, delta de jiffies (`utime + stime`)
-dividido pelo tempo decorrido e pelo número de CPUs lógicas, limitada a 0–100.
-Um core saturado em uma máquina de quatro cores lê 25%; `threads` é reportado
-separadamente para que um processo multithread não pareça pequeno. O primeiro
-ciclo e PIDs novos reportam `0` porque não há delta. O total em
-`process_summary` cobre a máquina inteira, então a UI nunca deve apresentar as
-listas como se fossem todos os processos.
+dividido pelo tempo decorrido, com **um core = 100** (semântica de `top`/`ps`).
+Um core saturado lê 100 em qualquer máquina; um processo multithread pode
+passar de 100, limitado a `núcleos × 100`. `threads` é reportado separadamente
+para que um processo multithread não pareça pequeno. O primeiro ciclo e PIDs
+novos reportam `0` porque não há delta. A carga da máquina inteira fica em
+`process_summary`/`load_average`; a UI nunca deve apresentar as listas como se
+fossem todos os processos.
 
 ### Logs de journal (`logs[]`)
 

@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -169,18 +170,35 @@ func TestRenderUnitTemplateFillsWhatTheUpdateKnows(t *testing.T) {
 	}
 }
 
-func TestFetchAgentUnitReturnsTheRawTemplate(t *testing.T) {
+func TestFetchAgentUnitRendersTheCredentials(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("[Service]\nExecStart={{SERVER_URL}}\n"))
+		_, _ = w.Write([]byte("[Service]\nExecStart=/usr/local/bin/sync-win-agent --server {{SERVER_URL}} --device-id {{DEVICE_ID}} --device-token {{DEVICE_TOKEN}}\n"))
 	}))
 	defer srv.Close()
 
-	unit, err := fetchAgentUnit(srv.URL)
+	unit, err := fetchAgentUnit(srv.URL, "dev-1", "tok-1")
 	if err != nil {
-		t.Fatalf("the raw template must be fetchable: %v", err)
+		t.Fatalf("the template must be fetchable: %v", err)
 	}
-	if !strings.Contains(unit, "{{SERVER_URL}}") {
-		t.Fatalf("the raw template lost its placeholders: %s", unit)
+	for _, want := range []string{srv.URL, "dev-1", "tok-1"} {
+		if !strings.Contains(unit, want) {
+			t.Errorf("unit missing %q: %s", want, unit)
+		}
+	}
+	if strings.Contains(unit, "{{") {
+		t.Fatalf("placeholders survived the render: %s", unit)
+	}
+}
+
+// A device without credentials must not end up with a unit it cannot start.
+func TestFetchAgentUnitWithoutCredentialsSkipsInsteadOfWriting(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("[Service]\nExecStart=/usr/local/bin/sync-win-agent --device-id {{DEVICE_ID}}\n"))
+	}))
+	defer srv.Close()
+
+	if _, err := fetchAgentUnit(srv.URL, "", ""); !errors.Is(err, errUnitEndpointUnsupported) {
+		t.Fatalf("err = %v, want errUnitEndpointUnsupported", err)
 	}
 }
 
@@ -193,7 +211,7 @@ func TestFetchAgentUnitRejectsNonUnitResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := fetchAgentUnit(srv.URL); err == nil {
+	if _, err := fetchAgentUnit(srv.URL, "", ""); err == nil {
 		t.Fatal("expected an error for a response that is not a unit")
 	}
 }
@@ -212,7 +230,7 @@ func TestFetchAgentUnitNeedsNoCredentials(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	unit, err := fetchAgentUnit(srv.URL)
+	unit, err := fetchAgentUnit(srv.URL, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

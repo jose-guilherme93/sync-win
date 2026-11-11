@@ -503,9 +503,10 @@ func countFDs(procRoot string, pid int) int {
 // machine summary and the counter sample to feed into the next cycle.
 //
 // procRoot is a parameter so the parsing can be exercised against a fixture;
-// production passes "/proc". CPU percentages keep the established semantics:
-// jiffies consumed in the window, normalised per logical core, so 100 means
-// the whole machine was saturated.
+// production passes "/proc". CPU percentages are a share of ONE core, like top
+// and ps: a process saturating one core reports 100 on any machine, a
+// multi-threaded one can exceed it, and the column never collapses to 0.1% on
+// a many-core host. The machine-wide figure lives in ProcessStats.
 func CollectProcesses(procRoot string, limit, cpuCores int, prev ProcessSampleMap, elapsed time.Duration, now time.Time) ([]ProcessRow, ProcessStats, ProcessSampleMap, error) {
 	entries, err := os.ReadDir(procRoot)
 	if err != nil {
@@ -563,12 +564,13 @@ func CollectProcesses(procRoot string, limit, cpuCores int, prev ProcessSampleMa
 		var cpuPercent float64
 		if seconds > 0 {
 			if before, ok := prev[pid]; ok && cpuTime > before.CPUJiffies {
-				cpuPercent = float64(cpuTime-before.CPUJiffies) / clockTicks / seconds / float64(cpuCores) * 100.0
+				cpuPercent = float64(cpuTime-before.CPUJiffies) / clockTicks / seconds * 100.0
 				if cpuPercent < 0 {
 					cpuPercent = 0
 				}
-				if cpuPercent > 100 {
-					cpuPercent = 100
+				// A process cannot use more than every core it can run on.
+				if maxPercent := float64(cpuCores) * 100.0; cpuPercent > maxPercent {
+					cpuPercent = maxPercent
 				}
 			}
 		}

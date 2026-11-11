@@ -251,7 +251,7 @@ func reconcileUnit(serverURL, service string, userSystemd bool, deviceID, device
 // Best-effort on servers that do not serve the template.
 func reconcileHelperUnit(serverURL string) (bool, error) {
 	const target = "/etc/systemd/system/sync-win-agent-helper.service"
-	desired, err := fetchUnitTemplate(serverURL, "helper")
+	desired, err := fetchUnitTemplate(serverURL, "helper", "", "")
 	if err != nil {
 		if errors.Is(err, errUnitEndpointUnsupported) {
 			return false, nil
@@ -499,6 +499,10 @@ func copyFile(source, destination string, mode os.FileMode) error {
 // dev test device it replaced a working root unit with one naming a user that
 // did not exist, so the service failed with 217/USER. Now an installed unit is
 // only patched; the template is written solely when there is no unit at all.
+//
+// The ExecStart line is preserved from the running unit, because a device behind
+// a different server URL, or installed with a non-default binary path, must not
+// be silently repointed by an update.
 func refreshUnitFile(serverURL, service string, userSystemd bool, deviceID, deviceToken string) (bool, error) {
 	if userSystemd {
 		// The user-systemd fallback unit has no group requirement and is written
@@ -519,7 +523,7 @@ func refreshUnitFile(serverURL, service string, userSystemd bool, deviceID, devi
 			return false, nil
 		}
 	} else {
-		template, err := fetchAgentUnit(serverURL)
+		template, err := fetchAgentUnit(serverURL, deviceID, deviceToken)
 		if err != nil {
 			// An older server without the endpoint is tolerated: the binary update
 			// is the important part and must not be blocked by it. Anything else is
@@ -618,14 +622,39 @@ func applySupplementaryGroups(unit, groups string) string {
 	return strings.Join(out, "\n")
 }
 
-func fetchAgentUnit(serverURL string) (string, error) {
-	return fetchUnitTemplate(serverURL, "agent")
+// mergeExecStart keeps the existing ExecStart when the new template does not
+// carry a usable one.
+func mergeExecStart(current, desired string) string {
+	if strings.Contains(desired, "ExecStart=/") {
+		return desired
+	}
+	for _, line := range strings.Split(current, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "ExecStart=") {
+			lines := strings.Split(desired, "\n")
+			for i, l := range lines {
+				if strings.HasPrefix(strings.TrimSpace(l), "ExecStart=") {
+					lines[i] = line
+				}
+			}
+			return strings.Join(lines, "\n")
+		}
+	}
+	return desired
+}
+
+func fetchAgentUnit(serverURL, deviceID, deviceToken string) (string, error) {
+	return fetchUnitTemplate(serverURL, "agent", deviceID, deviceToken)
 }
 
 // fetchUnitTemplate fetches a raw systemd unit template by its short name from
-// the public endpoint, which must not depend on credentials the caller may not
-// have.
-func fetchUnitTemplate(serverURL, name string) (string, error) {
+// the public endpoint and fills the placeholders the updater owns.
+//
+// The endpoint is public on purpose: a device installed before the update
+// service carried --device-id/--device-token must still be able to repair its
+// unit. When this call has no credentials to fill in, it fails with
+// errUnitEndpointUnsupported so reconcileUnit skips the unit and still lets the
+// binary update land, instead of writing a unit systemd cannot start.
+func fetchUnitTemplate(serverURL, name, deviceID, deviceToken string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -657,9 +686,25 @@ func fetchUnitTemplate(serverURL, name string) (string, error) {
 	if !strings.Contains(unit, "[Service]") {
 		return "", errors.New("unit response does not look like a systemd unit")
 	}
-	// This is the raw template on purpose: the device credentials and the server
-	// URL are only known to the installed unit, so the caller renders it. The
-	// placeholder check belongs after that render, not here.
+	// Only fill a placeholder with a value we actually have: replacing it with
+	// an empty string hides the fact that the credential is missing.
+	var pairs []string
+	if serverURL != "" {
+		pairs = append(pairs, "{{SERVER_URL}}", strings.TrimRight(serverURL, "/"))
+	}
+	if deviceID != "" {
+		pairs = append(pairs, "{{DEVICE_ID}}", deviceID)
+	}
+	if deviceToken != "" {
+		pairs = append(pairs, "{{DEVICE_TOKEN}}", deviceToken)
+	}
+	if len(pairs) > 0 {
+		unit = strings.NewReplacer(pairs...).Replace(unit)
+	}
+	// Anything still unresolved would break the unit systemd reads next.
+	if strings.Contains(unit, "{{") {
+		return "", errUnitEndpointUnsupported
+	}
 	return unit, nil
 }
 
