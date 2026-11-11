@@ -4081,8 +4081,8 @@ func (s *Server) handleProcesses(w http.ResponseWriter, r *http.Request, deviceI
 		s.writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
 		return
 	}
-	device, err := s.store.GetDevice(deviceID)
-	if err != nil || device.OwnerID != owner {
+	device, deviceErr := s.store.GetDevice(deviceID)
+	if deviceErr != nil || device.OwnerID != owner {
 		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
 		return
 	}
@@ -4116,8 +4116,8 @@ func (s *Server) handleProcessesHistory(w http.ResponseWriter, r *http.Request, 
 		s.writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
 		return
 	}
-	device, err := s.store.GetDevice(deviceID)
-	if err != nil || device.OwnerID != owner {
+	device, deviceErr := s.store.GetDevice(deviceID)
+	if deviceErr != nil || device.OwnerID != owner {
 		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
 		return
 	}
@@ -4159,8 +4159,8 @@ func (s *Server) handleProcessMutation(w http.ResponseWriter, r *http.Request, d
 		s.writeError(w, http.StatusServiceUnavailable, errors.New("remote mutations are disabled"))
 		return
 	}
-	device, err := s.store.GetDevice(deviceID)
-	if err != nil || device.OwnerID != owner {
+	device, deviceErr := s.store.GetDevice(deviceID)
+	if deviceErr != nil || device.OwnerID != owner {
 		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
 		return
 	}
@@ -4174,9 +4174,9 @@ func (s *Server) handleProcessMutation(w http.ResponseWriter, r *http.Request, d
 	}()
 
 	// strict decode
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		s.writeError(w, http.StatusBadRequest, err)
+	body, bodyErr := io.ReadAll(r.Body)
+	if bodyErr != nil {
+		s.writeError(w, http.StatusBadRequest, bodyErr)
 		return
 	}
 	if len(body) > 4096 {

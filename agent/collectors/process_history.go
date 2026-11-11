@@ -331,10 +331,3 @@ func parseProcessHistoryObserveArgs(args []any) ([]ProcessRow, time.Time) {
 	}
 	return rows, now
 }
-
-// Unexported aliases for callers/tests that use internal-style names.
-type processHistorySampler = ProcessHistorySampler
-type processSampler = ProcessHistorySampler
-
-func newProcessHistorySampler() *ProcessHistorySampler { return NewProcessHistorySampler() }
-func newProcessSampler() *ProcessHistorySampler        { return NewProcessHistorySampler() }

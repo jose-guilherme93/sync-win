@@ -201,21 +201,6 @@ func TestProcessHistorySamplerIOPayloadIsBounded(t *testing.T) {
 	}
 }
 
-// contains is a tiny local helper: the collectors package has no strings import
-// pressure and the payload assertions read better this way.
-func contains(haystack, needle string) bool {
-	return len(needle) == 0 || indexOf(haystack, needle) >= 0
-}
-
-func indexOf(haystack, needle string) int {
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return i
-		}
-	}
-	return -1
-}
-
 func TestProcessHistorySamplerDrain(t *testing.T) {
 	s := NewProcessHistorySampler()
 	rows := makeProcRows(2)

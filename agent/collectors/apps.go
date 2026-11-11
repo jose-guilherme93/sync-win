@@ -2,6 +2,7 @@ package collectors
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // AppInfo is one entry in the installed application inventory.
@@ -205,7 +207,9 @@ func commandOutputAllowEmptyExit1(name string, args ...string) ([]byte, bool, er
 		}
 		return nil, true, err
 	}
-	cmd := exec.Command(path, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, path, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

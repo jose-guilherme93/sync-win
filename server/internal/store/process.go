@@ -388,16 +388,16 @@ func (s *Store) GetProcessHistory(deviceID string, from time.Time) (ProcessHisto
 	}
 
 	// Build series + buckets from process_history.
-	rows, err := s.db.Query(`
+	rows, queryErr := s.db.Query(`
 		SELECT bucket, name, pid, cpu_sum, cpu_max, rss_max, io_read_bps, io_write_bps, samples
 		FROM process_history
 		WHERE device_id = ? AND bucket >= ?
 		ORDER BY bucket ASC`,
 		deviceID, timeText(from))
-	if err != nil {
-		return result, err
+	if queryErr != nil {
+		return result, queryErr
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	// Rows are per (bucket, name, pid). A name with several pids (nginx
 	// workers, systemd helpers) and every sample inside the same bucket must
@@ -517,15 +517,15 @@ func (s *Store) GetProcessHistory(deviceID string, from time.Time) (ProcessHisto
 	}
 
 	// Events
-	evRows, err := s.db.Query(`
+	evRows, eventErr := s.db.Query(`
 		SELECT ts, type, pid, name, exit_code
 		FROM process_events
 		WHERE device_id = ? AND ts >= ?
 		ORDER BY ts ASC`, deviceID, timeText(from))
-	if err != nil {
-		return result, err
+	if eventErr != nil {
+		return result, eventErr
 	}
-	defer evRows.Close()
+	defer func() { _ = evRows.Close() }()
 	for evRows.Next() {
 		var tsText, typ, name string
 		var pid int

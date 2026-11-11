@@ -739,6 +739,7 @@
         <div class="tgroup filters">
         {@render viewSwitch()}
         <span class="vsep"></span>
+        <div class="stategroup" role="group" aria-label="Filter by state">
         {#each STATE_CHIPS as state (state)}
           <button
             class="chip"
@@ -747,6 +748,7 @@
             on:click={() => toggleState(state)}
           ><span class="dot" style:background={STATE_DOT[state]}></span>{state}<span class="n">{counts[state]}</span></button>
         {/each}
+        </div>
         <button class="chip" class:active={listeningOnly} on:click={() => (listeningOnly = !listeningOnly)} title="Listening sockets only">
           <Icon name="pulse" size={10} />listening
         </button>
@@ -1244,6 +1246,7 @@
   .card-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.65rem 0.9rem; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
   .card-head h2 { margin: 0; font-size: 0.82rem; font-weight: 600; color: var(--text); }
   .hint { color: var(--text-faint); font-size: 0.68rem; }
+  .stategroup { display: contents; }
   .toolbar { display: flex; align-items: center; gap: 0.2rem 0.35rem; padding: 0.28rem 0.35rem; flex-wrap: wrap; position: relative; z-index: 6; border-bottom: 1px solid var(--border); }
   /* Two clusters: filters on the left, view controls and the corner tools on the
      right. They stay together as a block when the row wraps, so the second line
