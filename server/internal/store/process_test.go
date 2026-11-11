@@ -251,9 +251,9 @@ func TestProcessHistoryIOColumnsMigrateLegacyDatabase(t *testing.T) {
 	}
 	legacy.Close()
 
-	s, err := NewStore(root)
-	if err != nil {
-		t.Fatalf("NewStore over a legacy database: %v", err)
+	s, storeErr := NewStore(root)
+	if storeErr != nil {
+		t.Fatalf("NewStore over a legacy database: %v", storeErr)
 	}
 	t.Cleanup(func() { s.Close() })
 

@@ -2774,11 +2774,11 @@ func (s *Store) RunRetentionCleanup() (int64, error) {
 
 	// Clean up expired process history and events.
 	procCutoff := now.AddDate(0, 0, -365)
-	if res, err := s.db.Exec("DELETE FROM process_history WHERE bucket < ?", timeText(procCutoff)); err == nil {
+	if res, err := s.db.ExecContext(context.Background(), "DELETE FROM process_history WHERE bucket < ?", timeText(procCutoff)); err == nil {
 		n, _ := res.RowsAffected()
 		totalDeleted += n
 	}
-	if res, err := s.db.Exec("DELETE FROM process_events WHERE ts < ?", timeText(procCutoff)); err == nil {
+	if res, err := s.db.ExecContext(context.Background(), "DELETE FROM process_events WHERE ts < ?", timeText(procCutoff)); err == nil {
 		n, _ := res.RowsAffected()
 		totalDeleted += n
 	}
