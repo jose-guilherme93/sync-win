@@ -3,11 +3,10 @@ package collectors
 import (
 	"bytes"
 	"encoding/json"
-	"io"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,7 +21,7 @@ type ProcessSignalRequest struct {
 	StartTimeUnix int64  `json:"start_time_unix"`
 }
 
-// ProcessGuard evaluates whether a signal may be sent to a process.
+// ProcessGuard evaluates whether a signal or other action may target a process.
 type ProcessGuard struct {
 	ProcRoot       string
 	AllowSignals   bool
@@ -41,6 +40,95 @@ func (g *ProcessGuard) procRoot() string {
 	return g.ProcRoot
 }
 
+// CheckTarget is the single target-validation code path shared by signal,
+// renice and ionice. It fails closed.
+func (g *ProcessGuard) CheckTarget(pid int, startTimeUnix int64) error {
+	minPID := g.MinPID
+	if minPID <= 0 {
+		minPID = 2
+	}
+	maxPID := g.MaxPID
+	if maxPID <= 0 {
+		maxPID = 4194304
+	}
+	if pid == 1 {
+		return fmt.Errorf("pid 1 is protected")
+	}
+	if pid < minPID || pid > maxPID {
+		return fmt.Errorf("pid out of range")
+	}
+
+	stat, err := ReadProcStat(g.procRoot(), pid)
+	if err != nil {
+		return fmt.Errorf("process not found")
+	}
+	boot := readBootTime(g.procRoot())
+	liveStart := ProcessStartTimeUnix(boot, stat.StartTicks)
+	// Fail closed: a missing start time cannot be verified.
+	if startTimeUnix == 0 {
+		return fmt.Errorf("pid reused")
+	}
+	if liveStart != startTimeUnix {
+		return fmt.Errorf("pid reused")
+	}
+
+	if pid == g.AgentPID {
+		return fmt.Errorf("protected process")
+	}
+	name := stat.Name
+	for _, pn := range g.ProtectedNames {
+		if strings.EqualFold(name, pn) {
+			return fmt.Errorf("protected process")
+		}
+	}
+	// comm file name (catches renamed/replaced binaries).
+	commData, _ := os.ReadFile(filepath.Join(g.procRoot(), strconv.Itoa(pid), "comm"))
+	commName := strings.TrimSpace(string(commData))
+	if commName != "" {
+		for _, pn := range g.ProtectedNames {
+			if strings.EqualFold(commName, pn) {
+				return fmt.Errorf("protected process")
+			}
+		}
+	}
+	// cgroup unit (checked before the kernel-thread heuristic so a kernel
+	// thread whose unit is protected still reports "protected").
+	cgData, _ := os.ReadFile(filepath.Join(g.procRoot(), strconv.Itoa(pid), "cgroup"))
+	cgroup := strings.TrimSpace(string(cgData))
+	line := cgroup
+	if idx := strings.IndexByte(line, '\n'); idx >= 0 {
+		line = line[:idx]
+	}
+	unit := parseCgroupUnitFromLine(line)
+	for _, pu := range g.ProtectedUnits {
+		if unit != "" && unit == pu {
+			return fmt.Errorf("protected unit")
+		}
+	}
+	// kernel thread
+	cmdData, _ := os.ReadFile(filepath.Join(g.procRoot(), strconv.Itoa(pid), "cmdline"))
+	if len(strings.TrimSpace(string(cmdData))) == 0 && stat.PPID == 2 {
+		return fmt.Errorf("kernel thread")
+	}
+	if stat.State == 'Z' {
+		return fmt.Errorf("zombie process")
+	}
+	return nil
+}
+
+// CheckProcessTarget is an alias for CheckTarget.
+func (g *ProcessGuard) CheckProcessTarget(pid int, startTimeUnix int64) error {
+	return g.CheckTarget(pid, startTimeUnix)
+}
+
+// Additional aliases kept for compatibility with callers/tests.
+func (g *ProcessGuard) ValidateTarget(pid int, startTimeUnix int64) error {
+	return g.CheckTarget(pid, startTimeUnix)
+}
+func (g *ProcessGuard) Check(pid int, startTimeUnix int64) error {
+	return g.CheckTarget(pid, startTimeUnix)
+}
+
 func (g *ProcessGuard) CheckSignal(req ProcessSignalRequest) (syscall.Signal, error) {
 	if !g.AllowSignals {
 		return 0, fmt.Errorf("disabled by local policy")
@@ -56,77 +144,9 @@ func (g *ProcessGuard) CheckSignal(req ProcessSignalRequest) (syscall.Signal, er
 	if !allowed {
 		return 0, fmt.Errorf("signal not allowed")
 	}
-	minPID := g.MinPID
-	if minPID <= 0 {
-		minPID = 2
+	if err := g.CheckTarget(req.PID, req.StartTimeUnix); err != nil {
+		return 0, err
 	}
-	maxPID := g.MaxPID
-	if maxPID <= 0 {
-		maxPID = 4194304
-	}
-	if req.PID == 1 {
-		return 0, fmt.Errorf("pid 1 is protected")
-	}
-	if req.PID < minPID || req.PID > maxPID {
-		return 0, fmt.Errorf("pid out of range")
-	}
-
-	stat, err := ReadProcStat(g.procRoot(), req.PID)
-	if err != nil {
-		return 0, fmt.Errorf("process not found")
-	}
-	boot := readBootTime(g.procRoot())
-	liveStart := ProcessStartTimeUnix(boot, stat.StartTicks)
-	if req.StartTimeUnix != 0 && liveStart != req.StartTimeUnix {
-		return 0, fmt.Errorf("pid reused")
-	}
-	if req.StartTimeUnix == 0 {
-		// If caller did not supply a start time, we cannot verify; fail closed.
-		return 0, fmt.Errorf("pid reused")
-	}
-
-	if req.PID == g.AgentPID {
-		return 0, fmt.Errorf("protected process")
-	}
-	name := stat.Name
-	for _, pn := range g.ProtectedNames {
-		if strings.EqualFold(name, pn) {
-			return 0, fmt.Errorf("protected process")
-		}
-	}
-	// comm file name
-	commData, _ := os.ReadFile(filepath.Join(g.procRoot(), strconv.Itoa(req.PID), "comm"))
-	commName := strings.TrimSpace(string(commData))
-	if commName != "" {
-		for _, pn := range g.ProtectedNames {
-			if strings.EqualFold(commName, pn) {
-				return 0, fmt.Errorf("protected process")
-			}
-		}
-	}
-	// cgroup unit (checked before the kernel-thread heuristic so a kernel
-	// thread whose unit is protected still reports "protected")
-	cgData, _ := os.ReadFile(filepath.Join(g.procRoot(), strconv.Itoa(req.PID), "cgroup"))
-	cgroup := strings.TrimSpace(string(cgData))
-	line := cgroup
-	if idx := strings.IndexByte(line, '\n'); idx >= 0 {
-		line = line[:idx]
-	}
-	unit := parseCgroupUnitFromLine(line)
-	for _, pu := range g.ProtectedUnits {
-		if unit != "" && unit == pu {
-			return 0, fmt.Errorf("protected unit")
-		}
-	}
-	// kernel thread
-	cmdData, _ := os.ReadFile(filepath.Join(g.procRoot(), strconv.Itoa(req.PID), "cmdline"))
-	if len(strings.TrimSpace(string(cmdData))) == 0 && stat.PPID == 2 {
-		return 0, fmt.Errorf("kernel thread")
-	}
-	if stat.State == 'Z' {
-		return 0, fmt.Errorf("zombie process")
-	}
-	// protected units list also protects by unit name in protected names? no.
 
 	// map signal
 	var sig syscall.Signal
@@ -143,6 +163,22 @@ func (g *ProcessGuard) CheckSignal(req ProcessSignalRequest) (syscall.Signal, er
 		return 0, fmt.Errorf("signal not allowed")
 	}
 	return sig, nil
+}
+
+// CheckRenice validates a renice request against the shared target check.
+func (g *ProcessGuard) CheckRenice(pid int, nice int, startTimeUnix int64) error {
+	if err := ValidateNicePriority(nice); err != nil {
+		return err
+	}
+	return g.CheckTarget(pid, startTimeUnix)
+}
+
+// CheckIonice validates an ionice request against the shared target check.
+func (g *ProcessGuard) CheckIonice(pid int, class, level int, startTimeUnix int64) error {
+	if err := ValidateIonice(class, level); err != nil {
+		return err
+	}
+	return g.CheckTarget(pid, startTimeUnix)
 }
 
 func parseCgroupUnitFromLine(raw string) string {
@@ -231,5 +267,3 @@ func (l *ProcessSignalLimiter) Allow(now time.Time) bool {
 	l.timestamps = append(l.timestamps, now)
 	return true
 }
-
-var _ = sort.Slice

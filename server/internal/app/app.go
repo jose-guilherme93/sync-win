@@ -1,8 +1,8 @@
 package app
 
 import (
-	"bytes"
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -4095,11 +4095,11 @@ func (s *Server) handleProcesses(w http.ResponseWriter, r *http.Request, deviceI
 		state.Processes = []store.ProcessRow{}
 	}
 	resp := map[string]any{
-		"processes":        state.Processes,
-		"stats":            state.Stats,
-		"collected_at":     state.CollectedAt,
-		"io_available":     state.IOAvailable,
-		"signals_enabled":  s.flags.EnableRemoteMutations,
+		"processes":       state.Processes,
+		"stats":           state.Stats,
+		"collected_at":    state.CollectedAt,
+		"io_available":    state.IOAvailable,
+		"signals_enabled": s.flags.EnableRemoteMutations,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
@@ -4193,7 +4193,8 @@ func (s *Server) handleProcessMutation(w http.ResponseWriter, r *http.Request, d
 	case "signal":
 		cmdType = "process_signal"
 		var req struct {
-			Signal string `json:"signal"`
+			Signal        string `json:"signal"`
+			StartTimeUnix int64  `json:"start_time_unix"`
 		}
 		if err := decoder.Decode(&req); err != nil {
 			s.writeError(w, http.StatusBadRequest, err)
@@ -4232,15 +4233,20 @@ func (s *Server) handleProcessMutation(w http.ResponseWriter, r *http.Request, d
 			s.writeError(w, http.StatusNotFound, errors.New("process not found"))
 			return
 		}
+		if req.StartTimeUnix != 0 && req.StartTimeUnix != found.StartTimeUnix {
+			s.writeError(w, http.StatusConflict, errors.New("stale process snapshot"))
+			return
+		}
 		payloadMap = map[string]any{
-			"pid":              pid,
-			"signal":           req.Signal,
-			"start_time_unix":  found.StartTimeUnix,
+			"pid":             pid,
+			"signal":          req.Signal,
+			"start_time_unix": found.StartTimeUnix,
 		}
 	case "nice":
 		cmdType = "process_renice"
 		var req struct {
-			Nice int `json:"nice"`
+			Nice          int   `json:"nice"`
+			StartTimeUnix int64 `json:"start_time_unix"`
 		}
 		if err := decoder.Decode(&req); err != nil {
 			s.writeError(w, http.StatusBadRequest, err)
@@ -4275,6 +4281,10 @@ func (s *Server) handleProcessMutation(w http.ResponseWriter, r *http.Request, d
 			s.writeError(w, http.StatusNotFound, errors.New("process not found"))
 			return
 		}
+		if req.StartTimeUnix != 0 && req.StartTimeUnix != found.StartTimeUnix {
+			s.writeError(w, http.StatusConflict, errors.New("stale process snapshot"))
+			return
+		}
 		payloadMap = map[string]any{
 			"pid":             pid,
 			"nice":            req.Nice,
@@ -4283,8 +4293,9 @@ func (s *Server) handleProcessMutation(w http.ResponseWriter, r *http.Request, d
 	case "ionice":
 		cmdType = "process_ionice"
 		var req struct {
-			Class int `json:"class"`
-			Level int `json:"level"`
+			Class         int   `json:"class"`
+			Level         int   `json:"level"`
+			StartTimeUnix int64 `json:"start_time_unix"`
 		}
 		if err := decoder.Decode(&req); err != nil {
 			s.writeError(w, http.StatusBadRequest, err)
@@ -4321,6 +4332,10 @@ func (s *Server) handleProcessMutation(w http.ResponseWriter, r *http.Request, d
 		}
 		if found == nil {
 			s.writeError(w, http.StatusNotFound, errors.New("process not found"))
+			return
+		}
+		if req.StartTimeUnix != 0 && req.StartTimeUnix != found.StartTimeUnix {
+			s.writeError(w, http.StatusConflict, errors.New("stale process snapshot"))
 			return
 		}
 		payloadMap = map[string]any{

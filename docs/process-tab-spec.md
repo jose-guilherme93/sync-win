@@ -79,7 +79,7 @@ Fail closed. Every rule is a table test before the code exists.
 4. **pid-reuse (TOCTOU):** the command payload carries `start_time_unix` from the snapshot the user saw; if the live process's start time differs, reject with `pid reused` and send nothing.
 5. Protected, rejected regardless of policy: the agent's own pid, `systemd`/`init`, `dockerd`, `containerd`, `containerd-shim`, `systemd-journald`, `sshd`, `sync-win-agent`, kernel threads (`kernel == true`), zombies (`Z`), and any pid whose `unit` is in the contract's protected list.
 6. Policy: `/etc/sync-win/policy.json` `allow_process_signals`, default **false**. Missing key = denied.
-7. Rate limit: 10 signals per device per minute; over the limit the command fails with `rate limited`, it does not queue.
+7. Rate limit: 10 signals, renice and ionice commands per device per minute (each command type has its own 10/minute sliding window); over the limit the command fails with `rate limited`, it does not queue.
 8. Never build a shell string: `syscall.Kill` only. No `exec.Command("kill", ...)`, no `sh -c`.
 9. `nice` in `[-20,19]`, `ionice` class in `{1,2,3}` and level in `[0,7]`; rejected values never reach the kernel.
 10. Command payload size ≤ 4 KB, strict JSON decode (unknown fields rejected).
