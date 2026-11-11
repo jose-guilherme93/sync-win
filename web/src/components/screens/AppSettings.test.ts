@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/svelte'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import AppSettings from './AppSettings.svelte'
 
@@ -102,6 +102,12 @@ class FakeEventSource {
   }
 }
 
+// The screen opens on the Agents tab; the log and retention tests have to
+// switch to the tab they exercise first.
+async function openTab(name: 'Application log' | 'Configuration') {
+  await fireEvent.click(await screen.findByRole('tab', { name }))
+}
+
 describe('Application settings screen', () => {
   afterEach(() => {
     cleanup()
@@ -112,6 +118,7 @@ describe('Application settings screen', () => {
   it('renders stored log entries with their level and event', async () => {
     stubFetch((url) => route(url))
     render(AppSettings)
+    await openTab('Application log')
 
     expect(await screen.findByText('http_error')).toBeTruthy()
     expect(screen.getByText('device request failed')).toBeTruthy()
@@ -121,6 +128,7 @@ describe('Application settings screen', () => {
   it('summarises the totals from the stats endpoint', async () => {
     stubFetch((url) => route(url))
     render(AppSettings)
+    await openTab('Application log')
 
     // The by-level chips come straight from /api/logs/stats.
     expect(await screen.findByText('ERROR 1')).toBeTruthy()
@@ -130,6 +138,7 @@ describe('Application settings screen', () => {
   it('sends the level filter to the API when one is picked', async () => {
     const { calls } = stubFetch((url) => route(url))
     render(AppSettings)
+    await openTab('Application log')
     await screen.findByText('http_error')
 
     const level = await screen.findByLabelText('Level')
@@ -142,6 +151,7 @@ describe('Application settings screen', () => {
   it('sends a request id to trace one request through the log', async () => {
     const { calls } = stubFetch((url) => route(url))
     render(AppSettings)
+    await openTab('Application log')
     await screen.findByText('http_error')
 
     const request = await screen.findByLabelText('Request ID')
@@ -157,6 +167,7 @@ describe('Application settings screen', () => {
   it('renders the persisted settings values', async () => {
     stubFetch((url) => route(url))
     render(AppSettings)
+    await openTab('Configuration')
 
     const level = (await screen.findByLabelText('Persistence level')) as HTMLSelectElement
     expect(level.value).toBe('INFO')
@@ -172,6 +183,7 @@ describe('Application settings screen', () => {
       return route(url)
     })
     render(AppSettings)
+    await openTab('Configuration')
 
     await screen.findByLabelText('Persistence level')
     const level = (await screen.findByLabelText('Persistence level')) as HTMLSelectElement
@@ -186,6 +198,7 @@ describe('Application settings screen', () => {
   it('renders the stored telemetry retention values', async () => {
     stubFetch((url) => route(url))
     render(AppSettings)
+    await openTab('Configuration')
 
     const raw = (await screen.findByLabelText('Raw telemetry (hours)')) as HTMLInputElement
     expect(raw.value).toBe('2')
@@ -203,6 +216,7 @@ describe('Application settings screen', () => {
       return route(url)
     })
     render(AppSettings)
+    await openTab('Configuration')
 
     const raw = (await screen.findByLabelText('Raw telemetry (hours)')) as HTMLInputElement
     await fireEvent.input(raw, { target: { value: '6' } })
@@ -227,6 +241,7 @@ describe('Application settings screen', () => {
       return route(url)
     })
     render(AppSettings)
+    await openTab('Configuration')
 
     await screen.findByLabelText('Raw telemetry (hours)')
     await fireEvent.click(screen.getByText('Save retention'))
@@ -242,6 +257,7 @@ describe('Application settings screen', () => {
       return route(url)
     })
     render(AppSettings)
+    await openTab('Application log')
 
     expect(await screen.findByRole('alert')).toBeTruthy()
 
@@ -254,6 +270,7 @@ describe('Application settings screen', () => {
     vi.stubGlobal('EventSource', FakeEventSource)
     const { calls } = stubFetch((url) => route(url))
     render(AppSettings)
+    await openTab('Application log')
     await screen.findByText('http_error')
 
     await fireEvent.click(screen.getByRole('button', { name: /Live/ }))
@@ -281,6 +298,7 @@ describe('Application settings screen', () => {
     vi.stubGlobal('EventSource', FakeEventSource)
     stubFetch((url) => route(url))
     render(AppSettings)
+    await openTab('Application log')
     await screen.findByText('http_error')
 
     await fireEvent.click(screen.getByRole('button', { name: /Live/ }))
@@ -298,6 +316,7 @@ describe('Application settings screen', () => {
     vi.stubGlobal('EventSource', FakeEventSource)
     stubFetch((url) => route(url))
     render(AppSettings)
+    await openTab('Application log')
     await screen.findByText('http_error')
 
     const live = screen.getByRole('button', { name: /Live/ })
@@ -306,5 +325,20 @@ describe('Application settings screen', () => {
 
     await fireEvent.click(live)
     expect(FakeEventSource.instances[0].closed).toBe(true)
+  })
+})
+
+describe('Application settings · tabs', () => {
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllGlobals()
+  })
+
+  it('does not duplicate the agent fleet inside settings', async () => {
+    stubFetch((url) => route(url))
+    render(AppSettings)
+
+    expect(await screen.findByText('http_error')).toBeTruthy()
+    expect(screen.queryByRole('tab', { name: /Agents/ })).toBeNull()
   })
 })

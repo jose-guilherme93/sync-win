@@ -160,11 +160,11 @@ func TestProcessesContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.ContractVersion != "1.10.0" {
-		t.Errorf("contract_version = %q, want 1.10.0", c.ContractVersion)
+	if c.ContractVersion != "1.12.0" {
+		t.Errorf("contract_version = %q, want 1.12.0", c.ContractVersion)
 	}
-	if c.AgentVersion != "0.11.4" {
-		t.Errorf("agent_version = %q, want 0.11.4", c.AgentVersion)
+	if c.AgentVersion != "0.11.5" {
+		t.Errorf("agent_version = %q, want 0.11.5", c.AgentVersion)
 	}
 	if c.Processes.MaxRows != 250 {
 		t.Errorf("processes.max_rows = %d, want 250", c.Processes.MaxRows)

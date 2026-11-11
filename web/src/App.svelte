@@ -14,6 +14,7 @@
   import DeviceOverview from './components/screens/DeviceOverview.svelte'
   import Alerts from './components/screens/Alerts.svelte'
   import Findings from './components/screens/Findings.svelte'
+  import Agents from './components/screens/Agents.svelte'
   import Reports from './components/screens/Reports.svelte'
   import Storage from './components/screens/Storage.svelte'
   import Network from './components/screens/Network.svelte'
@@ -907,6 +908,7 @@
     devices: 'Devices',
     alerts: 'Alerts',
     findings: 'Findings',
+    agents: 'Agents',
     reports: 'Reports',
     notifications: 'Notifications',
     configuration: 'Settings'
@@ -1653,6 +1655,8 @@
             <Alerts {devices} authHeaders={ownerHeaders} onSelect={selectDevice} />
           {:else if navState.section === 'findings'}
             <Findings {devices} onSelect={selectDevice} />
+          {:else if navState.section === 'agents'}
+            <Agents {devices} {shippedAgentVersion} />
           {:else if navState.section === 'reports'}
             <Reports {devices} onSelect={selectDevice} />
           {:else if navState.section === 'configuration'}

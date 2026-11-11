@@ -190,16 +190,42 @@ Running the installer again is safe:
 
 ## Updating
 
-To update the agent:
+The agent updates itself. The binary ships inside the server image, and each
+device runs `sync-win-agent-update.service` from a systemd timer (5 minutes
+after boot, then every 15 minutes) and from a path unit that fires when the
+daemon writes `/var/lib/sync-win/update-request` after seeing a newer version.
 
-1. Generate a new install command from the dashboard
-2. Run it on the target machine
+Each attempt downloads the binary **and** its Ed25519 signature from the server,
+verifies both, checks the checksum, restarts the service and rolls back if the
+new binary does not come up. An agent built without the embedded public key
+refuses every update — fail closed — and one such device can only be fixed by
+installing the agent again.
+
+### Checking what the fleet is doing
+
+The **Agents** screen (sidebar, next to Findings) shows every device against the
+version the server ships, the result of the last update attempt, and what the
+agent costs on that machine: its RSS and CPU against the machine's own capacity,
+with a two-hour line per device. A device behind the server but updating
+normally needs nothing; a device marked *Cannot self-update* needs the installer
+run once.
+
+### Updating one device by hand
+
+To force a device to the version the server currently serves:
+
+1. Generate a new install command from the dashboard.
+2. Run it on the target machine.
 3. The installer will:
    - Detect the existing installation
    - Back up the current binary
    - Download and install the new version
    - Re-enroll if needed (preserves device ID)
-   - Restart the service
+   - Restart the service, and reinstall the update timer and path unit
+
+The installer verifies the SHA-256 checksum; it does not require the signature,
+which is what lets it recover a device whose installed agent cannot verify an
+update at all.
 
 ## Server API Endpoints
 

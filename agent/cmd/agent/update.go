@@ -99,32 +99,65 @@ func updateAgentAt(executable, serverURL, service string, userSystemd bool) erro
 // authenticate. They are optional so the existing callers and tests keep working
 // without them.
 func updateAgentAtIdentity(executable, serverURL, service string, userSystemd bool, deviceID, deviceToken string) error {
+	current, err := installedAgentVersion(executable)
+	if err != nil {
+		// The version probe itself failed, so there is no attempt to report as
+		// current or updated. Record it so the dashboard can show why this
+		// device never updates instead of leaving it reading as unknown.
+		saveAgentUpdateState(agentUpdateState{
+			Status: agentUpdateFailed,
+			Error:  err.Error(),
+		})
+		return err
+	}
+	remote, err := performAgentUpdate(executable, serverURL, service, userSystemd, deviceID, deviceToken, current)
+	if err != nil {
+		saveAgentUpdateState(agentUpdateState{
+			Status:      agentUpdateFailed,
+			FromVersion: current,
+			ToVersion:   remote,
+			Error:       err.Error(),
+		})
+		return err
+	}
+	status := agentUpdateCurrent
+	if remote != "" && remote != current {
+		status = agentUpdateUpdated
+	}
+	saveAgentUpdateState(agentUpdateState{
+		Status:      status,
+		FromVersion: current,
+		ToVersion:   remote,
+	})
+	return nil
+}
+
+// performAgentUpdate is the update body. It returns the version the server
+// offers, even when the attempt fails, so the caller can record what it was
+// trying to reach.
+func performAgentUpdate(executable, serverURL, service string, userSystemd bool, deviceID, deviceToken, current string) (string, error) {
 	if serverURL == "" {
-		return fmt.Errorf("server URL is required")
+		return "", fmt.Errorf("server URL is required")
 	}
 	remote, err := fetchAgentVersion(serverURL)
 	if err != nil {
-		return err
-	}
-	current, err := installedAgentVersion(executable)
-	if err != nil {
-		return err
+		return "", err
 	}
 	newer, err := newerAgentVersion(remote, current)
 	if err != nil {
-		return err
+		return remote, err
 	}
 	if !newer {
 		fmt.Printf("SyncWin agent is current: %s\n", current)
 		// A unit change is independent of the binary. An agent can be current
 		// while its unit is stale or missing entirely, which is how a device
 		// kept running without systemd-journal after the fix shipped.
-		return reconcileUnit(serverURL, service, userSystemd, deviceID, deviceToken)
+		return current, reconcileUnit(serverURL, service, userSystemd, deviceID, deviceToken)
 	}
 
 	temp, err := downloadAgent(serverURL, executable)
 	if err != nil {
-		return err
+		return remote, err
 	}
 	defer os.Remove(temp)
 
@@ -133,42 +166,42 @@ func updateAgentAtIdentity(executable, serverURL, service string, userSystemd bo
 	// runs it) until it is proven to come from the trusted key.
 	signature, err := downloadAgentSignature(serverURL)
 	if err != nil {
-		return err
+		return remote, err
 	}
 	if err := verifyAgentSignature(temp, signature); err != nil {
-		return err
+		return remote, err
 	}
 	if err := verifyAgentChecksum(serverURL, temp); err != nil {
-		return err
+		return remote, err
 	}
 	if err := os.Chmod(temp, 0o755); err != nil {
-		return fmt.Errorf("chmod downloaded agent: %w", err)
+		return remote, fmt.Errorf("chmod downloaded agent: %w", err)
 	}
 	downloadedVersion, err := installedAgentVersion(temp)
 	if err != nil {
-		return err
+		return remote, err
 	}
 	if downloadedVersion != remote {
-		return fmt.Errorf("downloaded agent version %q does not match server version %q", downloadedVersion, remote)
+		return remote, fmt.Errorf("downloaded agent version %q does not match server version %q", downloadedVersion, remote)
 	}
 
 	backup := executable + ".rollback"
 	_ = os.Remove(backup)
 	if err := copyFile(executable, backup, 0o755); err != nil {
-		return fmt.Errorf("backup current agent: %w", err)
+		return remote, fmt.Errorf("backup current agent: %w", err)
 	}
 	if err := os.Rename(temp, executable); err != nil {
-		return fmt.Errorf("install downloaded agent: %w", err)
+		return remote, fmt.Errorf("install downloaded agent: %w", err)
 	}
 	if err := restartAgent(service, userSystemd); err != nil {
 		_ = copyFile(backup, executable, 0o755)
 		_ = restartAgent(service, userSystemd)
-		return fmt.Errorf("new agent failed to start; rolled back: %w", err)
+		return remote, fmt.Errorf("new agent failed to start; rolled back: %w", err)
 	}
 	if err := waitForAgent(service, userSystemd); err != nil {
 		_ = copyFile(backup, executable, 0o755)
 		_ = restartAgent(service, userSystemd)
-		return fmt.Errorf("new agent failed health check; rolled back: %w", err)
+		return remote, fmt.Errorf("new agent failed health check; rolled back: %w", err)
 	}
 
 	// Rewrite the unit after the binary is proven good, then restart so a unit
@@ -180,7 +213,7 @@ func updateAgentAtIdentity(executable, serverURL, service string, userSystemd bo
 
 	_ = os.Remove(backup)
 	fmt.Printf("SyncWin agent updated: %s -> %s\n", current, remote)
-	return nil
+	return remote, nil
 }
 
 // reconcileUnit rewrites the systemd unit from the server and restarts the
@@ -224,6 +257,9 @@ func reconcileHelperUnit(serverURL string) (bool, error) {
 			return false, nil
 		}
 		return false, err
+	}
+	if strings.Contains(desired, "{{") {
+		return false, errors.New("helper unit still contains template placeholders")
 	}
 	if current, err := os.ReadFile(target); err == nil && desired == string(current) {
 		return false, nil
@@ -452,50 +488,52 @@ func copyFile(source, destination string, mode os.FileMode) error {
 	return output.Close()
 }
 
-// refreshUnitFile rewrites the agent's systemd unit from the server.
+// refreshUnitFile repairs the agent's systemd unit in place.
 //
 // A unit change is invisible to a binary-only update: the new binary can add
 // diagnostics for a journal it cannot read, but nothing adds the group that lets
-// it read one. This is what makes a fix like that reach devices unattended.
+// it read one. That group is the only thing an update changes.
 //
-// It fetches the raw template from the public endpoint rather than the
-// credential-authenticated one. The update service on a device installed before
-// that flag existed passes no credentials, and requiring them would silently
-// skip exactly the devices that most need the unit repaired.
-//
-// The ExecStart line is preserved from the running unit, because a device behind
-// a different server URL, or installed with a non-default binary path, must not
-// be silently repointed by an update.
-func refreshUnitFile(serverURL, service string, userSystemd bool, _ string, _ string) (bool, error) {
+// It used to replace the whole file with the server template. That silently
+// rewrote the identity and sandbox a different installer had chosen, and on the
+// dev test device it replaced a working root unit with one naming a user that
+// did not exist, so the service failed with 217/USER. Now an installed unit is
+// only patched; the template is written solely when there is no unit at all.
+func refreshUnitFile(serverURL, service string, userSystemd bool, deviceID, deviceToken string) (bool, error) {
 	if userSystemd {
 		// The user-systemd fallback unit has no group requirement and is written
 		// per user; leave it alone.
 		return false, nil
 	}
 
-	desired, err := fetchAgentUnit(serverURL)
-	if err != nil {
-		// An older server without the endpoint is tolerated: the binary update is
-		// the important part and must not be blocked by it. Anything else is a
-		// real failure and is reported, because a silently skipped unit refresh
-		// is how a device kept running without journal access after the fix.
-		if errors.Is(err, errUnitEndpointUnsupported) {
+	target := "/etc/systemd/system/" + service
+	current, readErr := os.ReadFile(target)
+
+	var desired string
+	if readErr == nil {
+		// The template lists groups for a general host. This one may not have
+		// docker, and systemd refuses to start a unit naming a group that is
+		// absent, so the line is recomputed from what exists here.
+		desired = applySupplementaryGroups(string(current), hostSupplementaryGroups())
+		if desired == string(current) {
 			return false, nil
 		}
-		return false, err
-	}
-
-	target := "/etc/systemd/system/" + service
-	if current, err := os.ReadFile(target); err == nil {
-		desired = mergeExecStart(string(current), desired)
-	}
-	// The template lists groups for a general host. This one may not have docker,
-	// and systemd refuses to start a unit naming a group that is absent, so the
-	// line is recomputed from what exists here.
-	desired = applySupplementaryGroups(desired, hostSupplementaryGroups())
-
-	if current, err := os.ReadFile(target); err == nil && desired == string(current) {
-		return false, nil
+	} else {
+		template, err := fetchAgentUnit(serverURL)
+		if err != nil {
+			// An older server without the endpoint is tolerated: the binary update
+			// is the important part and must not be blocked by it. Anything else is
+			// a real failure and is reported.
+			if errors.Is(err, errUnitEndpointUnsupported) {
+				return false, nil
+			}
+			return false, err
+		}
+		desired = renderUnitTemplate(template, executableOf(), serverURL, service, deviceID, deviceToken)
+		if strings.Contains(desired, "{{") {
+			return false, errors.New("unit template still contains placeholders that only the installer knows")
+		}
+		desired = applySupplementaryGroups(desired, hostSupplementaryGroups())
 	}
 
 	if err := os.WriteFile(target, []byte(desired), 0o644); err != nil {
@@ -505,6 +543,29 @@ func refreshUnitFile(serverURL, service string, userSystemd bool, _ string, _ st
 		return false, fmt.Errorf("systemctl daemon-reload after unit update: %w", err)
 	}
 	return true, nil
+}
+
+// renderUnitTemplate fills the placeholders the installer normally substitutes.
+// Only the credentials this process already holds are used; anything missing
+// stays a placeholder and is refused rather than written to disk.
+func renderUnitTemplate(template, executable, serverURL, service, deviceID, deviceToken string) string {
+	// A system unit has no --user-systemd flag, so this one is always empty and
+	// must not be treated as "unknown".
+	out := strings.ReplaceAll(template, "{{USER_FLAG}}", "")
+	replacements := map[string]string{
+		"{{AGENT_BINARY}}": executable,
+		"{{SERVER_URL}}":   serverURL,
+		"{{SERVICE_NAME}}": service,
+		"{{DEVICE_ID}}":    deviceID,
+		"{{DEVICE_TOKEN}}": deviceToken,
+	}
+	for placeholder, value := range replacements {
+		if value == "" {
+			continue
+		}
+		out = strings.ReplaceAll(out, placeholder, value)
+	}
+	return out
 }
 
 // hostSupplementaryGroups lists the groups this host actually has.
@@ -557,26 +618,6 @@ func applySupplementaryGroups(unit, groups string) string {
 	return strings.Join(out, "\n")
 }
 
-// mergeExecStart keeps the existing ExecStart when the new template does not
-// carry a usable one.
-func mergeExecStart(current, desired string) string {
-	if strings.Contains(desired, "ExecStart=/") {
-		return desired
-	}
-	for _, line := range strings.Split(current, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "ExecStart=") {
-			lines := strings.Split(desired, "\n")
-			for i, l := range lines {
-				if strings.HasPrefix(strings.TrimSpace(l), "ExecStart=") {
-					lines[i] = line
-				}
-			}
-			return strings.Join(lines, "\n")
-		}
-	}
-	return desired
-}
-
 func fetchAgentUnit(serverURL string) (string, error) {
 	return fetchUnitTemplate(serverURL, "agent")
 }
@@ -616,11 +657,9 @@ func fetchUnitTemplate(serverURL, name string) (string, error) {
 	if !strings.Contains(unit, "[Service]") {
 		return "", errors.New("unit response does not look like a systemd unit")
 	}
-	// Unresolved placeholders mean the server could not render it; writing this
-	// would break the service.
-	if strings.Contains(unit, "{{") {
-		return "", errors.New("unit still contains template placeholders")
-	}
+	// This is the raw template on purpose: the device credentials and the server
+	// URL are only known to the installed unit, so the caller renders it. The
+	// placeholder check belongs after that render, not here.
 	return unit, nil
 }
 
@@ -669,6 +708,11 @@ func requestUpdateForCurrentVersion(serverURL string) {
 		log.Printf("could not request agent update: %v", err)
 		return
 	}
+	saveAgentUpdateState(agentUpdateState{
+		Status:      agentUpdateRequested,
+		FromVersion: current,
+		ToVersion:   remote,
+	})
 	log.Printf("agent update requested: %s -> %s (see %s)", current, remote, AgentUpdateRequestPath)
 }
 

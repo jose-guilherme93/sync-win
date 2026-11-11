@@ -6,6 +6,8 @@
 
   export let devices: Device[] = []
   export let authHeaders: Record<string, string> = {}
+  // The version of the binary the server hands out. The fleet view uses it as
+  // the target when a device has never reported an update attempt of its own.
 
   type LogEntry = {
     id: number
@@ -98,6 +100,27 @@
   $: hasMore = offset < total
   $: levels = settings?.levels ?? []
   $: categories = settings?.categories ?? []
+
+  // Three audiences, three tabs. The log viewer is a debugging tool and the
+  // agent panel is an operations view; stacked on one page they pushed both
+  // below the fold.
+  type View = 'logs' | 'configuration'
+  let view: View = 'logs'
+  let logsLoaded = false
+
+  function showView(next: View) {
+    // Leaving the log tab hides its Live toggle; a stream that keeps appending
+    // behind a hidden panel is work nobody asked for.
+    if (view === 'logs' && next !== 'logs') {
+      live = false
+      stopStream()
+    }
+    view = next
+    if (next === 'logs' && !logsLoaded) {
+      logsLoaded = true
+      void reload()
+    }
+  }
 
   function fromFor(id: string): string {
     const window = RANGES.find((r) => r.id === id)
@@ -395,7 +418,8 @@
   onMount(() => {
     void loadSettings()
     void loadRetention()
-    reload()
+    logsLoaded = true
+    void reload()
   })
 
   onDestroy(() => {
@@ -411,21 +435,34 @@
       <p class="eyebrow">Administration</p>
       <h1>Settings</h1>
       <p class="muted">
-        Every structured event the server records — HTTP, auth, devices, commands and sync — the
-        thresholds that decide what is kept, and how long telemetry history is retained.
+        The application log and the retention windows that decide what the server keeps. The
+        agents' own health lives in the Agents screen, next to Findings.
       </p>
     </div>
-    <div class="head-actions">
-      {#if liveError}
-        <span class="live-error" role="status">{liveError}</span>
-      {/if}
-      <button class:active={live} class="ghost" on:click={toggleLive}>
-        {live ? 'Live · on' : 'Live · off'}
-      </button>
-      <button class="ghost" on:click={reload} disabled={loading}>Refresh</button>
-    </div>
+    {#if view === 'logs'}
+      <div class="head-actions">
+        {#if liveError}
+          <span class="live-error" role="status">{liveError}</span>
+        {/if}
+        <button class:active={live} class="ghost" on:click={toggleLive}>
+          {live ? 'Live · on' : 'Live · off'}
+        </button>
+        <button class="ghost" on:click={reload} disabled={loading}>Refresh</button>
+      </div>
+    {/if}
   </header>
 
+  <div class="view-tabs" role="tablist" aria-label="Settings sections">
+    <button role="tab" aria-selected={view === 'logs'} class:active={view === 'logs'} on:click={() => showView('logs')}>
+      Application log
+      {#if errors24h > 0}<span class="count warn">{errors24h}</span>{/if}
+    </button>
+    <button role="tab" aria-selected={view === 'configuration'} class:active={view === 'configuration'} on:click={() => showView('configuration')}>
+      Configuration
+    </button>
+  </div>
+
+  {#if view === 'logs'}
   <div class="stat-row">
     <div class="stat">
       <span class="k">Total entries</span>
@@ -535,7 +572,7 @@
       </div>
     {/if}
   {/if}
-
+  {:else}
   <section class="settings-card">
     <header>
       <h2>Log settings</h2>
@@ -639,6 +676,7 @@
       </div>
     {/if}
   </section>
+  {/if}
 </section>
 
 <style>
@@ -692,6 +730,52 @@
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0.6rem;
+  }
+
+  .view-tabs {
+    display: flex;
+    gap: 0.1rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .view-tabs button {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.5rem 0.7rem;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: 0.82rem;
+    cursor: pointer;
+    transition: color var(--t-fast), border-color var(--t-fast);
+  }
+
+  .view-tabs button:hover {
+    color: var(--text);
+  }
+
+  .view-tabs button.active {
+    color: var(--text-bright);
+    border-bottom-color: var(--accent);
+  }
+
+  .view-tabs .count {
+    min-width: 1.1rem;
+    padding: 0 0.3rem;
+    border-radius: var(--radius-pill);
+    background: var(--card-hover);
+    color: var(--text-faint);
+    font-size: 0.65rem;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+  }
+
+  .view-tabs .count.warn {
+    color: var(--warn);
   }
 
   .stat {

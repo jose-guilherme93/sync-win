@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -141,45 +142,50 @@ func TestParseAgentVersionRejectsInvalid(t *testing.T) {
 	}
 }
 
-func TestMergeExecStartKeepsExistingCommand(t *testing.T) {
-	current := "[Unit]\nDescription=SyncWin\n\n[Service]\nExecStart=/opt/custom/sync-win-agent daemon --server http://old:8080\nSupplementaryGroups=docker\n"
-	desired := "[Unit]\nDescription=SyncWin\n\n[Service]\nExecStart=/usr/local/bin/sync-win-agent daemon --server http://new:8080\nSupplementaryGroups=docker systemd-journal\n"
-
-	// The server renders its own ExecStart, which points at the public URL. A
-	// device installed from a different URL must keep its own, or an update
-	// silently repoints it.
-	got := mergeExecStart(current, strings.Replace(desired,
-		"ExecStart=/usr/local/bin/sync-win-agent daemon --server http://new:8080",
-		"ExecStart={{SERVER_URL}}", 1))
-	if !strings.Contains(got, "--server http://old:8080") {
-		t.Errorf("existing ExecStart lost:\n%s", got)
+// An installed unit is patched, never replaced: replacing it rewrote the
+// identity and sandbox another installer chose.
+func TestApplySupplementaryGroupsPatchesInPlace(t *testing.T) {
+	current := "[Unit]\nDescription=SyncWin dev agent\n\n[Service]\nUser=root\nExecStart=/usr/local/bin/sync-win-agent daemon --server http://old:8080\nRestart=always\n"
+	patched := applySupplementaryGroups(current, "docker systemd-journal")
+	if !strings.Contains(patched, "User=root") {
+		t.Errorf("local identity lost:\n%s", patched)
 	}
-	if !strings.Contains(got, "systemd-journal") {
-		t.Errorf("new group missing:\n%s", got)
+	if !strings.Contains(patched, "--server http://old:8080") {
+		t.Errorf("local ExecStart lost:\n%s", patched)
+	}
+	if !strings.Contains(patched, "SupplementaryGroups=docker systemd-journal") {
+		t.Errorf("journal group missing:\n%s", patched)
 	}
 }
 
-func TestMergeExecStartPrefersRenderedCommand(t *testing.T) {
-	current := "[Service]\nExecStart=/opt/custom/agent\n"
-	desired := "[Service]\nExecStart=/usr/local/bin/sync-win-agent daemon --server http://new:8080\nSupplementaryGroups=docker systemd-journal\n"
-	got := mergeExecStart(current, desired)
-	if !strings.Contains(got, "http://new:8080") {
-		t.Errorf("a rendered ExecStart should win:\n%s", got)
+func TestRenderUnitTemplateFillsWhatTheUpdateKnows(t *testing.T) {
+	template := "[Service]\nExecStart={{AGENT_BINARY}} daemon --server {{SERVER_URL}} --device-id {{DEVICE_ID}} --device-token {{DEVICE_TOKEN}}{{USER_FLAG}}\n"
+	got := renderUnitTemplate(template, "/usr/local/bin/sync-win-agent", "http://box:8080", "sync-win-agent.service", "dev-1", "secret")
+	if strings.Contains(got, "{{") {
+		t.Fatalf("placeholders survived rendering: %s", got)
+	}
+	if !strings.Contains(got, "--server http://box:8080 --device-id dev-1 --device-token secret") {
+		t.Fatalf("rendered command is wrong: %s", got)
 	}
 }
 
-func TestFetchAgentUnitRejectsUnrenderedTemplate(t *testing.T) {
+func TestFetchAgentUnitReturnsTheRawTemplate(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("[Service]\nExecStart={{SERVER_URL}}\n"))
 	}))
 	defer srv.Close()
 
-	// Writing this to /etc/systemd/system would break the service, so it must
-	// be rejected rather than installed.
-	if _, err := fetchAgentUnit(srv.URL); err == nil {
-		t.Fatal("expected an error for a unit still containing placeholders")
+	unit, err := fetchAgentUnit(srv.URL)
+	if err != nil {
+		t.Fatalf("the raw template must be fetchable: %v", err)
+	}
+	if !strings.Contains(unit, "{{SERVER_URL}}") {
+		t.Fatalf("the raw template lost its placeholders: %s", unit)
 	}
 }
+
+// With no installed unit to borrow the ExecStart from, the render cannot
+// finish; that must be an error, never a written unit with {{...}} in it.
 
 func TestFetchAgentUnitRejectsNonUnitResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -340,5 +346,141 @@ func TestJournalAccessDeniedDetectsPermissionFailures(t *testing.T) {
 		if got := journalAccessDenied(tc.status); got != tc.want {
 			t.Errorf("journalAccessDenied(%q) = %v, want %v", tc.status, got, tc.want)
 		}
+	}
+}
+
+func TestAgentUpdateStateRoundTrip(t *testing.T) {
+	t.Setenv("STATE_DIRECTORY", "")
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", dir)
+
+	saveAgentUpdateState(agentUpdateState{
+		Status:      agentUpdateFailed,
+		FromVersion: "0.10.0",
+		ToVersion:   "0.11.3",
+		Error:       "agent was built without an update signing key",
+	})
+
+	if !strings.HasPrefix(agentUpdateStatePath(), dir) {
+		t.Fatalf("state path %q escaped the test directory %q", agentUpdateStatePath(), dir)
+	}
+	state := loadAgentUpdateState()
+	if state.Status != agentUpdateFailed {
+		t.Errorf("status = %q, want %q", state.Status, agentUpdateFailed)
+	}
+	if state.FromVersion != "0.10.0" || state.ToVersion != "0.11.3" {
+		t.Errorf("versions = %q -> %q", state.FromVersion, state.ToVersion)
+	}
+	if state.Error == "" {
+		t.Error("the failure reason must survive the round trip")
+	}
+	if state.CheckedAt == "" {
+		t.Error("checked_at must be stamped when the outcome is recorded")
+	}
+}
+
+func TestUpdateFailureIsReportedForTheDashboard(t *testing.T) {
+	t.Setenv("STATE_DIRECTORY", "")
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "no version for you", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	executable := filepath.Join(t.TempDir(), "sync-win-agent")
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\necho 0.10.0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := updateAgentAt(executable, server.URL, "sync-win-agent.service", false); err == nil {
+		t.Fatal("expected the update to fail")
+	}
+
+	state := loadAgentUpdateState()
+	if state.Status != agentUpdateFailed {
+		t.Errorf("status = %q, want %q", state.Status, agentUpdateFailed)
+	}
+	if !strings.Contains(state.Error, "version endpoint") {
+		t.Errorf("error %q does not name the cause", state.Error)
+	}
+	if state.FromVersion != "0.10.0" {
+		t.Errorf("from_version = %q, want the version the device runs", state.FromVersion)
+	}
+}
+
+func TestUpdateStateIsAttachedToTelemetry(t *testing.T) {
+	t.Setenv("STATE_DIRECTORY", "")
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	saveAgentUpdateState(agentUpdateState{
+		Status:      agentUpdateFailed,
+		FromVersion: "0.10.0",
+		ToVersion:   "0.12.0",
+		Error:       "agent was built without an update signing key",
+	})
+
+	var stats telemetryStats
+	applyUpdateStateToStats(&stats)
+	if stats.AgentUpdateStatus != agentUpdateFailed {
+		t.Errorf("agent_update_status = %q, want %q", stats.AgentUpdateStatus, agentUpdateFailed)
+	}
+	if stats.AgentUpdateTarget != "0.12.0" {
+		t.Errorf("agent_update_target = %q", stats.AgentUpdateTarget)
+	}
+	if stats.AgentUpdateError == "" || stats.AgentUpdateAt == "" {
+		t.Error("error and timestamp must reach the telemetry payload")
+	}
+
+	// The names matter as much as the values: the server decodes this JSON.
+	payload, err := json.Marshal(stats)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"agent_update_status", "agent_update_target", "agent_update_error", "agent_update_at"} {
+		if !strings.Contains(string(payload), `"`+key+`"`) {
+			t.Errorf("telemetry payload has no %q: %s", key, payload)
+		}
+	}
+}
+
+// systemd passes a colon-separated list for StateDirectory. Taking the whole
+// string would resolve a path that resembles nothing and the daemon would read
+// a different file than the updater wrote.
+func TestUpdateStatePathUsesTheFirstStateDirectory(t *testing.T) {
+	t.Setenv("STATE_DIRECTORY", "/run/first:/run/second")
+	t.Setenv("XDG_STATE_HOME", "/tmp/ignored")
+	want := filepath.Join("/run/first", agentUpdateStateFile)
+	if got := agentUpdateStatePath(); got != want {
+		t.Fatalf("path = %q, want %q", got, want)
+	}
+}
+
+// The state directory is writable by the unprivileged agent, and the updater
+// writes there as root. A predictable temp name could be a planted symlink to
+// another root-writable file; the write must not follow it.
+func TestAgentUpdateStateWriteIgnoresAPlantedSymlink(t *testing.T) {
+	t.Setenv("STATE_DIRECTORY", "")
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", dir)
+
+	stateDir := filepath.Join(dir, "sync-win")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(dir, "victim")
+	if err := os.WriteFile(victim, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, filepath.Join(stateDir, agentUpdateStateFile+".tmp")); err != nil {
+		t.Fatal(err)
+	}
+
+	saveAgentUpdateState(agentUpdateState{Status: agentUpdateFailed})
+	if data, _ := os.ReadFile(victim); string(data) != "keep" {
+		t.Fatalf("the write followed the planted symlink: %q", data)
+	}
+	if state := loadAgentUpdateState(); state.Status != agentUpdateFailed {
+		t.Fatalf("state = %+v", state)
 	}
 }

@@ -1,6 +1,6 @@
 {
-  "contract_version": "1.10.0",
-  "agent_version": "0.11.4",
+  "contract_version": "1.12.0",
+  "agent_version": "0.11.5",
   "collection": {
     "max_file_bytes": 524288,
     "default_preference_files": [
@@ -143,14 +143,18 @@
       "cpu_model",
       "cpu_clock_mhz",
       "core_voltage_v",
-      "kernel",
+      "kernel_version",
       "operating_system",
       "power_watts",
       "architecture",
       "desktop_environment",
       "locale",
       "timezone",
-      "agent_version"
+      "agent_version",
+      "agent_update_status",
+      "agent_update_target",
+      "agent_update_error",
+      "agent_update_at"
     ],
     "rate_semantics": {
       "net_rx_rate": "Bytes per second, summed over real interfaces only. The dashboard must not re-sum network_ifaces.",

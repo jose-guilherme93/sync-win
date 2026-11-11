@@ -27,11 +27,12 @@
 
   function primaryDisk(device: Device): DiskPartition | null {
     const parts = (device.hardware?.disk_partitions ?? []).filter((part) => part.total_bytes > 0)
-    // Prefer the root filesystem. Containers report the host disk under
-    // /etc/hosts (a bind mount) instead of /, so the largest partition is the
-    // fallback that still shows something useful there.
-    return parts.find((part) => part.mount === '/')
-      ?? parts.reduce<DiskPartition | null>((largest, part) =>
+    // A tmpfs is RAM, not storage: /run sitting at 0% must not paint the fleet
+    // tile green while the real disk was simply not reported.
+    const storage = parts.filter((part) => part.fstype !== 'tmpfs')
+    if (storage.length === 0) return null
+    return storage.find((part) => part.mount === '/')
+      ?? storage.reduce<DiskPartition | null>((largest, part) =>
         !largest || part.total_bytes > largest.total_bytes ? part : largest, null)
   }
 
