@@ -268,9 +268,12 @@
   let enrollmentLoading = false
   let enrollmentAttempted = false
   let enrollmentError = ''
-  // Both capabilities are always enabled: an agent without remote access and
-  // without automatic updates is a device that cannot be fixed from here.
-  $: installQuery = 'ssh=1'
+  // Capabilities default to on; the installer asks for none of them because we
+  // always send an explicit value for each.
+  let installSsh = true
+  let installAutoupdate = true
+  let installLynis = true
+  $: installQuery = `ssh=${installSsh ? 1 : 0}&autoupdate=${installAutoupdate ? 1 : 0}&lynis=${installLynis ? 1 : 0}`
   $: installCommand = signedIn && enrollmentToken
     ? `curl -fsSL "${normalizedInstallServer}/install/${enrollmentToken}${installQuery ? `?${installQuery}` : ''}" -o /tmp/sync-win-install.sh && sudo bash /tmp/sync-win-install.sh`
     : ''
@@ -1818,7 +1821,7 @@
         <div>
           <p class="eyebrow">Installation</p>
           <h2 id="install-modal-title">Add a Linux device</h2>
-          <small>Run this once on the target machine. A temporary enrollment token is generated for each install.</small>
+          <small>Run once on the target machine.</small>
         </div>
         <button class="ghost" on:click={closeAddDevice}>Close</button>
       </div>
@@ -1830,29 +1833,25 @@
         </div>
       {/if}
 
-      {#if installServerIsLocal}
-        <div class="warn-banner" role="alert">
-          <strong>Dashboard accessed via localhost — this command only works on this machine.</strong>
-          To install on another device, replace the address below with the server's reachable address
-          (e.g. <code>http://100.x.x.x:8080</code>).
-        </div>
-      {/if}
-
       <div class="install-section">
         <span class="section-label">Capabilities</span>
         <div class="cap-toggles">
           <label class="toggle-row">
-            <input type="checkbox" checked disabled />
+            <input type="checkbox" bind:checked={installSsh} />
             <span class="toggle-text">
               <strong>SSH remote access</strong>
-              <em>Open a terminal from this dashboard. No port is opened on the device.</em>
             </span>
           </label>
           <label class="toggle-row">
-            <input type="checkbox" checked disabled />
+            <input type="checkbox" bind:checked={installAutoupdate} />
             <span class="toggle-text">
               <strong>Automatic updates</strong>
-              <em>Always on. A device without it never receives fixes.</em>
+            </span>
+          </label>
+          <label class="toggle-row">
+            <input type="checkbox" bind:checked={installLynis} />
+            <span class="toggle-text">
+              <strong>Security audit (lynis)</strong>
             </span>
           </label>
         </div>
@@ -1863,9 +1862,6 @@
           <span class="section-label">Agent connects to</span>
           <input type="text" bind:value={installServer} spellcheck="false" aria-label="Server address used by installed agents" />
         </label>
-        <small class="install-hint">
-          Dev stack: API on host port <strong>8088</strong>, server container on <strong>8080</strong>, dashboard on <strong>5173</strong>.
-        </small>
       </div>
 
       {#if enrollmentLoading}
@@ -1903,7 +1899,13 @@
           </div>
           <button class="ghost" on:click={() => copyText('sudo sync-win-agent set update on')}>Copy</button>
         </div>
-        <p class="muted">The agent never changes a capability on its own.</p>
+        <div class="cap-row">
+          <div class="cap-text">
+            <strong>Security audit (lynis)</strong>
+            <code>sudo sync-win-agent set lynis on</code>
+          </div>
+          <button class="ghost" on:click={() => copyText('sudo sync-win-agent set lynis on')}>Copy</button>
+        </div>
       </details>
     </div>
   </div>
