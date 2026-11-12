@@ -2574,6 +2574,14 @@ func cmdSet(args []string) error {
 		}
 		// Automatic updates are systemd units, not a policy key.
 		return cmdSetUpdate(enabled)
+	case "signals":
+		enabled, err := parseOnOff(value)
+		if err != nil {
+			return err
+		}
+		// Kill/renice from the dashboard. The server has its own gate
+		// (SYNCWIN_ENABLE_REMOTE_MUTATIONS); both must be on.
+		policy["allow_process_signals"] = enabled
 	case "lynis":
 		enabled, err := parseOnOff(value)
 		if err != nil {
