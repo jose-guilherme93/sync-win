@@ -502,3 +502,23 @@ func TestAgentUpdateStateWriteIgnoresAPlantedSymlink(t *testing.T) {
 		t.Fatalf("state = %+v", state)
 	}
 }
+
+func TestServerURLFromUnit(t *testing.T) {
+	cases := []struct {
+		name string
+		unit string
+		want string
+	}{
+		{"separate argument", "[Service]\nExecStart=/usr/local/bin/sync-win-agent daemon --server https://sync-win.example.org --device-id d\n", "https://sync-win.example.org"},
+		{"equals form", "[Service]\nExecStart=/usr/local/bin/sync-win-agent daemon --server=http://10.0.0.2:8086\n", "http://10.0.0.2:8086"},
+		{"quoted", "[Service]\nExecStart=/usr/local/bin/sync-win-agent daemon --server \"https://a.example\" \n", "https://a.example"},
+		{"absent", "[Service]\nExecStart=/usr/local/bin/sync-win-agent daemon\n", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := serverURLFromUnit(tc.unit); got != tc.want {
+				t.Fatalf("serverURLFromUnit = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

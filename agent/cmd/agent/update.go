@@ -41,7 +41,7 @@ type agentVersionResponse struct {
 
 func cmdUpdate(args []string) error {
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
-	serverURL := fs.String("server", "http://localhost:8080", "SyncWin server URL")
+	serverURL := fs.String("server", "", "SyncWin server URL (default: read from the installed agent unit)")
 	service := fs.String("service", "sync-win-agent.service", "systemd service name")
 	userSystemd := fs.Bool("user-systemd", false, "use the user systemd manager")
 	deviceID := fs.String("device-id", "", "device id, for the authenticated unit refresh")
@@ -50,6 +50,17 @@ func cmdUpdate(args []string) error {
 		return err
 	}
 	server := strings.TrimRight(*serverURL, "/")
+	if server == "" {
+		// A bare `sync-win-agent update` must work on the device it is installed
+		// on. The old default was http://localhost:8080, which is wrong on every
+		// production host: the server is published on another port or behind a
+		// proxy, so the command failed with "connection refused" while the timer
+		// (which passes --server) worked.
+		server = discoverServerURL(*service, *userSystemd)
+	}
+	if server == "" {
+		return fmt.Errorf("server URL is required: pass --server or install the agent unit first")
+	}
 
 	// Remove anything older installs left behind before doing any work. The
 	// update service runs as root every 15 minutes, so this is the place that
@@ -833,4 +844,63 @@ func waitForAgent(service string, userSystemd bool) error {
 		time.Sleep(time.Second)
 	}
 	return fmt.Errorf("service %s did not become active", service)
+}
+
+// discoverServerURL reads the server URL from the installed agent unit.
+//
+// The updater runs as root and the daemon's own unit already records the exact
+// URL this device talks to, so reading it here is both accurate and immune to
+// the port and proxy differences a hardcoded default gets wrong.
+func discoverServerURL(service string, userSystemd bool) string {
+	for _, path := range unitCandidatePaths(service, userSystemd) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if url := serverURLFromUnit(string(data)); url != "" {
+			return url
+		}
+	}
+	return ""
+}
+
+func unitCandidatePaths(service string, userSystemd bool) []string {
+	name := service
+	if !strings.HasSuffix(name, ".service") {
+		name += ".service"
+	}
+	if userSystemd {
+		if home, err := os.UserHomeDir(); err == nil {
+			return []string{filepath.Join(home, ".config/systemd/user", name)}
+		}
+		return nil
+	}
+	return []string{
+		filepath.Join("/etc/systemd/system", name),
+		filepath.Join("/lib/systemd/system", name),
+		filepath.Join("/usr/lib/systemd/system", name),
+	}
+}
+
+// serverURLFromUnit returns the value of --server in the unit's ExecStart.
+func serverURLFromUnit(unit string) string {
+	for _, line := range strings.Split(unit, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "ExecStart=") {
+			continue
+		}
+		fields := strings.Fields(strings.TrimPrefix(line, "ExecStart="))
+		for i, field := range fields {
+			if field == "--server" || strings.HasPrefix(field, "--server=") {
+				if field == "--server" {
+					if i+1 < len(fields) {
+						return strings.Trim(fields[i+1], "\"'")
+					}
+					return ""
+				}
+				return strings.Trim(strings.TrimPrefix(field, "--server="), "\"'")
+			}
+		}
+	}
+	return ""
 }
