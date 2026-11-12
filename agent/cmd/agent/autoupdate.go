@@ -47,13 +47,26 @@ func cmdSetUpdate(enable bool) error {
 
 	serverURL := discoverServerURL(service, false)
 	deviceID, deviceToken := "", ""
+	deviceTokenFile := ""
 	if unitPath != "" {
 		if data, err := os.ReadFile(unitPath); err == nil {
 			deviceID = unitFlagValue(string(data), "--device-id")
 			deviceToken = unitFlagValue(string(data), "--device-token")
+			deviceTokenFile = unitFlagValue(string(data), "--device-token-file")
 			if serverURL == "" {
 				serverURL = serverURLFromUnit(string(data))
 			}
+		}
+	}
+	if deviceToken == "" && deviceTokenFile != "" {
+		if data, err := os.ReadFile(deviceTokenFile); err == nil {
+			deviceToken = strings.TrimSpace(string(data))
+		}
+	}
+	if deviceToken == "" {
+		// Last resort: the installer's default token file location.
+		if data, err := os.ReadFile("/etc/sync-win/device-token"); err == nil {
+			deviceToken = strings.TrimSpace(string(data))
 		}
 	}
 	if serverURL == "" || deviceID == "" || deviceToken == "" {

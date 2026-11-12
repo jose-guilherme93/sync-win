@@ -2680,8 +2680,14 @@ SYNCWIN_TOKEN="%s"
 	if query.Get("ssh") == "1" {
 		preamble += "SYNCWIN_SSH_ON_INSTALL=\"1\"\n"
 	}
-	if query.Get("autoupdate") == "0" {
-		preamble += "SYNCWIN_AUTO_UPDATE=\"0\"\n"
+	if query.Get("ssh") == "0" {
+		preamble += "SYNCWIN_SSH_ON_INSTALL=\"0\"\n"
+	}
+	if v := query.Get("autoupdate"); v == "1" || v == "0" {
+		preamble += "SYNCWIN_AUTO_UPDATE=\"" + v + "\"\n"
+	}
+	if v := query.Get("lynis"); v == "1" || v == "0" {
+		preamble += "SYNCWIN_LYNIS=\"" + v + "\"\n"
 	}
 	script := preamble + "\n"
 	// Append the static installer from the embedded filesystem.
@@ -2737,7 +2743,6 @@ func (s *Server) handleAgentUnitTemplate(w http.ResponseWriter, r *http.Request)
 	unit := strings.NewReplacer(
 		"{{SERVER_URL}}", serverURL,
 		"{{DEVICE_ID}}", deviceID,
-		"{{DEVICE_TOKEN}}", token,
 	).Replace(string(template))
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")

@@ -46,6 +46,7 @@ func cmdUpdate(args []string) error {
 	userSystemd := fs.Bool("user-systemd", false, "use the user systemd manager")
 	deviceID := fs.String("device-id", "", "device id, for the authenticated unit refresh")
 	deviceToken := fs.String("device-token", "", "device token, for the authenticated unit refresh")
+	deviceTokenFile := fs.String("device-token-file", "", "path to file containing the device token, for the authenticated unit refresh")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -72,9 +73,21 @@ func cmdUpdate(args []string) error {
 	// state quietly yields nothing there. The flags come from the unit, which
 	// already carries the token for the daemon.
 	id, token := strings.TrimSpace(*deviceID), strings.TrimSpace(*deviceToken)
+	token = resolveDeviceToken(token, *deviceTokenFile)
 	if id == "" || token == "" {
 		if state := loadAgentState(); state != nil {
-			id, token = state.DeviceID, state.DeviceToken
+			if id == "" {
+				id = state.DeviceID
+			}
+			if token == "" {
+				token = state.DeviceToken
+			}
+		}
+	}
+	if token == "" {
+		// Fall back to the default token file location used by the installer.
+		if data, err := os.ReadFile("/etc/sync-win/device-token"); err == nil {
+			token = strings.TrimSpace(string(data))
 		}
 	}
 	return updateAgentAtIdentity(executableOf(), server, *service, *userSystemd, id, token)
@@ -910,4 +923,22 @@ func serverURLFromUnit(unit string) string {
 		}
 	}
 	return ""
+}
+
+// resolveDeviceToken prefers the explicit flag and falls back to the token
+// file the installer writes. The file exists so the credential never appears
+// in a unit that any local user can read.
+func resolveDeviceToken(token, tokenFile string) string {
+	if strings.TrimSpace(token) != "" {
+		return strings.TrimSpace(token)
+	}
+	path := strings.TrimSpace(tokenFile)
+	if path == "" {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }

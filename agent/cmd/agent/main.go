@@ -732,6 +732,7 @@ func cmdDaemon(args []string) {
 	serverURL := fs.String("server", "http://localhost:8080", "server URL")
 	deviceID := fs.String("device-id", "", "device ID")
 	deviceToken := fs.String("device-token", "", "device token")
+	deviceTokenFile := fs.String("device-token-file", "", "path to file containing the device token")
 	interval := fs.Duration("interval", time.Duration(syncwinContract.Telemetry.IntervalSecondsDefault)*time.Second, "telemetry interval")
 	preferenceInterval := fs.Duration("preference-interval", time.Duration(syncwinContract.PreferencesSync.IntervalSecondsDefault)*time.Second, "preference sync interval")
 	appsInterval := fs.Duration("apps-interval", time.Duration(syncwinContract.AppsInventory.RefreshIntervalSeconds)*time.Second, "application inventory interval")
@@ -758,6 +759,10 @@ func cmdDaemon(args []string) {
 	}
 
 	state := loadAgentState()
+
+	// The installer writes the token to a 0640 file and the unit points at it,
+	// so the credential never sits in a world-readable unit.
+	*deviceToken = resolveDeviceToken(*deviceToken, *deviceTokenFile)
 
 	// If credentials not provided via flags, load from state file.
 	if strings.TrimSpace(*deviceID) == "" {
@@ -2542,7 +2547,7 @@ func policyDefaultsMap() map[string]any {
 // Linux account the ephemeral key will target.
 func cmdSet(args []string) error {
 	if len(args) != 2 {
-		return fmt.Errorf("usage: sync-win-agent set <ssh|ssh-user|update> <on|off|username>")
+		return fmt.Errorf("usage: sync-win-agent set <ssh|ssh-user|update|lynis> <on|off|username>")
 	}
 	key := strings.TrimSpace(args[0])
 	value := strings.TrimSpace(args[1])
@@ -2569,8 +2574,14 @@ func cmdSet(args []string) error {
 		}
 		// Automatic updates are systemd units, not a policy key.
 		return cmdSetUpdate(enabled)
+	case "lynis":
+		enabled, err := parseOnOff(value)
+		if err != nil {
+			return err
+		}
+		policy["allow_lynis_audit"] = enabled
 	default:
-		return fmt.Errorf("unknown setting %q (supported: ssh, ssh-user, update)", key)
+		return fmt.Errorf("unknown setting %q (supported: ssh, ssh-user, update, lynis)", key)
 	}
 
 	if err := writePolicyMap(path, policy); err != nil {

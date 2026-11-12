@@ -522,3 +522,20 @@ func TestServerURLFromUnit(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveDeviceToken(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "token")
+	if err := os.WriteFile(path, []byte("  from-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolveDeviceToken("from-flag", path); got != "from-flag" {
+		t.Fatalf("explicit flag = %q", got)
+	}
+	if got := resolveDeviceToken("", path); got != "from-file" {
+		t.Fatalf("file token = %q, want trimmed from-file", got)
+	}
+	if got := resolveDeviceToken("", filepath.Join(dir, "missing")); got != "" {
+		t.Fatalf("missing file = %q, want empty", got)
+	}
+}

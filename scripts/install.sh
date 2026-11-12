@@ -61,7 +61,7 @@ LEGACY_USER="lem"
 # screen may preset them through the install command.
 SYNCWIN_AUTO_UPDATE="${SYNCWIN_AUTO_UPDATE:-}"
 SYNCWIN_SSH_ON_INSTALL="${SYNCWIN_SSH_ON_INSTALL:-}"
-SYNCWIN_INSTALL_LYNIS="${SYNCWIN_INSTALL_LYNIS:-}"
+SYNCWIN_LYNIS="${SYNCWIN_LYNIS:-}"
 SYNCWIN_YES="${SYNCWIN_YES:-0}"
 
 # Temp directory for downloads (cleaned up on exit)
@@ -88,11 +88,13 @@ fi
 # Logging helpers
 # =============================================================================
 
-info()    { printf "${BLUE}[info]${NC}  %s\n" "$*"; }
-success() { printf "${GREEN}[  ok]${NC}  %s\n" "$*"; }
+# Quiet by default: a successful install prints only the phase lines below.
+# Warnings and errors always print. Set SYNCWIN_VERBOSE=1 for the full chatter.
+info()    { [ "${SYNCWIN_VERBOSE:-0}" = "1" ] && printf "${BLUE}[info]${NC}  %s\n" "$*" || true; }
+success() { [ "${SYNCWIN_VERBOSE:-0}" = "1" ] && printf "${GREEN}[  ok]${NC}  %s\n" "$*" || true; }
 warn()    { printf "${YELLOW}[warn]${NC}  %s\n" "$*"; }
 error()   { printf "${RED}[FAIL]${NC}  %s\n" "$*" >&2; }
-step()    { printf "\n${BOLD}[%s/%s]${NC} %s\n" "$1" "$TOTAL_STEPS" "$2"; }
+step()    { [ "${SYNCWIN_VERBOSE:-0}" = "1" ] && printf "\n${BOLD}[%s/%s]${NC} %s\n" "$1" "$TOTAL_STEPS" "$2" || true; }
 
 # =============================================================================
 # Cleanup and rollback
@@ -213,7 +215,7 @@ install_lynis() {
         success "Lynis is installed (security audits available)"
         return 0
     fi
-    if [ "${SYNCWIN_INSTALL_LYNIS:-1}" != "1" ]; then
+    if [ "${SYNCWIN_LYNIS:-1}" != "1" ]; then
         info "Lynis skipped (security audits unavailable)"
         return 0
     fi
@@ -307,6 +309,7 @@ check_dependencies() {
     # Lynis is optional, so this never aborts the install. It is what makes the
     # Security screen's audits available, so when the operator opted in we try to
     # install it here rather than only printing a hint.
+    printf '%s\n' "installing lynis"
     install_lynis
 }
 
@@ -625,7 +628,7 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/sync-win-agent daemon --server {{SERVER_URL}} --device-id {{DEVICE_ID}} --device-token {{DEVICE_TOKEN}}
+ExecStart=/usr/local/bin/sync-win-agent daemon --server {{SERVER_URL}} --device-id {{DEVICE_ID}} --device-token-file /etc/sync-win/device-token
 Restart=always
 RestartSec=5
 
@@ -716,7 +719,6 @@ install_auto_update() {
         -e "s|{{SERVICE_NAME}}|${SYNCWIN_SERVICE_NAME}|g" \
         -e "s|{{USER_FLAG}}||g" \
         -e "s|{{DEVICE_ID}}|${DEVICE_ID}|g" \
-        -e "s|{{DEVICE_TOKEN}}|${DEVICE_TOKEN}|g" \
         "$SYNCWIN_UPDATE_SERVICE_TEMPLATE" > "$SYNCWIN_UPDATE_SERVICE_FILE"
     cp "$SYNCWIN_UPDATE_TIMER_TEMPLATE" "$SYNCWIN_UPDATE_TIMER_FILE"
     cp "$SYNCWIN_UPDATE_PATH_TEMPLATE" "$SYNCWIN_UPDATE_PATH_FILE"
@@ -814,12 +816,12 @@ prompt_capabilities() {
     fi
     # Lynis defaults to yes: without it the Security screen has no audit data.
     # It is a read-only scanner, so the operator can still decline it.
-    if [ -z "${SYNCWIN_INSTALL_LYNIS}" ]; then
-        SYNCWIN_INSTALL_LYNIS=1
+    if [ -z "${SYNCWIN_LYNIS}" ]; then
+        SYNCWIN_LYNIS=1
         if [ "${SYNCWIN_YES}" != "1" ] && [ -t 0 ]; then
             local answer
             read -r -p "Install Lynis for security audits? [Y/n] " answer || true
-            case "${answer}" in [Nn]*) SYNCWIN_INSTALL_LYNIS=0 ;; esac
+            case "${answer}" in [Nn]*) SYNCWIN_LYNIS=0 ;; esac
         fi
     fi
     if [ "${SYNCWIN_AUTO_UPDATE}" = "1" ]; then
@@ -832,7 +834,7 @@ prompt_capabilities() {
     else
         info "Remote access (SSH): disabled (enable later with: sudo sync-win-agent set ssh on)"
     fi
-    if [ "${SYNCWIN_INSTALL_LYNIS}" = "1" ]; then
+    if [ "${SYNCWIN_LYNIS}" = "1" ]; then
         info "Lynis security audits: install on request"
     else
         info "Lynis security audits: skipped"
@@ -968,10 +970,17 @@ configure_service() {
         home_dir="/home/$current_user"
     fi
 
+    # Store the device token outside the unit file so it is not world-readable
+    # through /etc/systemd/system (mode 0644). The agent runs as the sync-win
+    # user, which is in the sync-win group, so a 0640 root:sync-win file keeps
+    # it readable by the agent and by no one else.
+    printf '%s\n' "$DEVICE_TOKEN" > "${SYNCWIN_CONFIG_DIR}/device-token"
+    chown "root:${SYNCWIN_GROUP}" "${SYNCWIN_CONFIG_DIR}/device-token"
+    chmod 0640 "${SYNCWIN_CONFIG_DIR}/device-token"
+
     sed -i \
         -e "s|{{SERVER_URL}}|${SYNCWIN_SERVER}|g" \
         -e "s|{{DEVICE_ID}}|${DEVICE_ID}|g" \
-        -e "s|{{DEVICE_TOKEN}}|${DEVICE_TOKEN}|g" \
         "$SYNCWIN_SERVICE_FILE"
 
     systemctl daemon-reload
@@ -1092,6 +1101,7 @@ main() {
     detect_arch
     step "3" "Validating environment..."
     validate_environment
+    printf '%s\n' "installing dependencies"
     step "4" "Checking dependencies..."
     check_dependencies
     step "5" "Creating user and directories..."
@@ -1108,8 +1118,10 @@ main() {
     download_unit_templates
     step "8" "Verifying integrity..."
     verify_checksum
+    printf '%s\n' "installing agent"
     step "9" "Installing binary and service..."
     install_binary
+    printf '%s\n' "installing systemd services"
     install_systemd_service
     step "10" "Enrolling device and starting service..."
     enroll_device
@@ -1129,7 +1141,10 @@ main() {
     ROLLBACK_NEEDED=""
     discard_backups
 
-    print_summary
+    if [ "${SYNCWIN_VERBOSE:-0}" = "1" ]; then
+        print_summary
+    fi
+    printf '%s\n' "done"
 }
 
 main "$@"
