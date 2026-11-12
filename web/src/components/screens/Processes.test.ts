@@ -375,13 +375,14 @@ describe('Processes screen interactions', () => {
     expect(screen.getByText(/100 · ppid 0/)).toBeTruthy()
   })
 
-  it('kill modal confirm stays disabled until the pid is typed', async () => {
+  it('kill popover confirm stays disabled until the pid is typed', async () => {
     render(Processes, { props: { deviceId: 'dev-1' } })
     await vi.waitFor(() => expect(screen.getByText('postgres')).toBeTruthy())
 
     const row = screen.getByText('postgres').closest('tr') as HTMLElement
     await fireEvent.click(row.querySelector('button[title="KILL"]') as HTMLElement)
-    await vi.waitFor(() => expect(screen.getByText('Kill postgres?')).toBeTruthy())
+    await vi.waitFor(() => expect(screen.getByRole('dialog', { name: 'Kill confirmation' })).toBeTruthy())
+    expect(screen.getByText('Kill postgres')).toBeTruthy()
 
     const confirm = screen.getByRole('button', { name: 'Kill' }) as HTMLButtonElement
     expect(confirm.disabled).toBe(true)
@@ -389,17 +390,24 @@ describe('Processes screen interactions', () => {
     const input = screen.getByPlaceholderText('200') as HTMLInputElement
     await fireEvent.input(input, { target: { value: '200' } })
     await vi.waitFor(() => expect((screen.getByRole('button', { name: 'Kill' }) as HTMLButtonElement).disabled).toBe(false))
+
+    await fireEvent.keyDown(window, { key: 'Escape' })
+    await vi.waitFor(() => expect(screen.queryByRole('dialog', { name: 'Kill confirmation' })).toBeNull())
   })
 
-  it('kill modal blocked variant shows the reason instead of the pid input', async () => {
+  it('kill popover blocked variant shows Blocked · protected and no input', async () => {
     render(Processes, { props: { deviceId: 'dev-1' } })
     await vi.waitFor(() => expect(screen.getByText('systemd')).toBeTruthy())
 
     const row = screen.getByText('systemd').closest('tr') as HTMLElement
     await fireEvent.click(row.querySelector('button[title="KILL"]') as HTMLElement)
-    await vi.waitFor(() => expect(screen.getByText(/Blocked:/)).toBeTruthy())
+    await vi.waitFor(() => expect(screen.getByText('Blocked · protected')).toBeTruthy())
     expect(screen.queryByPlaceholderText('1')).toBeNull()
-    expect((screen.getByRole('button', { name: 'Kill' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByRole('button', { name: 'Kill' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Close' })).toBeTruthy()
+
+    await fireEvent.keyDown(window, { key: 'Escape' })
+    await vi.waitFor(() => expect(screen.queryByRole('dialog', { name: 'Kill confirmation' })).toBeNull())
   })
 
   it('history range switch and a heatmap cell filter the live view to that window', async () => {
