@@ -666,36 +666,9 @@ func fetchAgentUnit(serverURL, deviceID, deviceToken string) (string, error) {
 // errUnitEndpointUnsupported so reconcileUnit skips the unit and still lets the
 // binary update land, instead of writing a unit systemd cannot start.
 func fetchUnitTemplate(serverURL, name, deviceID, deviceToken string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		serverURL+"/api/agent/units?name="+name, nil)
+	unit, err := fetchUnitBody(serverURL, name)
 	if err != nil {
 		return "", err
-	}
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		// An older server has no such route, and a current one has no template on
-		// disk. Either way the endpoint is simply unavailable, which must not be
-		// confused with a failure worth reporting.
-		return "", errUnitEndpointUnsupported
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("unit endpoint returned %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-	if err != nil {
-		return "", err
-	}
-	unit := string(body)
-	if !strings.Contains(unit, "[Service]") {
-		return "", errors.New("unit response does not look like a systemd unit")
 	}
 	// Only fill a placeholder with a value we actually have: replacing it with
 	// an empty string hides the fact that the credential is missing.
@@ -715,6 +688,40 @@ func fetchUnitTemplate(serverURL, name, deviceID, deviceToken string) (string, e
 	// Anything still unresolved would break the unit systemd reads next.
 	if strings.Contains(unit, "{{") {
 		return "", errUnitEndpointUnsupported
+	}
+	return unit, nil
+}
+
+// fetchUnitBody downloads a raw unit template, placeholders included. The
+// installer and `set update on` render it themselves.
+func fetchUnitBody(serverURL, name string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		serverURL+"/api/agent/units?name="+name, nil)
+	if err != nil {
+		return "", err
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return "", errUnitEndpointUnsupported
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("unit endpoint returned %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if err != nil {
+		return "", err
+	}
+	unit := string(body)
+	if !strings.Contains(unit, "[Service]") && !strings.Contains(unit, "[Timer]") && !strings.Contains(unit, "[Path]") {
+		return "", errors.New("unit response does not look like a systemd unit")
 	}
 	return unit, nil
 }

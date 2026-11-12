@@ -2542,7 +2542,7 @@ func policyDefaultsMap() map[string]any {
 // Linux account the ephemeral key will target.
 func cmdSet(args []string) error {
 	if len(args) != 2 {
-		return fmt.Errorf("usage: sync-win-agent set <ssh|ssh-user> <on|off|username>")
+		return fmt.Errorf("usage: sync-win-agent set <ssh|ssh-user|update> <on|off|username>")
 	}
 	key := strings.TrimSpace(args[0])
 	value := strings.TrimSpace(args[1])
@@ -2562,8 +2562,15 @@ func cmdSet(args []string) error {
 			return fmt.Errorf("invalid user name: %q", value)
 		}
 		policy["ssh_user"] = value
+	case "update":
+		enabled, err := parseOnOff(value)
+		if err != nil {
+			return err
+		}
+		// Automatic updates are systemd units, not a policy key.
+		return cmdSetUpdate(enabled)
 	default:
-		return fmt.Errorf("unknown setting %q (supported: ssh, ssh-user)", key)
+		return fmt.Errorf("unknown setting %q (supported: ssh, ssh-user, update)", key)
 	}
 
 	if err := writePolicyMap(path, policy); err != nil {
