@@ -41,15 +41,27 @@ type agentVersionResponse struct {
 
 func cmdUpdate(args []string) error {
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
-	serverURL := fs.String("server", "http://localhost:8080", "SyncWin server URL")
+	serverURL := fs.String("server", "", "SyncWin server URL (default: read from the installed agent unit)")
 	service := fs.String("service", "sync-win-agent.service", "systemd service name")
 	userSystemd := fs.Bool("user-systemd", false, "use the user systemd manager")
 	deviceID := fs.String("device-id", "", "device id, for the authenticated unit refresh")
 	deviceToken := fs.String("device-token", "", "device token, for the authenticated unit refresh")
+	deviceTokenFile := fs.String("device-token-file", "", "path to file containing the device token, for the authenticated unit refresh")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	server := strings.TrimRight(*serverURL, "/")
+	if server == "" {
+		// A bare `sync-win-agent update` must work on the device it is installed
+		// on. The old default was http://localhost:8080, which is wrong on every
+		// production host: the server is published on another port or behind a
+		// proxy, so the command failed with "connection refused" while the timer
+		// (which passes --server) worked.
+		server = discoverServerURL(*service, *userSystemd)
+	}
+	if server == "" {
+		return fmt.Errorf("server URL is required: pass --server or install the agent unit first")
+	}
 
 	// Remove anything older installs left behind before doing any work. The
 	// update service runs as root every 15 minutes, so this is the place that
@@ -61,9 +73,21 @@ func cmdUpdate(args []string) error {
 	// state quietly yields nothing there. The flags come from the unit, which
 	// already carries the token for the daemon.
 	id, token := strings.TrimSpace(*deviceID), strings.TrimSpace(*deviceToken)
+	token = resolveDeviceToken(token, *deviceTokenFile)
 	if id == "" || token == "" {
 		if state := loadAgentState(); state != nil {
-			id, token = state.DeviceID, state.DeviceToken
+			if id == "" {
+				id = state.DeviceID
+			}
+			if token == "" {
+				token = state.DeviceToken
+			}
+		}
+	}
+	if token == "" {
+		// Fall back to the default token file location used by the installer.
+		if data, err := os.ReadFile("/etc/sync-win/device-token"); err == nil {
+			token = strings.TrimSpace(string(data))
 		}
 	}
 	return updateAgentAtIdentity(executableOf(), server, *service, *userSystemd, id, token)
@@ -99,32 +123,65 @@ func updateAgentAt(executable, serverURL, service string, userSystemd bool) erro
 // authenticate. They are optional so the existing callers and tests keep working
 // without them.
 func updateAgentAtIdentity(executable, serverURL, service string, userSystemd bool, deviceID, deviceToken string) error {
+	current, err := installedAgentVersion(executable)
+	if err != nil {
+		// The version probe itself failed, so there is no attempt to report as
+		// current or updated. Record it so the dashboard can show why this
+		// device never updates instead of leaving it reading as unknown.
+		saveAgentUpdateState(agentUpdateState{
+			Status: agentUpdateFailed,
+			Error:  err.Error(),
+		})
+		return err
+	}
+	remote, err := performAgentUpdate(executable, serverURL, service, userSystemd, deviceID, deviceToken, current)
+	if err != nil {
+		saveAgentUpdateState(agentUpdateState{
+			Status:      agentUpdateFailed,
+			FromVersion: current,
+			ToVersion:   remote,
+			Error:       err.Error(),
+		})
+		return err
+	}
+	status := agentUpdateCurrent
+	if remote != "" && remote != current {
+		status = agentUpdateUpdated
+	}
+	saveAgentUpdateState(agentUpdateState{
+		Status:      status,
+		FromVersion: current,
+		ToVersion:   remote,
+	})
+	return nil
+}
+
+// performAgentUpdate is the update body. It returns the version the server
+// offers, even when the attempt fails, so the caller can record what it was
+// trying to reach.
+func performAgentUpdate(executable, serverURL, service string, userSystemd bool, deviceID, deviceToken, current string) (string, error) {
 	if serverURL == "" {
-		return fmt.Errorf("server URL is required")
+		return "", fmt.Errorf("server URL is required")
 	}
 	remote, err := fetchAgentVersion(serverURL)
 	if err != nil {
-		return err
-	}
-	current, err := installedAgentVersion(executable)
-	if err != nil {
-		return err
+		return "", err
 	}
 	newer, err := newerAgentVersion(remote, current)
 	if err != nil {
-		return err
+		return remote, err
 	}
 	if !newer {
 		fmt.Printf("SyncWin agent is current: %s\n", current)
 		// A unit change is independent of the binary. An agent can be current
 		// while its unit is stale or missing entirely, which is how a device
 		// kept running without systemd-journal after the fix shipped.
-		return reconcileUnit(serverURL, service, userSystemd, deviceID, deviceToken)
+		return current, reconcileUnit(serverURL, service, userSystemd, deviceID, deviceToken)
 	}
 
 	temp, err := downloadAgent(serverURL, executable)
 	if err != nil {
-		return err
+		return remote, err
 	}
 	defer os.Remove(temp)
 
@@ -133,42 +190,42 @@ func updateAgentAtIdentity(executable, serverURL, service string, userSystemd bo
 	// runs it) until it is proven to come from the trusted key.
 	signature, err := downloadAgentSignature(serverURL)
 	if err != nil {
-		return err
+		return remote, err
 	}
 	if err := verifyAgentSignature(temp, signature); err != nil {
-		return err
+		return remote, err
 	}
 	if err := verifyAgentChecksum(serverURL, temp); err != nil {
-		return err
+		return remote, err
 	}
 	if err := os.Chmod(temp, 0o755); err != nil {
-		return fmt.Errorf("chmod downloaded agent: %w", err)
+		return remote, fmt.Errorf("chmod downloaded agent: %w", err)
 	}
 	downloadedVersion, err := installedAgentVersion(temp)
 	if err != nil {
-		return err
+		return remote, err
 	}
 	if downloadedVersion != remote {
-		return fmt.Errorf("downloaded agent version %q does not match server version %q", downloadedVersion, remote)
+		return remote, fmt.Errorf("downloaded agent version %q does not match server version %q", downloadedVersion, remote)
 	}
 
 	backup := executable + ".rollback"
 	_ = os.Remove(backup)
 	if err := copyFile(executable, backup, 0o755); err != nil {
-		return fmt.Errorf("backup current agent: %w", err)
+		return remote, fmt.Errorf("backup current agent: %w", err)
 	}
 	if err := os.Rename(temp, executable); err != nil {
-		return fmt.Errorf("install downloaded agent: %w", err)
+		return remote, fmt.Errorf("install downloaded agent: %w", err)
 	}
 	if err := restartAgent(service, userSystemd); err != nil {
 		_ = copyFile(backup, executable, 0o755)
 		_ = restartAgent(service, userSystemd)
-		return fmt.Errorf("new agent failed to start; rolled back: %w", err)
+		return remote, fmt.Errorf("new agent failed to start; rolled back: %w", err)
 	}
 	if err := waitForAgent(service, userSystemd); err != nil {
 		_ = copyFile(backup, executable, 0o755)
 		_ = restartAgent(service, userSystemd)
-		return fmt.Errorf("new agent failed health check; rolled back: %w", err)
+		return remote, fmt.Errorf("new agent failed health check; rolled back: %w", err)
 	}
 
 	// Rewrite the unit after the binary is proven good, then restart so a unit
@@ -180,7 +237,7 @@ func updateAgentAtIdentity(executable, serverURL, service string, userSystemd bo
 
 	_ = os.Remove(backup)
 	fmt.Printf("SyncWin agent updated: %s -> %s\n", current, remote)
-	return nil
+	return remote, nil
 }
 
 // reconcileUnit rewrites the systemd unit from the server and restarts the
@@ -224,6 +281,9 @@ func reconcileHelperUnit(serverURL string) (bool, error) {
 			return false, nil
 		}
 		return false, err
+	}
+	if strings.Contains(desired, "{{") {
+		return false, errors.New("helper unit still contains template placeholders")
 	}
 	if current, err := os.ReadFile(target); err == nil && desired == string(current) {
 		return false, nil
@@ -452,17 +512,17 @@ func copyFile(source, destination string, mode os.FileMode) error {
 	return output.Close()
 }
 
-// refreshUnitFile rewrites the agent's systemd unit from the server.
+// refreshUnitFile repairs the agent's systemd unit in place.
 //
 // A unit change is invisible to a binary-only update: the new binary can add
 // diagnostics for a journal it cannot read, but nothing adds the group that lets
-// it read one. This is what makes a fix like that reach devices unattended.
+// it read one. That group is the only thing an update changes.
 //
-// It fetches the raw template from the public endpoint and fills the
-// placeholders with the credentials the update command does have. A device
-// installed before those flags existed passes none: the placeholders stay
-// unresolved and the refresh is skipped (the binary update still lands) rather
-// than writing a unit systemd cannot start.
+// It used to replace the whole file with the server template. That silently
+// rewrote the identity and sandbox a different installer had chosen, and on the
+// dev test device it replaced a working root unit with one naming a user that
+// did not exist, so the service failed with 217/USER. Now an installed unit is
+// only patched; the template is written solely when there is no unit at all.
 //
 // The ExecStart line is preserved from the running unit, because a device behind
 // a different server URL, or installed with a non-default binary path, must not
@@ -474,29 +534,34 @@ func refreshUnitFile(serverURL, service string, userSystemd bool, deviceID, devi
 		return false, nil
 	}
 
-	desired, err := fetchAgentUnit(serverURL, deviceID, deviceToken)
-	if err != nil {
-		// An older server without the endpoint is tolerated: the binary update is
-		// the important part and must not be blocked by it. Anything else is a
-		// real failure and is reported, because a silently skipped unit refresh
-		// is how a device kept running without journal access after the fix.
-		if errors.Is(err, errUnitEndpointUnsupported) {
+	target := "/etc/systemd/system/" + service
+	current, readErr := os.ReadFile(target)
+
+	var desired string
+	if readErr == nil {
+		// The template lists groups for a general host. This one may not have
+		// docker, and systemd refuses to start a unit naming a group that is
+		// absent, so the line is recomputed from what exists here.
+		desired = applySupplementaryGroups(string(current), hostSupplementaryGroups())
+		if desired == string(current) {
 			return false, nil
 		}
-		return false, err
-	}
-
-	target := "/etc/systemd/system/" + service
-	if current, err := os.ReadFile(target); err == nil {
-		desired = mergeExecStart(string(current), desired)
-	}
-	// The template lists groups for a general host. This one may not have docker,
-	// and systemd refuses to start a unit naming a group that is absent, so the
-	// line is recomputed from what exists here.
-	desired = applySupplementaryGroups(desired, hostSupplementaryGroups())
-
-	if current, err := os.ReadFile(target); err == nil && desired == string(current) {
-		return false, nil
+	} else {
+		template, err := fetchAgentUnit(serverURL, deviceID, deviceToken)
+		if err != nil {
+			// An older server without the endpoint is tolerated: the binary update
+			// is the important part and must not be blocked by it. Anything else is
+			// a real failure and is reported.
+			if errors.Is(err, errUnitEndpointUnsupported) {
+				return false, nil
+			}
+			return false, err
+		}
+		desired = renderUnitTemplate(template, executableOf(), serverURL, service, deviceID, deviceToken)
+		if strings.Contains(desired, "{{") {
+			return false, errors.New("unit template still contains placeholders that only the installer knows")
+		}
+		desired = applySupplementaryGroups(desired, hostSupplementaryGroups())
 	}
 
 	if err := os.WriteFile(target, []byte(desired), 0o644); err != nil {
@@ -506,6 +571,29 @@ func refreshUnitFile(serverURL, service string, userSystemd bool, deviceID, devi
 		return false, fmt.Errorf("systemctl daemon-reload after unit update: %w", err)
 	}
 	return true, nil
+}
+
+// renderUnitTemplate fills the placeholders the installer normally substitutes.
+// Only the credentials this process already holds are used; anything missing
+// stays a placeholder and is refused rather than written to disk.
+func renderUnitTemplate(template, executable, serverURL, service, deviceID, deviceToken string) string {
+	// A system unit has no --user-systemd flag, so this one is always empty and
+	// must not be treated as "unknown".
+	out := strings.ReplaceAll(template, "{{USER_FLAG}}", "")
+	replacements := map[string]string{
+		"{{AGENT_BINARY}}": executable,
+		"{{SERVER_URL}}":   serverURL,
+		"{{SERVICE_NAME}}": service,
+		"{{DEVICE_ID}}":    deviceID,
+		"{{DEVICE_TOKEN}}": deviceToken,
+	}
+	for placeholder, value := range replacements {
+		if value == "" {
+			continue
+		}
+		out = strings.ReplaceAll(out, placeholder, value)
+	}
+	return out
 }
 
 // hostSupplementaryGroups lists the groups this host actually has.
@@ -591,36 +679,9 @@ func fetchAgentUnit(serverURL, deviceID, deviceToken string) (string, error) {
 // errUnitEndpointUnsupported so reconcileUnit skips the unit and still lets the
 // binary update land, instead of writing a unit systemd cannot start.
 func fetchUnitTemplate(serverURL, name, deviceID, deviceToken string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		serverURL+"/api/agent/units?name="+name, nil)
+	unit, err := fetchUnitBody(serverURL, name)
 	if err != nil {
 		return "", err
-	}
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		// An older server has no such route, and a current one has no template on
-		// disk. Either way the endpoint is simply unavailable, which must not be
-		// confused with a failure worth reporting.
-		return "", errUnitEndpointUnsupported
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("unit endpoint returned %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-	if err != nil {
-		return "", err
-	}
-	unit := string(body)
-	if !strings.Contains(unit, "[Service]") {
-		return "", errors.New("unit response does not look like a systemd unit")
 	}
 	// Only fill a placeholder with a value we actually have: replacing it with
 	// an empty string hides the fact that the credential is missing.
@@ -640,6 +701,40 @@ func fetchUnitTemplate(serverURL, name, deviceID, deviceToken string) (string, e
 	// Anything still unresolved would break the unit systemd reads next.
 	if strings.Contains(unit, "{{") {
 		return "", errUnitEndpointUnsupported
+	}
+	return unit, nil
+}
+
+// fetchUnitBody downloads a raw unit template, placeholders included. The
+// installer and `set update on` render it themselves.
+func fetchUnitBody(serverURL, name string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		serverURL+"/api/agent/units?name="+name, nil)
+	if err != nil {
+		return "", err
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return "", errUnitEndpointUnsupported
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("unit endpoint returned %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if err != nil {
+		return "", err
+	}
+	unit := string(body)
+	if !strings.Contains(unit, "[Service]") && !strings.Contains(unit, "[Timer]") && !strings.Contains(unit, "[Path]") {
+		return "", errors.New("unit response does not look like a systemd unit")
 	}
 	return unit, nil
 }
@@ -689,6 +784,11 @@ func requestUpdateForCurrentVersion(serverURL string) {
 		log.Printf("could not request agent update: %v", err)
 		return
 	}
+	saveAgentUpdateState(agentUpdateState{
+		Status:      agentUpdateRequested,
+		FromVersion: current,
+		ToVersion:   remote,
+	})
 	log.Printf("agent update requested: %s -> %s (see %s)", current, remote, AgentUpdateRequestPath)
 }
 
@@ -764,4 +864,81 @@ func waitForAgent(service string, userSystemd bool) error {
 		time.Sleep(time.Second)
 	}
 	return fmt.Errorf("service %s did not become active", service)
+}
+
+// discoverServerURL reads the server URL from the installed agent unit.
+//
+// The updater runs as root and the daemon's own unit already records the exact
+// URL this device talks to, so reading it here is both accurate and immune to
+// the port and proxy differences a hardcoded default gets wrong.
+func discoverServerURL(service string, userSystemd bool) string {
+	for _, path := range unitCandidatePaths(service, userSystemd) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if url := serverURLFromUnit(string(data)); url != "" {
+			return url
+		}
+	}
+	return ""
+}
+
+func unitCandidatePaths(service string, userSystemd bool) []string {
+	name := service
+	if !strings.HasSuffix(name, ".service") {
+		name += ".service"
+	}
+	if userSystemd {
+		if home, err := os.UserHomeDir(); err == nil {
+			return []string{filepath.Join(home, ".config/systemd/user", name)}
+		}
+		return nil
+	}
+	return []string{
+		filepath.Join("/etc/systemd/system", name),
+		filepath.Join("/lib/systemd/system", name),
+		filepath.Join("/usr/lib/systemd/system", name),
+	}
+}
+
+// serverURLFromUnit returns the value of --server in the unit's ExecStart.
+func serverURLFromUnit(unit string) string {
+	for _, line := range strings.Split(unit, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "ExecStart=") {
+			continue
+		}
+		fields := strings.Fields(strings.TrimPrefix(line, "ExecStart="))
+		for i, field := range fields {
+			if field == "--server" || strings.HasPrefix(field, "--server=") {
+				if field == "--server" {
+					if i+1 < len(fields) {
+						return strings.Trim(fields[i+1], "\"'")
+					}
+					return ""
+				}
+				return strings.Trim(strings.TrimPrefix(field, "--server="), "\"'")
+			}
+		}
+	}
+	return ""
+}
+
+// resolveDeviceToken prefers the explicit flag and falls back to the token
+// file the installer writes. The file exists so the credential never appears
+// in a unit that any local user can read.
+func resolveDeviceToken(token, tokenFile string) string {
+	if strings.TrimSpace(token) != "" {
+		return strings.TrimSpace(token)
+	}
+	path := strings.TrimSpace(tokenFile)
+	if path == "" {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }

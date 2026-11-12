@@ -36,7 +36,7 @@
   export let onSelect: (row: ProcessRow) => void = () => {}
   export let onRangeChange: (range: HistoryRange) => void = () => {}
   export let onSignal: (row: ProcessRow, signal: ProcessSignal) => void = () => {}
-  export let onKill: (row: ProcessRow) => void = () => {}
+  export let onKill: (row: ProcessRow, event?: MouseEvent) => void = () => {}
   export let onRenice: (row: ProcessRow, nice: number) => void = () => {}
   export let onIonice: (row: ProcessRow, ioClass: number, level: number) => void = () => {}
 
@@ -231,7 +231,7 @@
     </div>
     <div class="abtns">
       <button class="btn warn" disabled={blocked != null} on:click={() => onSignal(row, 'TERM')} title="SIGTERM · graceful, audited">Terminate</button>
-      <button class="btn crit" disabled={blocked != null} on:click={() => onKill(row)} title="SIGKILL · destructive, audited">Force kill</button>
+      <button class="btn crit" disabled={blocked != null} on:click={(e) => onKill(row, e)} title="SIGKILL · destructive, audited">Force kill</button>
       <button class="btn" disabled={blocked != null} on:click={() => onSignal(row, 'STOP')} title="SIGSTOP · pause, audited">Stop</button>
       <button class="btn" disabled={blocked != null} on:click={() => onSignal(row, 'CONT')} title="SIGCONT · resume">Continue</button>
     </div>

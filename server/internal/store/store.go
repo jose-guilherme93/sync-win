@@ -65,6 +65,10 @@ type Store struct {
 	mu   sync.RWMutex
 	db   *sql.DB
 	path string
+	// storagePrunedAt throttles the storage_daily prune: the table only loses
+	// relevance a day at a time, and scanning it on every telemetry sample was
+	// pure cost.
+	storagePrunedAt time.Time
 }
 
 type Device struct {
@@ -139,18 +143,24 @@ type DeviceSummary struct {
 
 // HardwareSummary is the subset of HardwareStats the dashboard list renders.
 type HardwareSummary struct {
-	CPUUsagePercent    float64         `json:"cpu_usage_percent"`
-	MemoryUsedBytes    uint64          `json:"memory_used_bytes"`
-	MemoryTotalBytes   uint64          `json:"memory_total_bytes"`
-	CPUTemperature     float64         `json:"cpu_temperature"`
-	CPUClockMHz        float64         `json:"cpu_clock_mhz,omitempty"`
-	CoreVoltageV       float64         `json:"core_voltage_v,omitempty"`
-	PowerWatts         float64         `json:"power_watts"`
-	BatteryPercent     float64         `json:"battery_percent"`
-	BatteryStatus      string          `json:"battery_status"`
-	AgentCPUUsage      float64         `json:"agent_cpu_usage"`
-	AgentMemoryBytes   uint64          `json:"agent_memory_bytes"`
+	CPUUsagePercent  float64 `json:"cpu_usage_percent"`
+	MemoryUsedBytes  uint64  `json:"memory_used_bytes"`
+	MemoryTotalBytes uint64  `json:"memory_total_bytes"`
+	CPUTemperature   float64 `json:"cpu_temperature"`
+	CPUClockMHz      float64 `json:"cpu_clock_mhz,omitempty"`
+	CoreVoltageV     float64 `json:"core_voltage_v,omitempty"`
+	PowerWatts       float64 `json:"power_watts"`
+	BatteryPercent   float64 `json:"battery_percent"`
+	BatteryStatus    string  `json:"battery_status"`
+	// Pointers so an old agent that never reported its own cost serializes as
+	// absent, not as a real zero.
+	AgentCPUUsage      *float64        `json:"agent_cpu_usage,omitempty"`
+	AgentMemoryBytes   *uint64         `json:"agent_memory_bytes,omitempty"`
 	AgentVersion       string          `json:"agent_version,omitempty"`
+	AgentUpdateStatus  string          `json:"agent_update_status,omitempty"`
+	AgentUpdateTarget  string          `json:"agent_update_target,omitempty"`
+	AgentUpdateError   string          `json:"agent_update_error,omitempty"`
+	AgentUpdateAt      string          `json:"agent_update_at,omitempty"`
 	KernelVersion      string          `json:"kernel_version"`
 	OperatingSystem    string          `json:"operating_system"`
 	DesktopEnvironment string          `json:"desktop_environment"`
@@ -162,6 +172,7 @@ type HardwareSummary struct {
 	DiskReadRate       float64         `json:"disk_read_rate"`
 	DiskWriteRate      float64         `json:"disk_write_rate"`
 	DiskPartitions     []DiskPartition `json:"disk_partitions,omitempty"`
+	DiskDevices        []DiskDevice    `json:"disk_devices,omitempty"`
 	SwapUsedBytes      uint64          `json:"swap_used_bytes"`
 	SwapTotalBytes     uint64          `json:"swap_total_bytes"`
 	MemoryBuffersBytes uint64          `json:"memory_buffers_bytes"`
@@ -189,9 +200,13 @@ type HardwareStats struct {
 	PowerWatts         float64        `json:"power_watts"`
 	BatteryPercent     float64        `json:"battery_percent"`
 	BatteryStatus      string         `json:"battery_status"`
-	AgentCPUUsage      float64        `json:"agent_cpu_usage"`
-	AgentMemoryBytes   uint64         `json:"agent_memory_bytes"`
+	AgentCPUUsage      *float64       `json:"agent_cpu_usage,omitempty"`
+	AgentMemoryBytes   *uint64        `json:"agent_memory_bytes,omitempty"`
 	AgentVersion       string         `json:"agent_version,omitempty"`
+	AgentUpdateStatus  string         `json:"agent_update_status,omitempty"`
+	AgentUpdateTarget  string         `json:"agent_update_target,omitempty"`
+	AgentUpdateError   string         `json:"agent_update_error,omitempty"`
+	AgentUpdateAt      string         `json:"agent_update_at,omitempty"`
 	OperatingSystem    string         `json:"operating_system"`
 	Architecture       string         `json:"architecture"`
 	CPUModel           string         `json:"cpu_model"`
@@ -213,6 +228,7 @@ type HardwareStats struct {
 	DiskReadRate       float64         `json:"disk_read_rate"`
 	DiskWriteRate      float64         `json:"disk_write_rate"`
 	DiskPartitions     []DiskPartition `json:"disk_partitions,omitempty"`
+	DiskDevices        []DiskDevice    `json:"disk_devices,omitempty"`
 	SwapUsedBytes      uint64          `json:"swap_used_bytes"`
 	SwapTotalBytes     uint64          `json:"swap_total_bytes"`
 	MemoryBuffersBytes uint64          `json:"memory_buffers_bytes"`
@@ -249,12 +265,65 @@ type HardwareStats struct {
 }
 
 type DiskPartition struct {
-	Mount       string  `json:"mount"`
-	Device      string  `json:"device"`
-	TotalBytes  uint64  `json:"total_bytes"`
-	UsedBytes   uint64  `json:"used_bytes"`
-	FreeBytes   uint64  `json:"free_bytes"`
-	UsedPercent float64 `json:"used_percent"`
+	Mount         string  `json:"mount"`
+	Device        string  `json:"device"`
+	FSType        string  `json:"fstype,omitempty"`
+	Options       string  `json:"options,omitempty"`
+	ReadOnly      bool    `json:"read_only,omitempty"`
+	TotalBytes    uint64  `json:"total_bytes"`
+	UsedBytes     uint64  `json:"used_bytes"`
+	FreeBytes     uint64  `json:"free_bytes"`
+	AvailBytes    uint64  `json:"avail_bytes,omitempty"`
+	ReservedBytes uint64  `json:"reserved_bytes,omitempty"`
+	UsedPercent   float64 `json:"used_percent"`
+	InodesTotal   uint64  `json:"inodes_total,omitempty"`
+	InodesUsed    uint64  `json:"inodes_used,omitempty"`
+	InodesFree    uint64  `json:"inodes_free,omitempty"`
+	InodesUsedPct float64 `json:"inodes_used_percent,omitempty"`
+}
+
+// SmartHealth is the subset of smartctl the dashboard stores. Available=false
+// with a Reason is the normal state on an unprivileged agent and must not be
+// read as a passed device.
+type SmartHealth struct {
+	Available        bool        `json:"available"`
+	Reason           string      `json:"reason,omitempty"`
+	Passed           bool        `json:"passed"`
+	TemperatureC     float64     `json:"temperature_c,omitempty"`
+	PowerOnHours     int64       `json:"power_on_hours,omitempty"`
+	DataWrittenBytes uint64      `json:"data_written_bytes,omitempty"`
+	WearPercent      int         `json:"wear_percent,omitempty"`
+	Reallocated      int64       `json:"reallocated,omitempty"`
+	Pending          int64       `json:"pending,omitempty"`
+	CRCErrors        int64       `json:"crc_errors,omitempty"`
+	LastTestType     string      `json:"last_test_type,omitempty"`
+	LastTestResult   string      `json:"last_test_result,omitempty"`
+	LastTestHours    int64       `json:"last_test_hours,omitempty"`
+	Tests            []SmartTest `json:"tests,omitempty"`
+}
+
+type SmartTest struct {
+	Type   string `json:"type,omitempty"`
+	Result string `json:"result,omitempty"`
+	Hours  int64  `json:"hours,omitempty"`
+}
+
+type DiskDevice struct {
+	Name         string       `json:"name"`
+	Model        string       `json:"model,omitempty"`
+	Serial       string       `json:"serial,omitempty"`
+	SizeBytes    uint64       `json:"size_bytes"`
+	Rotational   bool         `json:"rotational"`
+	Removable    bool         `json:"removable,omitempty"`
+	TemperatureC float64      `json:"temperature_c,omitempty"`
+	ReadBytes    uint64       `json:"read_bytes,omitempty"`
+	WriteBytes   uint64       `json:"write_bytes,omitempty"`
+	ReadRate     float64      `json:"read_rate,omitempty"`
+	WriteRate    float64      `json:"write_rate,omitempty"`
+	IOPS         float64      `json:"iops,omitempty"`
+	AwaitMs      float64      `json:"await_ms,omitempty"`
+	UtilPercent  float64      `json:"util_percent,omitempty"`
+	SMART        *SmartHealth `json:"smart,omitempty"`
 }
 
 type ProcessInfo struct {
@@ -887,6 +956,19 @@ func (s *Store) initSchema() error {
 		payload TEXT NOT NULL,
 		received_at TEXT NOT NULL
 	);
+	CREATE TABLE IF NOT EXISTS storage_daily (
+		device_id TEXT NOT NULL,
+		mount TEXT NOT NULL,
+		day TEXT NOT NULL,
+		total_bytes INTEGER NOT NULL,
+		used_bytes INTEGER NOT NULL,
+		free_bytes INTEGER NOT NULL,
+		inodes_used INTEGER NOT NULL DEFAULT 0,
+		inodes_total INTEGER NOT NULL DEFAULT 0,
+		updated_at TEXT NOT NULL,
+		PRIMARY KEY (device_id, mount, day)
+	);
+	CREATE INDEX IF NOT EXISTS idx_storage_daily_day ON storage_daily(day);
 	CREATE TABLE IF NOT EXISTS telemetry_downsampled (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		device_id TEXT NOT NULL,
@@ -1465,7 +1547,7 @@ func (s *Store) SavePreferenceBatch(deviceID string, inputs []PreferenceInput) (
 
 	// One transaction per batch: a failure partway through must not leave the
 	// device with a half-applied set of files.
-	tx, err := s.db.Begin()
+	tx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -3666,4 +3748,194 @@ func (s *Store) DeleteSecurityAudit(auditID, ownerID string) error {
 	defer s.mu.Unlock()
 	_, err := s.db.Exec("DELETE FROM security_audits WHERE id = ? AND owner_id = ?", auditID, ownerID)
 	return err
+}
+
+// AgentUsagePoint is one sample of what the agent itself costs, read back from
+// the raw telemetry payloads the server already keeps.
+type AgentUsagePoint struct {
+	Timestamp   string  `json:"t"`
+	MemoryBytes uint64  `json:"rss"`
+	CPUPercent  float64 `json:"cpu"`
+}
+
+// agentUsageMaxPointsPerDevice caps one series. The agents view draws a
+// sparkline, not a chart you can measure: sixty points is more than a 300px
+// line can show.
+const agentUsageMaxPointsPerDevice = 60
+
+// AgentUsageSeries returns, per device, the agent's own RSS and CPU over the
+// window, evenly downsampled from telemetry_raw.
+//
+// The payload in telemetry_raw is the full HardwareStats JSON, so the agent
+// fields ride along with every sample. A device that never reported them yields
+// no points rather than zeroes, which keeps "absent" distinct from "idle".
+func (s *Store) AgentUsageSeries(ownerID string, from, to time.Time, maxPerDevice int) (map[string][]AgentUsagePoint, error) {
+	if maxPerDevice <= 0 {
+		maxPerDevice = agentUsageMaxPointsPerDevice
+	}
+	devices, err := s.ListDevicesForOwner(ownerID)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make(map[string][]AgentUsagePoint, len(devices))
+	for _, device := range devices {
+		var total int
+		if err := s.db.QueryRowContext(context.Background(),
+			"SELECT COUNT(*) FROM telemetry_raw WHERE device_id = ? AND received_at >= ? AND received_at <= ?",
+			device.ID, timeText(from), timeText(to),
+		).Scan(&total); err != nil {
+			return nil, err
+		}
+		if total == 0 {
+			continue
+		}
+		stride := 1
+		if total > maxPerDevice {
+			stride = (total + maxPerDevice - 1) / maxPerDevice
+		}
+
+		rows, err := s.db.QueryContext(context.Background(),
+			"SELECT payload, received_at FROM telemetry_raw WHERE device_id = ? AND received_at >= ? AND received_at <= ? ORDER BY id ASC",
+			device.ID, timeText(from), timeText(to),
+		)
+		if err != nil {
+			return nil, err
+		}
+		points := make([]AgentUsagePoint, 0, maxPerDevice)
+		index := 0
+		for rows.Next() {
+			var payload, received string
+			if err := rows.Scan(&payload, &received); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			if index%stride != 0 {
+				index++
+				continue
+			}
+			index++
+			var sample struct {
+				AgentMemoryBytes uint64  `json:"agent_memory_bytes"`
+				AgentCPUUsage    float64 `json:"agent_cpu_usage"`
+				MemoryTotalBytes uint64  `json:"memory_total_bytes"`
+			}
+			if err := json.Unmarshal([]byte(payload), &sample); err != nil {
+				continue
+			}
+			if sample.AgentMemoryBytes == 0 && sample.AgentCPUUsage == 0 {
+				continue
+			}
+			points = append(points, AgentUsagePoint{
+				Timestamp:   received,
+				MemoryBytes: sample.AgentMemoryBytes,
+				CPUPercent:  sample.AgentCPUUsage,
+			})
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		_ = rows.Close()
+		if len(points) > 0 {
+			result[device.ID] = points
+		}
+	}
+	return result, nil
+}
+
+// StorageDailyPoint is one day of one mount, kept so the Storage screen can
+// show real growth and an ETA instead of extrapolating from a 2-hour window.
+type StorageDailyPoint struct {
+	Day         string `json:"day"`
+	TotalBytes  uint64 `json:"total_bytes"`
+	UsedBytes   uint64 `json:"used_bytes"`
+	FreeBytes   uint64 `json:"free_bytes"`
+	InodesUsed  uint64 `json:"inodes_used"`
+	InodesTotal uint64 `json:"inodes_total"`
+}
+
+// UpsertStorageDaily records today's usage per mounted filesystem. One row per
+// mount per day: the last sample of the day wins, so a device that reports
+// every ten seconds still writes once per mount per day.
+func (s *Store) UpsertStorageDaily(deviceID string, partitions []DiskPartition, at time.Time) error {
+	if len(partitions) == 0 {
+		return nil
+	}
+	day := at.UTC().Format("2006-01-02")
+	now := timeText(at.UTC())
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return err
+	}
+	stmt, err := tx.PrepareContext(context.Background(), `INSERT INTO storage_daily
+		(device_id, mount, day, total_bytes, used_bytes, free_bytes, inodes_used, inodes_total, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(device_id, mount, day) DO UPDATE SET
+			total_bytes = excluded.total_bytes,
+			used_bytes = excluded.used_bytes,
+			free_bytes = excluded.free_bytes,
+			inodes_used = excluded.inodes_used,
+			inodes_total = excluded.inodes_total,
+			updated_at = excluded.updated_at`)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	defer func() { _ = stmt.Close() }()
+	for _, partition := range partitions {
+		if partition.TotalBytes == 0 {
+			continue
+		}
+		if _, err := stmt.ExecContext(context.Background(), deviceID, partition.Mount, day, partition.TotalBytes,
+			partition.UsedBytes, partition.FreeBytes, partition.InodesUsed, partition.InodesTotal, now); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	// The screen offers 90 days; a year of rows is the ceiling this table keeps.
+	if s.storagePrunedAt.IsZero() || at.Sub(s.storagePrunedAt) > 24*time.Hour {
+		if _, err := tx.ExecContext(context.Background(), "DELETE FROM storage_daily WHERE day < ?", at.UTC().AddDate(0, 0, -400).Format("2006-01-02")); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		s.storagePrunedAt = at
+	}
+	return tx.Commit()
+}
+
+// StorageDailyHistory returns the last days of per-mount usage, grouped by mount.
+func (s *Store) StorageDailyHistory(deviceID string, days int) (map[string][]StorageDailyPoint, error) {
+	if days <= 0 || days > 400 {
+		days = 90
+	}
+	from := time.Now().UTC().AddDate(0, 0, -days).Format("2006-01-02")
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rows, err := s.db.QueryContext(context.Background(), `SELECT mount, day, total_bytes, used_bytes, free_bytes, inodes_used, inodes_total
+		FROM storage_daily WHERE device_id = ? AND day >= ? ORDER BY mount, day`, deviceID, from)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	result := make(map[string][]StorageDailyPoint)
+	for rows.Next() {
+		var mount string
+		var point StorageDailyPoint
+		if err := rows.Scan(&mount, &point.Day, &point.TotalBytes, &point.UsedBytes, &point.FreeBytes,
+			&point.InodesUsed, &point.InodesTotal); err != nil {
+			return nil, err
+		}
+		result[mount] = append(result[mount], point)
+	}
+	return result, rows.Err()
 }

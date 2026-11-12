@@ -35,8 +35,8 @@ func TestDeviceSummaryPayloadSize(t *testing.T) {
 		LoadAverage:      "1.2 1.0 0.9",
 		DiskReadRate:     1024,
 		DiskWriteRate:    2048,
-		AgentCPUUsage:    0.3,
-		AgentMemoryBytes: 12 << 20,
+		AgentCPUUsage:    ptrFloat(0.3),
+		AgentMemoryBytes: ptrUint(12 << 20),
 		AgentVersion:     "0.6.1",
 		KernelVersion:    "6.8.0",
 		OperatingSystem:  "linux",
@@ -120,3 +120,6 @@ func TestDeviceSummaryPayloadSize(t *testing.T) {
 		}
 	}
 }
+
+func ptrFloat(value float64) *float64 { return &value }
+func ptrUint(value uint64) *uint64    { return &value }
