@@ -65,3 +65,25 @@ describe('TimeSeriesChart', () => {
     expect(screen.queryByText('CPU')).toBeNull()
   })
 })
+
+describe('TimeSeriesChart compact legend', () => {
+  afterEach(cleanup)
+
+  it('caps the legend and collapses the rest into a chip', () => {
+    const series = Array.from({ length: 8 }, (_, i) => ({
+      label: `s${i}`,
+      values: [i + 1, i + 2],
+      color: 'var(--accent)'
+    }))
+    render(TimeSeriesChart, {
+      props: {
+        labels: ['2026-10-21T12:00:00Z', '2026-10-21T12:01:00Z'],
+        series,
+        compactLegend: true
+      }
+    })
+    expect(screen.getByText('+2 more')).toBeTruthy()
+    expect(screen.getByText('s0')).toBeTruthy()
+    expect(screen.queryByText('s7')).toBeNull()
+  })
+})

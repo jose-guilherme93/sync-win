@@ -501,21 +501,30 @@ type telemetryStats struct {
 	// NetworkHealth is the packet-level health of the stack: TCP
 	// retransmissions, the socket state breakdown, conntrack usage. It is
 	// counters only, all readable from /proc without any privilege.
-	NetworkHealth      *networkHealth    `json:"network_health,omitempty"`
-	DiskReadBytes      uint64            `json:"disk_read_bytes,omitempty"`
-	DiskWriteBytes     uint64            `json:"disk_write_bytes,omitempty"`
-	DiskReadRate       float64           `json:"disk_read_rate,omitempty"`
-	DiskWriteRate      float64           `json:"disk_write_rate,omitempty"`
-	DiskPartitions     []diskPartition   `json:"disk_partitions,omitempty"`
-	SwapUsedBytes      uint64            `json:"swap_used_bytes,omitempty"`
-	SwapTotalBytes     uint64            `json:"swap_total_bytes,omitempty"`
-	MemoryBuffersBytes uint64            `json:"memory_buffers_bytes,omitempty"`
-	MemoryCachedBytes  uint64            `json:"memory_cached_bytes,omitempty"`
-	CPUCoreUsage       []float64         `json:"cpu_core_usage,omitempty"`
-	TopCPUProcesses    []processInfo     `json:"top_cpu_processes,omitempty"`
-	TopMemProcesses    []processInfo     `json:"top_mem_processes,omitempty"`
-	DockerAvailable    bool              `json:"docker_available"`
-	DockerContainers   []dockerContainer `json:"docker_containers,omitempty"`
+	NetworkHealth      *networkHealth             `json:"network_health,omitempty"`
+	DiskReadBytes      uint64                     `json:"disk_read_bytes,omitempty"`
+	DiskWriteBytes     uint64                     `json:"disk_write_bytes,omitempty"`
+	DiskReadRate       float64                    `json:"disk_read_rate,omitempty"`
+	DiskWriteRate      float64                    `json:"disk_write_rate,omitempty"`
+	DiskPartitions     []diskPartition            `json:"disk_partitions,omitempty"`
+	SwapUsedBytes      uint64                     `json:"swap_used_bytes,omitempty"`
+	SwapTotalBytes     uint64                     `json:"swap_total_bytes,omitempty"`
+	MemoryBuffersBytes uint64                     `json:"memory_buffers_bytes,omitempty"`
+	MemoryCachedBytes  uint64                     `json:"memory_cached_bytes,omitempty"`
+	CPUCoreUsage       []float64                  `json:"cpu_core_usage,omitempty"`
+	TopCPUProcesses    []processInfo              `json:"top_cpu_processes,omitempty"`
+	TopMemProcesses    []processInfo              `json:"top_mem_processes,omitempty"`
+	Processes          []collectors.ProcessRow    `json:"processes,omitempty"`
+	ProcessStats       *collectors.ProcessStats   `json:"process_stats,omitempty"`
+	ProcessHistory     *collectors.ProcessHistory `json:"process_history,omitempty"`
+	ProcessesCollected bool                       `json:"processes_collected"`
+	ProcessIOAvailable bool                       `json:"process_io_available"`
+	StoppedProcesses   []processInfo              `json:"stopped_processes,omitempty"`
+	ZombieProcesses    []processInfo              `json:"zombie_processes,omitempty"`
+	ProcessSummary     *processSummary            `json:"process_summary,omitempty"`
+
+	DockerAvailable  bool              `json:"docker_available"`
+	DockerContainers []dockerContainer `json:"docker_containers,omitempty"`
 	// True only on the cycles that actually listed containers. Without it the
 	// server cannot tell "not sampled this time" from "Docker has no containers"
 	// and either keeps stale rows or deletes the list every cycle.
@@ -542,10 +551,30 @@ type diskPartition struct {
 }
 
 type processInfo struct {
-	PID         int     `json:"pid"`
-	Name        string  `json:"name"`
-	CPUPercent  float64 `json:"cpu_percent"`
-	MemRSSBytes uint64  `json:"mem_rss_bytes"`
+	PID            int     `json:"pid"`
+	PPID           int     `json:"ppid,omitempty"`
+	Name           string  `json:"name"`
+	User           string  `json:"user,omitempty"`
+	State          string  `json:"state,omitempty"`
+	CPUPercent     float64 `json:"cpu_percent"`
+	MemRSSBytes    uint64  `json:"mem_rss_bytes"`
+	MemVirtBytes   uint64  `json:"mem_virt_bytes,omitempty"`
+	Threads        int     `json:"threads,omitempty"`
+	ElapsedSeconds int64   `json:"elapsed_seconds,omitempty"`
+	Command        string  `json:"command,omitempty"`
+}
+
+type processSummary struct {
+	Total     int `json:"total"`
+	Running   int `json:"running"`
+	Sleeping  int `json:"sleeping"`
+	DiskSleep int `json:"disk_sleep"`
+	Blocked   int `json:"blocked"`
+	Idle      int `json:"idle"`
+	Stopped   int `json:"stopped"`
+	Zombie    int `json:"zombie"`
+	Other     int `json:"other"`
+	Threads   int `json:"threads"`
 }
 
 type deviceLog struct {
@@ -772,6 +801,7 @@ func cmdDaemon(args []string) {
 	lastAppInventoryAttempt := time.Time{}
 	lastPendingUpdatesAttempt := time.Time{}
 	lastSystemInventoryAttempt := time.Time{}
+	processSampler := collectors.NewProcessHistorySampler()
 	lastSaveAttempt := time.Time{}
 	lastWorkspaceAttempt := time.Time{}
 	lastRemoteSignature := ""
@@ -828,8 +858,10 @@ func cmdDaemon(args []string) {
 			}
 		}
 
+		includeProcessHistory := false
 		if lastSystemInventoryAttempt.IsZero() || now.Sub(lastSystemInventoryAttempt) >= *systemInterval {
 			lastSystemInventoryAttempt = now
+			includeProcessHistory = true
 			if err := syncSystemInventory(*serverURL, *deviceID, *deviceToken, state); err != nil {
 				log.Printf("system inventory sync failed: %v", err)
 				hadError = true
@@ -865,8 +897,13 @@ func cmdDaemon(args []string) {
 		if sampleSlow {
 			logCycle = 0
 		}
-		stats, sample, err := collectHardwareStats(&previous, now, sampleSlow)
+		stats, sample, err := collectHardwareStats(&previous, now, sampleSlow, processSampler)
 		previous = sample
+		if err == nil && includeProcessHistory && processSampler != nil {
+			if ph := processSampler.Drain(); ph != nil {
+				stats.ProcessHistory = ph
+			}
+		}
 		if err == nil {
 			if sampleSlow {
 				// A journal read failure is not fatal: telemetry continues with
@@ -1194,6 +1231,8 @@ func executeCommand(cmd agentCommand, serverURL, deviceID, deviceToken string) c
 			return commandResult{"failed", err.Error()}
 		}
 		return commandResult{"completed", fmt.Sprintf("installed %s package %s", cmd.Source, cmd.Name)}
+	case "process_signal", "process_renice", "process_ionice":
+		return executeProcessCommand(cmd.Type, cmd.Payload, policy)
 	default:
 		return commandResult{"failed", "unsupported command type: " + cmd.Type}
 	}
@@ -1511,23 +1550,25 @@ func buildLynisCategories(executed map[string]bool, warnings, suggestions map[st
 // next. Every rate and percentage the agent reports is a delta against this
 // state, which is why it must be threaded through the collector.
 type hardwareSample struct {
-	CPU         uint64
-	Idle        uint64
-	DiskRead    uint64
-	DiskWrite   uint64
-	NetRX       map[string]uint64
-	NetTX       map[string]uint64
-	NetRetrans  uint64
-	CPUCores    []uint64
-	Processes   collectors.ProcessCPUSample
-	AgentImpact collectors.AgentImpact
-	At          time.Time
+	CPU            uint64
+	Idle           uint64
+	DiskRead       uint64
+	DiskWrite      uint64
+	NetRX          map[string]uint64
+	NetTX          map[string]uint64
+	NetRetrans     uint64
+	CPUCores       []uint64
+	CPUCoresIdle   []uint64
+	Processes      collectors.ProcessCPUSample
+	ProcessSamples collectors.ProcessSampleMap
+	AgentImpact    collectors.AgentImpact
+	At             time.Time
 }
 
 // collectHardwareStats collects real hardware data from /proc, /sys, and collectors.
 // Independent data sources are collected in parallel using goroutines.
 // It returns the telemetry payload and the sample to feed into the next call.
-func collectHardwareStats(prev *hardwareSample, now time.Time, sampleDocker bool) (telemetryStats, hardwareSample, error) {
+func collectHardwareStats(prev *hardwareSample, now time.Time, sampleDocker bool, sampler *collectors.ProcessHistorySampler) (telemetryStats, hardwareSample, error) {
 	var stats telemetryStats
 	next := hardwareSample{
 		At:          now,
@@ -1566,12 +1607,12 @@ func collectHardwareStats(prev *hardwareSample, now time.Time, sampleDocker bool
 	var wg sync.WaitGroup
 
 	// CPU cores + core usage
-	var newCPUCores []uint64
+	var newCPUCores, newCPUCoresIdle []uint64
 	var corePercents []float64
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		newCPUCores, corePercents = collectors.CollectCPUCores(prev.CPUCores)
+		newCPUCores, newCPUCoresIdle, corePercents = collectors.CollectCPUCores(prev.CPUCores, prev.CPUCoresIdle)
 	}()
 
 	// CPU temperature
@@ -1670,18 +1711,45 @@ func collectHardwareStats(prev *hardwareSample, now time.Time, sampleDocker bool
 		memExpanded = collectors.CollectMemoryExpanded()
 	}()
 
-	// Top processes. CPU percentages are deltas against the previous sample, so
-	// the previous jiffies and the elapsed wall time are required.
-	var topCPU, topMem []collectors.ProcessInfo
+	// Processes. CPU percentages are deltas against the previous sample, so the
+	// previous jiffies and the elapsed wall time are required. The collector
+	// reads one /proc/<pid>/stat per process and enriches only the reported
+	// rows, so the richer snapshot is not a heavier cycle.
+	var procSnapshot collectors.ProcessSnapshot
 	var newProcSample collectors.ProcessCPUSample
 	procElapsed := now.Sub(prev.At)
 	if prev.At.IsZero() {
 		procElapsed = 0
 	}
+	topLimit, problemLimit, cmdlineChars := syncwinContract.ProcessLimits()
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		topCPU, topMem, newProcSample = collectors.CollectTopProcesses(10, runtime.NumCPU(), prev.Processes, procElapsed)
+		procSnapshot, newProcSample = collectors.CollectProcessSnapshot(topLimit, problemLimit, cmdlineChars, runtime.NumCPU(), prev.Processes, procElapsed)
+	}()
+
+	// Processes: full process table. CPU percentages are deltas against the
+	// previous sample, so the previous sample map and elapsed wall time are
+	// required (same rule as the top-process collector above).
+	var procRows []collectors.ProcessRow
+	var procStats collectors.ProcessStats
+	var procSampleMap collectors.ProcessSampleMap
+	var procIOAvailable bool
+	var procCollected bool
+	procLimit := syncwinContract.MaxProcessRows()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		rows, stats, next, err := collectors.CollectProcesses("/proc", procLimit, runtime.NumCPU(), prev.ProcessSamples, procElapsed, now)
+		if err != nil {
+			log.Printf("process collection failed: %v", err)
+			return
+		}
+		procRows = rows
+		procStats = stats
+		procSampleMap = next
+		procIOAvailable = stats.IOAvailable
+		procCollected = true
 	}()
 
 	// System info (file reads)
@@ -1846,22 +1914,59 @@ func collectHardwareStats(prev *hardwareSample, now time.Time, sampleDocker bool
 		})
 	}
 
-	// Top processes
-	for _, p := range topCPU {
-		stats.TopCPUProcesses = append(stats.TopCPUProcesses, processInfo{
-			PID:         p.PID,
-			Name:        p.Name,
-			CPUPercent:  p.CPUPercent,
-			MemRSSBytes: p.MemRSS,
-		})
+	// Processes: top consumers plus the problem states, with the full state
+	// tally so the tab never presents a sample as the whole machine.
+	toProcessInfo := func(p collectors.ProcessInfo) processInfo {
+		return processInfo{
+			PID:            p.PID,
+			PPID:           p.PPID,
+			Name:           p.Name,
+			User:           p.User,
+			State:          p.State,
+			CPUPercent:     p.CPUPercent,
+			MemRSSBytes:    p.MemRSS,
+			MemVirtBytes:   p.MemVirt,
+			Threads:        p.Threads,
+			ElapsedSeconds: p.ElapsedSeconds,
+			Command:        p.Command,
+		}
 	}
-	for _, p := range topMem {
-		stats.TopMemProcesses = append(stats.TopMemProcesses, processInfo{
-			PID:         p.PID,
-			Name:        p.Name,
-			CPUPercent:  p.CPUPercent,
-			MemRSSBytes: p.MemRSS,
-		})
+	for _, p := range procSnapshot.ByCPU {
+		stats.TopCPUProcesses = append(stats.TopCPUProcesses, toProcessInfo(p))
+	}
+	for _, p := range procSnapshot.ByMem {
+		stats.TopMemProcesses = append(stats.TopMemProcesses, toProcessInfo(p))
+	}
+	for _, p := range procSnapshot.Stopped {
+		stats.StoppedProcesses = append(stats.StoppedProcesses, toProcessInfo(p))
+	}
+	for _, p := range procSnapshot.Zombies {
+		stats.ZombieProcesses = append(stats.ZombieProcesses, toProcessInfo(p))
+	}
+	stats.ProcessSummary = &processSummary{
+		Total:     procSnapshot.Summary.Total,
+		Running:   procSnapshot.Summary.Running,
+		Sleeping:  procSnapshot.Summary.Sleeping,
+		DiskSleep: procSnapshot.Summary.DiskSleep,
+		Blocked:   procSnapshot.Summary.Blocked,
+		Idle:      procSnapshot.Summary.Idle,
+		Stopped:   procSnapshot.Summary.Stopped,
+		Zombie:    procSnapshot.Summary.Zombie,
+		Other:     procSnapshot.Summary.Other,
+		Threads:   procSnapshot.Summary.Threads,
+	}
+
+	// Full process table for the Processes tab.
+	if procCollected {
+		stats.Processes = procRows
+		stats.ProcessStats = &procStats
+		stats.ProcessesCollected = true
+		stats.ProcessIOAvailable = procIOAvailable
+		if sampler != nil {
+			sampler.Observe(procRows, now)
+		}
+	} else {
+		stats.ProcessesCollected = false
 	}
 
 	// Compute network rates (needs previous state) and the totals the dashboard
@@ -1940,7 +2045,8 @@ func collectHardwareStats(prev *hardwareSample, now time.Time, sampleDocker bool
 
 	next.CPU, next.Idle = cpuTotal, idle
 	next.DiskRead, next.DiskWrite = diskRead, diskWrite
-	next.CPUCores, next.Processes, next.AgentImpact = newCPUCores, newProcSample, newImpact
+	next.CPUCores, next.CPUCoresIdle, next.Processes, next.AgentImpact = newCPUCores, newCPUCoresIdle, newProcSample, newImpact
+	next.ProcessSamples = procSampleMap
 
 	return stats, next, nil
 }
@@ -2021,7 +2127,11 @@ func readMemoryInfo() (used, total uint64, err error) {
 	free := values["MemFree"]
 	buffers := values["Buffers"]
 	cached := values["Cached"]
+	reclaimable := values["SReclaimable"]
 	used = total - free - buffers - cached
+	if reclaimable <= used {
+		used -= reclaimable
+	}
 	return
 }
 
@@ -2227,6 +2337,7 @@ type localPolicy struct {
 	AllowDockerCompose    bool   `json:"allow_docker_compose"`
 	AllowDockerImages     bool   `json:"allow_docker_images"`
 	AllowRemoteAccess     bool   `json:"allow_remote_access"`
+	AllowProcessSignals   bool   `json:"allow_process_signals"`
 	SSHUser               string `json:"ssh_user,omitempty"`
 	CommandTimeoutSeconds int    `json:"command_timeout_seconds"`
 }
@@ -2249,6 +2360,7 @@ func loadLocalPolicy() localPolicy {
 		AllowDockerCompose:    defaults.AllowDockerCompose,
 		AllowDockerImages:     defaults.AllowDockerImages,
 		AllowRemoteAccess:     defaults.AllowRemoteAccess,
+		AllowProcessSignals:   defaults.AllowProcessSignals,
 		CommandTimeoutSeconds: defaults.CommandTimeoutSeconds,
 	}
 	if policy.CommandTimeoutSeconds <= 0 {
@@ -2340,6 +2452,7 @@ func policyDefaultsMap() map[string]any {
 		"allow_docker_compose":    d.AllowDockerCompose,
 		"allow_docker_images":     d.AllowDockerImages,
 		"allow_remote_access":     d.AllowRemoteAccess,
+		"allow_process_signals":   d.AllowProcessSignals,
 		"command_timeout_seconds": d.CommandTimeoutSeconds,
 	}
 }

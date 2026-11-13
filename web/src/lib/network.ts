@@ -49,6 +49,10 @@ export function uncountedInterfaces(ifaces: NetworkIface[]): NetworkIface[] {
 // network; one bound to the loopback answers only on the machine.
 export type Exposure = 'all' | 'specific' | 'loopback' | 'unknown'
 
+// The stat tile the network inspector is showing. One drawer serves every tile,
+// so the lens is the only state the screen has to keep.
+export type NetworkLens = 'download' | 'upload' | 'peak' | 'links' | 'health' | 'exposure'
+
 export function exposureOf(port: OpenPort): Exposure {
   const address = (port.local_address ?? '').trim()
   if (address === '') return 'all'

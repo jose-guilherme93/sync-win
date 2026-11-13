@@ -108,6 +108,21 @@ func TestCollectAppsRejectsPartialInventory(t *testing.T) {
 	}
 }
 
+func TestCollectPacmanAppsHandlesEmptyForeignList(t *testing.T) {
+	home := t.TempDir()
+	bin := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", bin)
+	writeFakeCommand(t, bin, "pacman", "#!/bin/sh\ncase \"$1\" in\n-Qqe) printf 'vim 9.1\\n' ;;\n-Qmq) exit 1 ;;\nesac\n")
+	apps, err := CollectApps([]string{"pacman"})
+	if err != nil {
+		t.Fatalf("CollectApps: %v", err)
+	}
+	if len(apps) != 1 {
+		t.Fatalf("got %d apps, want 1: %#v", len(apps), apps)
+	}
+}
+
 func writeFakeCommand(t *testing.T, dir, name, body string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o700); err != nil {

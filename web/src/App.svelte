@@ -1593,7 +1593,7 @@
           </div>
         </div>
       {/if}
-      <main class="content">
+      <main class="content" class:fill={isDeviceSection && navState.section === 'processes'}>
         <div class="panel-inner">
           {#if toastMessage}
             <div class="toast {toastKind}" role="status">{toastMessage}</div>
@@ -1617,7 +1617,7 @@
                 lynisInstallCmd={modalDevice.hardware?.lynis_install_cmd ?? 'sudo apt install lynis'}
               />
             {:else if navState.section === 'processes'}
-              <Processes device={modalDevice} />
+              <Processes device={modalDevice} authHeaders={ownerHeaders} />
             {:else if navState.section === 'packages'}
               <Packages deviceId={modalDevice.id} authHeaders={ownerHeaders} />
             {:else if navState.section === 'services'}

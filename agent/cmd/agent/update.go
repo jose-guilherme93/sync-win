@@ -106,7 +106,10 @@ func updateAgentAtIdentity(executable, serverURL, service string, userSystemd bo
 	if err != nil {
 		return err
 	}
-	current := installedAgentVersion(executable)
+	current, err := installedAgentVersion(executable)
+	if err != nil {
+		return err
+	}
 	newer, err := newerAgentVersion(remote, current)
 	if err != nil {
 		return err
@@ -141,7 +144,10 @@ func updateAgentAtIdentity(executable, serverURL, service string, userSystemd bo
 	if err := os.Chmod(temp, 0o755); err != nil {
 		return fmt.Errorf("chmod downloaded agent: %w", err)
 	}
-	downloadedVersion := installedAgentVersion(temp)
+	downloadedVersion, err := installedAgentVersion(temp)
+	if err != nil {
+		return err
+	}
 	if downloadedVersion != remote {
 		return fmt.Errorf("downloaded agent version %q does not match server version %q", downloadedVersion, remote)
 	}
@@ -212,7 +218,7 @@ func reconcileUnit(serverURL, service string, userSystemd bool, deviceID, device
 // Best-effort on servers that do not serve the template.
 func reconcileHelperUnit(serverURL string) (bool, error) {
 	const target = "/etc/systemd/system/sync-win-agent-helper.service"
-	desired, err := fetchUnitTemplate(serverURL, "helper")
+	desired, err := fetchUnitTemplate(serverURL, "helper", "", "")
 	if err != nil {
 		if errors.Is(err, errUnitEndpointUnsupported) {
 			return false, nil
@@ -377,12 +383,17 @@ func verifyAgentChecksum(serverURL, path string) error {
 	return nil
 }
 
-func installedAgentVersion(path string) string {
-	output, err := exec.Command(path, "--version").Output()
+func installedAgentVersion(path string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, path, "--version").Output()
 	if err != nil {
-		return "unknown"
+		if ctx.Err() == context.DeadlineExceeded {
+			return "unknown", fmt.Errorf("%s --version timed out after 15s", path)
+		}
+		return "unknown", fmt.Errorf("%s --version failed: %w", path, err)
 	}
-	return strings.TrimSpace(string(output))
+	return strings.TrimSpace(string(output)), nil
 }
 
 func newerAgentVersion(remote, current string) (bool, error) {
@@ -447,22 +458,23 @@ func copyFile(source, destination string, mode os.FileMode) error {
 // diagnostics for a journal it cannot read, but nothing adds the group that lets
 // it read one. This is what makes a fix like that reach devices unattended.
 //
-// It fetches the raw template from the public endpoint rather than the
-// credential-authenticated one. The update service on a device installed before
-// that flag existed passes no credentials, and requiring them would silently
-// skip exactly the devices that most need the unit repaired.
+// It fetches the raw template from the public endpoint and fills the
+// placeholders with the credentials the update command does have. A device
+// installed before those flags existed passes none: the placeholders stay
+// unresolved and the refresh is skipped (the binary update still lands) rather
+// than writing a unit systemd cannot start.
 //
 // The ExecStart line is preserved from the running unit, because a device behind
 // a different server URL, or installed with a non-default binary path, must not
 // be silently repointed by an update.
-func refreshUnitFile(serverURL, service string, userSystemd bool, _ string, _ string) (bool, error) {
+func refreshUnitFile(serverURL, service string, userSystemd bool, deviceID, deviceToken string) (bool, error) {
 	if userSystemd {
 		// The user-systemd fallback unit has no group requirement and is written
 		// per user; leave it alone.
 		return false, nil
 	}
 
-	desired, err := fetchAgentUnit(serverURL)
+	desired, err := fetchAgentUnit(serverURL, deviceID, deviceToken)
 	if err != nil {
 		// An older server without the endpoint is tolerated: the binary update is
 		// the important part and must not be blocked by it. Anything else is a
@@ -566,14 +578,19 @@ func mergeExecStart(current, desired string) string {
 	return desired
 }
 
-func fetchAgentUnit(serverURL string) (string, error) {
-	return fetchUnitTemplate(serverURL, "agent")
+func fetchAgentUnit(serverURL, deviceID, deviceToken string) (string, error) {
+	return fetchUnitTemplate(serverURL, "agent", deviceID, deviceToken)
 }
 
 // fetchUnitTemplate fetches a raw systemd unit template by its short name from
-// the public endpoint, which must not depend on credentials the caller may not
-// have.
-func fetchUnitTemplate(serverURL, name string) (string, error) {
+// the public endpoint and fills the placeholders the updater owns.
+//
+// The endpoint is public on purpose: a device installed before the update
+// service carried --device-id/--device-token must still be able to repair its
+// unit. When this call has no credentials to fill in, it fails with
+// errUnitEndpointUnsupported so reconcileUnit skips the unit and still lets the
+// binary update land, instead of writing a unit systemd cannot start.
+func fetchUnitTemplate(serverURL, name, deviceID, deviceToken string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -605,10 +622,24 @@ func fetchUnitTemplate(serverURL, name string) (string, error) {
 	if !strings.Contains(unit, "[Service]") {
 		return "", errors.New("unit response does not look like a systemd unit")
 	}
-	// Unresolved placeholders mean the server could not render it; writing this
-	// would break the service.
+	// Only fill a placeholder with a value we actually have: replacing it with
+	// an empty string hides the fact that the credential is missing.
+	var pairs []string
+	if serverURL != "" {
+		pairs = append(pairs, "{{SERVER_URL}}", strings.TrimRight(serverURL, "/"))
+	}
+	if deviceID != "" {
+		pairs = append(pairs, "{{DEVICE_ID}}", deviceID)
+	}
+	if deviceToken != "" {
+		pairs = append(pairs, "{{DEVICE_TOKEN}}", deviceToken)
+	}
+	if len(pairs) > 0 {
+		unit = strings.NewReplacer(pairs...).Replace(unit)
+	}
+	// Anything still unresolved would break the unit systemd reads next.
 	if strings.Contains(unit, "{{") {
-		return "", errors.New("unit still contains template placeholders")
+		return "", errUnitEndpointUnsupported
 	}
 	return unit, nil
 }
@@ -646,7 +677,10 @@ func requestUpdateForCurrentVersion(serverURL string) {
 	if err != nil {
 		return
 	}
-	current := installedAgentVersion(executableOf())
+	current, err := installedAgentVersion(executableOf())
+	if err != nil {
+		current = "unknown"
+	}
 	newer, err := newerAgentVersion(remote, current)
 	if err != nil || !newer {
 		return
@@ -704,7 +738,15 @@ func restartAgent(service string, userSystemd bool) error {
 	if userSystemd {
 		args = append([]string{"--user"}, args...)
 	}
-	return exec.Command("systemctl", args...).Run()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := exec.CommandContext(ctx, "systemctl", args...).Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("systemctl restart timed out after 15s: %w", err)
+		}
+		return err
+	}
+	return nil
 }
 
 func waitForAgent(service string, userSystemd bool) error {
@@ -712,8 +754,11 @@ func waitForAgent(service string, userSystemd bool) error {
 	if userSystemd {
 		args = append([]string{"--user"}, args...)
 	}
-	for i := 0; i < 10; i++ {
-		if exec.Command("systemctl", args...).Run() == nil {
+	for i := 0; i < 30; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		err := exec.CommandContext(ctx, "systemctl", args...).Run()
+		cancel()
+		if err == nil {
 			return nil
 		}
 		time.Sleep(time.Second)

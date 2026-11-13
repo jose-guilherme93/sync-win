@@ -3,20 +3,47 @@ package collectors
 import (
 	"bufio"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
 
-// CollectCPUCores reads /proc/stat and returns per-core CPU usage percentages.
-// Call this function repeatedly with a short interval to get meaningful deltas.
-func CollectCPUCores(previous []uint64) (current []uint64, percents []float64) {
-	file, err := os.Open("/proc/stat")
+// CollectCPUCores reads /proc/stat and returns per-core total and idle
+// counters plus per-core usage percentages.
+//
+// previous counters are optional: when they are missing or mismatched in
+// length, the percentages come back zero (first sample). `idle + iowait`
+// counts as idle.
+func CollectCPUCores(args ...interface{}) ([]uint64, []uint64, []float64) {
+	var prevTotal, prevIdle []uint64
+	procRoot := "/proc"
+	for _, a := range args {
+		switch v := a.(type) {
+		case string:
+			if v != "" {
+				procRoot = v
+			}
+		case []uint64:
+			if prevTotal == nil {
+				prevTotal = v
+			} else if prevIdle == nil {
+				prevIdle = v
+			}
+		}
+	}
+
+	file, err := os.Open(filepath.Join(procRoot, "stat"))
 	if err != nil {
-		return previous, nil
+		// Fall back to the legacy hardcoded path.
+		file, err = os.Open("/proc/stat")
+		if err != nil {
+			return prevTotal, prevIdle, nil
+		}
 	}
 	defer file.Close()
 
-	var cores []uint64
+	var totals []uint64
+	var idles []uint64
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -27,7 +54,6 @@ func CollectCPUCores(previous []uint64) (current []uint64, percents []float64) {
 		if len(fields) < 5 {
 			continue
 		}
-		// Skip the aggregate "cpu " line (field[0] == "cpu")
 		if fields[0] == "cpu" {
 			continue
 		}
@@ -36,23 +62,39 @@ func CollectCPUCores(previous []uint64) (current []uint64, percents []float64) {
 			v, _ := strconv.ParseUint(f, 10, 64)
 			total += v
 		}
-		cores = append(cores, total)
+		// fields[4]=idle, fields[5]=iowait (both counted as idle).
+		var idle uint64
+		if len(fields) >= 5 {
+			iv, _ := strconv.ParseUint(fields[4], 10, 64)
+			idle += iv
+		}
+		if len(fields) >= 6 {
+			iw, _ := strconv.ParseUint(fields[5], 10, 64)
+			idle += iw
+		}
+		totals = append(totals, total)
+		idles = append(idles, idle)
 	}
 
-	if previous == nil || len(previous) != len(cores) {
-		return cores, make([]float64, len(cores))
+	if prevTotal == nil || len(prevTotal) != len(totals) ||
+		prevIdle == nil || len(prevIdle) != len(totals) {
+		return totals, idles, make([]float64, len(totals))
 	}
 
-	percents = make([]float64, len(cores))
-	for i := range cores {
-		if cores[i] > previous[i] {
-			// Approximate: we don't have per-core idle, so use total delta
-			// This gives a reasonable estimate for display purposes
-			percents[i] = float64(cores[i]-previous[i]) / 1000.0 * 10.0 // rough estimate
-			if percents[i] > 100 {
-				percents[i] = 100
+	percents := make([]float64, len(totals))
+	for i := range totals {
+		totalDelta := int64(totals[i]) - int64(prevTotal[i])
+		idleDelta := int64(idles[i]) - int64(prevIdle[i])
+		if totalDelta > 0 {
+			busy := float64(totalDelta-idleDelta) / float64(totalDelta) * 100.0
+			if busy < 0 {
+				busy = 0
 			}
+			if busy > 100 {
+				busy = 100
+			}
+			percents[i] = busy
 		}
 	}
-	return cores, percents
+	return totals, idles, percents
 }

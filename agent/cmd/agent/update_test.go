@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -168,16 +169,37 @@ func TestMergeExecStartPrefersRenderedCommand(t *testing.T) {
 	}
 }
 
-func TestFetchAgentUnitRejectsUnrenderedTemplate(t *testing.T) {
+func TestFetchAgentUnitRendersPlaceholders(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("[Service]\nExecStart={{SERVER_URL}}\n"))
+		_, _ = w.Write([]byte("[Service]\nExecStart=/usr/local/bin/sync-win-agent daemon --server {{SERVER_URL}} --device-id {{DEVICE_ID}} --device-token {{DEVICE_TOKEN}}\n"))
 	}))
 	defer srv.Close()
 
-	// Writing this to /etc/systemd/system would break the service, so it must
-	// be rejected rather than installed.
-	if _, err := fetchAgentUnit(srv.URL); err == nil {
-		t.Fatal("expected an error for a unit still containing placeholders")
+	unit, err := fetchAgentUnit(srv.URL, "device-1", "token-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{srv.URL, "device-1", "token-1"} {
+		if !strings.Contains(unit, want) {
+			t.Errorf("unit missing %q:\n%s", want, unit)
+		}
+	}
+	if strings.Contains(unit, "{{") {
+		t.Errorf("unit still has placeholders:\n%s", unit)
+	}
+}
+
+// A device installed before the update service carried credentials passes none.
+// Writing an unresolved unit would break the service, so the refresh is skipped
+// and the binary update is allowed to proceed.
+func TestFetchAgentUnitSkipsWhenCredentialsAreMissing(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("[Service]\nExecStart=/usr/local/bin/sync-win-agent daemon --device-id {{DEVICE_ID}}\n"))
+	}))
+	defer srv.Close()
+
+	if _, err := fetchAgentUnit(srv.URL, "", ""); !errors.Is(err, errUnitEndpointUnsupported) {
+		t.Fatalf("err = %v, want errUnitEndpointUnsupported", err)
 	}
 }
 
@@ -187,7 +209,7 @@ func TestFetchAgentUnitRejectsNonUnitResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := fetchAgentUnit(srv.URL); err == nil {
+	if _, err := fetchAgentUnit(srv.URL, "", ""); err == nil {
 		t.Fatal("expected an error for a response that is not a unit")
 	}
 }
@@ -206,7 +228,7 @@ func TestFetchAgentUnitNeedsNoCredentials(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	unit, err := fetchAgentUnit(srv.URL)
+	unit, err := fetchAgentUnit(srv.URL, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

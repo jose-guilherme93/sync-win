@@ -143,6 +143,11 @@ func readOnlyPackageQuery(program string, args []string, timeout time.Duration, 
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return nil, true, fmt.Errorf("%s query timed out after %s", program, timeout)
 		}
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 &&
+			strings.TrimSpace(stdout.String()) == "" &&
+			strings.TrimSpace(stderr.String()) == "" {
+			return []byte{}, true, nil
+		}
 		return nil, true, fmt.Errorf("%s query failed: %w", program, err)
 	}
 	if stdout.exceeded || stderr.exceeded || stdout.written+stderr.written > maxOutputBytes {

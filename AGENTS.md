@@ -222,6 +222,50 @@ have a non-empty signature file and an embedded public key.
 - `compose.yaml` is the stack a new user copies from the README: it pulls the published image and needs only `SYNCWIN_SECRET_KEY` and `SYNCWIN_ACCESS_TOKEN`. Keep it dependency-free — no checkout, no build, no other required variable.
 - `compose.prod.yaml` is for deploying from a checkout; `compose.dev.yaml` is for working on the code.
 
+## Device tabs: the information standard
+
+Every device tab must let a senior DevOps engineer diagnose its subject without
+leaving the tab, and must make the limits of the data explicit. A single
+aggregate, or a top-ten list presented as the machine, is not enough: it creates
+an impression instead of an answer.
+
+Each tab answers, at minimum:
+
+- **What is this?** The current shape of the subject: counts, states and a
+  breakdown, not one number.
+- **Is it healthy?** Severity against the shared thresholds, and how fresh the
+  sample is.
+- **What does it cost?** CPU, memory, I/O, errors, blocked work, growth.
+- **What needs attention?** Stopped, zombie, failed, full, stale, degraded — and
+  a way to inspect exactly those rows.
+- **What is the scope of the data?** Whole machine versus a reported sample, and
+  why. Never present a sample as the whole.
+- **Absent, not reported, and zero are different.** Say which one the user is
+  looking at.
+
+Rules for adding detail:
+
+- Show granular rows with identity (PID, name, user, command), state and the
+  numbers needed to decide. Prefer a breakdown over an aggregate.
+- Pair every top-N list with a full tally and a label such as
+  "N reported of M total".
+- State units and semantics next to the number: CPU share of all cores versus
+  one core, RSS versus virtual memory, age versus start time.
+- Keep the **collector** cost flat: one small file per object where possible,
+  capped lists, enrich only reported rows, no second full scan just to fill a
+  column, and no new work per cycle for a screen nobody has open.
+- Keep the **browser** cost flat: one snapshot per poll, filters and sorts in
+  memory over capped lists, no per-row timers or subscriptions, no hidden
+  charts.
+- Every cap belongs in `agent/internal/contract/contract.json` and in
+  `COLLECTION-CONTRACT.md`.
+
+The Processes tab is the reference implementation: one `/proc/<pid>/stat` read
+per process, a full state tally (`total`, `running`, `sleeping`, `disk_sleep`,
+`stopped`, `zombie`, `other`, `threads`), reported top consumers plus every
+stopped/zombie row, and user, command, threads and age only for the rows that
+will be shown.
+
 ## Parallel agents
 
 Two agents must never share a working directory. The git index is shared, so

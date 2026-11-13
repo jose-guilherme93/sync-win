@@ -207,21 +207,30 @@ type HardwareStats struct {
 	NetTxRate          float64        `json:"net_tx_rate"`
 	// NetworkHealth is the packet level health of the stack. It travels with
 	// the telemetry because the counters move every second.
-	NetworkHealth      *NetworkHealth    `json:"network_health,omitempty"`
-	DiskReadBytes      uint64            `json:"disk_read_bytes"`
-	DiskWriteBytes     uint64            `json:"disk_write_bytes"`
-	DiskReadRate       float64           `json:"disk_read_rate"`
-	DiskWriteRate      float64           `json:"disk_write_rate"`
-	DiskPartitions     []DiskPartition   `json:"disk_partitions,omitempty"`
-	SwapUsedBytes      uint64            `json:"swap_used_bytes"`
-	SwapTotalBytes     uint64            `json:"swap_total_bytes"`
-	MemoryBuffersBytes uint64            `json:"memory_buffers_bytes"`
-	MemoryCachedBytes  uint64            `json:"memory_cached_bytes"`
-	CPUCoreUsage       []float64         `json:"cpu_core_usage,omitempty"`
-	TopCPUProcesses    []ProcessInfo     `json:"top_cpu_processes,omitempty"`
-	TopMemProcesses    []ProcessInfo     `json:"top_mem_processes,omitempty"`
-	DockerAvailable    bool              `json:"docker_available"`
-	DockerContainers   []DockerContainer `json:"docker_containers,omitempty"`
+	NetworkHealth      *NetworkHealth  `json:"network_health,omitempty"`
+	DiskReadBytes      uint64          `json:"disk_read_bytes"`
+	DiskWriteBytes     uint64          `json:"disk_write_bytes"`
+	DiskReadRate       float64         `json:"disk_read_rate"`
+	DiskWriteRate      float64         `json:"disk_write_rate"`
+	DiskPartitions     []DiskPartition `json:"disk_partitions,omitempty"`
+	SwapUsedBytes      uint64          `json:"swap_used_bytes"`
+	SwapTotalBytes     uint64          `json:"swap_total_bytes"`
+	MemoryBuffersBytes uint64          `json:"memory_buffers_bytes"`
+	MemoryCachedBytes  uint64          `json:"memory_cached_bytes"`
+	CPUCoreUsage       []float64       `json:"cpu_core_usage,omitempty"`
+	TopCPUProcesses    []ProcessInfo   `json:"top_cpu_processes,omitempty"`
+	TopMemProcesses    []ProcessInfo   `json:"top_mem_processes,omitempty"`
+	Processes          []ProcessRow    `json:"processes,omitempty"`
+	ProcessStats       *ProcessStats   `json:"process_stats,omitempty"`
+	ProcessHistory     *ProcessHistory `json:"process_history,omitempty"`
+	ProcessesCollected bool            `json:"processes_collected"`
+	ProcessIOAvailable bool            `json:"process_io_available"`
+	StoppedProcesses   []ProcessInfo   `json:"stopped_processes,omitempty"`
+	ZombieProcesses    []ProcessInfo   `json:"zombie_processes,omitempty"`
+	ProcessSummary     *ProcessSummary `json:"process_summary,omitempty"`
+
+	DockerAvailable  bool              `json:"docker_available"`
+	DockerContainers []DockerContainer `json:"docker_containers,omitempty"`
 	// True only when the agent actually listed containers on this sample. The
 	// list is sampled slowly; without this flag the handler cannot distinguish
 	// "not sampled" from "Docker now has no containers" and either keeps stale
@@ -249,10 +258,28 @@ type DiskPartition struct {
 }
 
 type ProcessInfo struct {
-	PID         int     `json:"pid"`
-	Name        string  `json:"name"`
-	CPUPercent  float64 `json:"cpu_percent"`
-	MemRSSBytes uint64  `json:"mem_rss_bytes"`
+	PID            int     `json:"pid"`
+	PPID           int     `json:"ppid,omitempty"`
+	Name           string  `json:"name"`
+	User           string  `json:"user,omitempty"`
+	State          string  `json:"state,omitempty"`
+	CPUPercent     float64 `json:"cpu_percent"`
+	MemRSSBytes    uint64  `json:"mem_rss_bytes"`
+	MemVirtBytes   uint64  `json:"mem_virt_bytes,omitempty"`
+	Threads        int     `json:"threads,omitempty"`
+	ElapsedSeconds int64   `json:"elapsed_seconds,omitempty"`
+	Command        string  `json:"command,omitempty"`
+}
+
+type ProcessSummary struct {
+	Total     int `json:"total"`
+	Running   int `json:"running"`
+	Sleeping  int `json:"sleeping"`
+	DiskSleep int `json:"disk_sleep"`
+	Stopped   int `json:"stopped"`
+	Zombie    int `json:"zombie"`
+	Other     int `json:"other"`
+	Threads   int `json:"threads"`
 }
 
 type DeviceLog struct {
@@ -559,6 +586,10 @@ func NewStore(root string) (*Store, error) {
 	s.migrateAddFingerprintColumn()
 	s.migrateAddMachineIDColumn()
 	s.migrateAddDockerStateColumn()
+	s.migrateAddProcessStateColumn()
+	if err := s.migrateAddProcessHistoryIOColumns(); err != nil {
+		return nil, err
+	}
 	if err := s.migrateAddSystemInventoryColumns(context.Background()); err != nil {
 		return nil, err
 	}
@@ -723,6 +754,15 @@ func (s *Store) migrateAddDockerStateColumn() {
 	}
 }
 
+func (s *Store) migrateAddProcessStateColumn() {
+	ctx := context.Background()
+	var count int
+	_ = s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM pragma_table_info('devices') WHERE name='process_state_json'").Scan(&count)
+	if count == 0 {
+		_, _ = s.db.ExecContext(ctx, "ALTER TABLE devices ADD COLUMN process_state_json TEXT NOT NULL DEFAULT '{}'")
+	}
+}
+
 func (s *Store) migrateHashDeviceTokens() {
 	rows, err := s.db.Query("SELECT id, device_token FROM devices")
 	if err != nil {
@@ -802,7 +842,8 @@ func (s *Store) initSchema() error {
 		-- The Docker container list is sampled slowly and is several kilobytes.
 		-- Keeping it in its own column means it is written once per sample
 		-- instead of being copied into every telemetry_raw row.
-		docker_state_json TEXT NOT NULL DEFAULT '[]'
+		docker_state_json TEXT NOT NULL DEFAULT '[]',
+		process_state_json TEXT NOT NULL DEFAULT '{}'
 	);
 	-- Indexes on machine_id are deliberately NOT created here, for the same
 	-- reason as idx_logs_owner_ts below: on an existing database the CREATE TABLE
@@ -882,6 +923,33 @@ func (s *Store) initSchema() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_network_history_range
 		ON network_history (device_id, resolution, bucket);
+	CREATE TABLE IF NOT EXISTS process_history (
+		device_id TEXT NOT NULL,
+		bucket TEXT NOT NULL,
+		resolution TEXT NOT NULL,
+		name TEXT NOT NULL,
+		pid INTEGER NOT NULL,
+		cpu_sum REAL NOT NULL DEFAULT 0,
+		cpu_max REAL NOT NULL DEFAULT 0,
+		rss_max INTEGER NOT NULL DEFAULT 0,
+		io_read_bps REAL NOT NULL DEFAULT 0,
+		io_write_bps REAL NOT NULL DEFAULT 0,
+		samples INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (device_id, name, pid, resolution, bucket)
+	);
+	CREATE INDEX IF NOT EXISTS idx_process_history_range
+		ON process_history (device_id, resolution, bucket);
+	CREATE TABLE IF NOT EXISTS process_events (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		device_id TEXT NOT NULL,
+		ts TEXT NOT NULL,
+		type TEXT NOT NULL,
+		pid INTEGER NOT NULL,
+		name TEXT NOT NULL,
+		exit_code INTEGER
+	);
+	CREATE INDEX IF NOT EXISTS idx_process_events_device
+		ON process_events (device_id, ts);
 	CREATE TABLE IF NOT EXISTS notification_configs (
 		owner_id TEXT NOT NULL,
 		provider TEXT NOT NULL,
@@ -2702,6 +2770,17 @@ func (s *Store) RunRetentionCleanup() (int64, error) {
 				totalDeleted += n
 			}
 		}
+	}
+
+	// Clean up expired process history and events.
+	procCutoff := now.AddDate(0, 0, -365)
+	if res, err := s.db.ExecContext(context.Background(), "DELETE FROM process_history WHERE bucket < ?", timeText(procCutoff)); err == nil {
+		n, _ := res.RowsAffected()
+		totalDeleted += n
+	}
+	if res, err := s.db.ExecContext(context.Background(), "DELETE FROM process_events WHERE ts < ?", timeText(procCutoff)); err == nil {
+		n, _ := res.RowsAffected()
+		totalDeleted += n
 	}
 
 	// Clean up orphaned telemetry for devices that no longer exist.

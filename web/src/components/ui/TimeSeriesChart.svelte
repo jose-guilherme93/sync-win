@@ -62,6 +62,8 @@
   // and a visible dot per sample show a change at the sample it happened,
   // instead of a spline that rounds every peak into a hill.
   export let smooth = true
+  export let compactLegend = false
+  export let legendCap = 6
   // Fixed span of the x axis. Without it a sparse window would still stretch
   // its few samples edge to edge, because the axis would fit the data.
   export let windowMs: number | null = null
@@ -82,15 +84,28 @@
     .filter((entry): entry is LegendEntry => entry.stats != null)
   $: domain = timeDomain(labels, windowMs, windowEnd)
 
+  function formatAxisValue(value: number, unit: string): string {
+    if (!Number.isFinite(value)) return ''
+    if (unit === '%') {
+      if (value === 0) return '0%'
+      if (value < 0.1) return '<0.1%'
+      if (value < 1) return `${value.toFixed(1)}%`
+      return `${value.toFixed(0)}%`
+    }
+    return `${value.toFixed(0)}${unit}`
+  }
+
   function fmt(entry: ChartSeries, value: number): string {
     if (entry.format) return entry.format(value)
-    return `${value.toFixed(0)}${entry.axis === 'right' ? rightUnit : leftUnit}`
+    const unit = entry.axis === 'right' ? rightUnit : leftUnit
+    return formatAxisValue(value, unit)
   }
 
   function axisTick(axis: 'left' | 'right', value: number): string {
     const format = axis === 'right' ? rightFormat : leftFormat
     if (format) return format(value)
-    return `${value.toFixed(0)}${axis === 'right' ? rightUnit : leftUnit}`
+    const unit = axis === 'right' ? rightUnit : leftUnit
+    return formatAxisValue(value, unit)
   }
 
   // A vertical gradient, like Beszel's filled areas: readable near the line,
@@ -125,7 +140,9 @@
         data: chartPoints(entry.values),
         borderColor: color,
         backgroundColor: areaFill(color),
-        fill: true,
+        // Filling every series turns a busy plot into one solid block: keep the
+      // area only when the chart is a single line or a pair.
+      fill: visible.length === 1,
         borderWidth: 1.6,
         pointRadius: smooth ? 0 : 1.8,
         pointHoverRadius: 2.5,
@@ -151,7 +168,7 @@
         maintainAspectRatio: false,
         animation: false,
         interaction: { intersect: false, mode: 'index' },
-        layout: { padding: { top: 4, right: 2 } },
+        layout: { padding: { top: 4, right: 12 } },
         plugins: {
           legend: { display: false },
           tooltip: {
@@ -238,6 +255,7 @@
 
   function syncChart() {
     if (!canvas) return
+    if (typeof canvas.getContext === 'function' && !canvas.getContext('2d')) return
     if (!hasData) {
       chart?.destroy()
       chart = null
@@ -268,7 +286,20 @@
 </script>
 
 <div class="chart-block">
-  {#if legend.length > 0}
+  {#if compactLegend && legend.length > 0}
+    <div class="legend compact" aria-label="Series">
+      {#each legend.slice(0, legendCap) as entry (entry.series.label)}
+        <span class="legend-item compact">
+          <i class="dot" style="background: {entry.series.color}"></i>
+          <span class="name" title={entry.series.label}>{entry.series.label}</span>
+          <b class="last" title="Last sample in the window">{fmt(entry.series, entry.stats.last)}</b>
+        </span>
+      {/each}
+      {#if legend.length > legendCap}
+        <span class="legend-more">+{legend.length - legendCap} more</span>
+      {/if}
+    </div>
+  {:else if legend.length > 0}
     <div class="legend" aria-label="Series statistics">
       {#each legend as entry (entry.series.label)}
         <span class="legend-item">
@@ -335,6 +366,14 @@
   .name { color: var(--text-muted); }
   .last { color: var(--text-bright); font-variant-numeric: tabular-nums; }
   .stats { color: var(--text-faint); font-variant-numeric: tabular-nums; }
+  .legend-more { color: var(--text-faint); font-size: 0.7rem; padding: 0.1rem 0.4rem; border: 1px solid var(--border); border-radius: 999px; }
+  .legend.compact { flex-wrap: wrap; gap: 0.35rem 0.75rem; padding-right: 0.4rem; }
+  @media (max-width: 1200px) {
+    .legend.compact { flex-wrap: wrap; overflow: visible; }
+    .legend.compact .name { max-width: 12rem; }
+  }
+  .legend.compact .legend-item.compact { min-width: 0; }
+  .legend.compact .name { max-width: 9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sep { padding: 0 0.1rem; }
 
   .canvas-wrap { position: relative; min-width: 0; }

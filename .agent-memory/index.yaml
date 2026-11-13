@@ -149,4 +149,6 @@ entries:
     type: session
   - id: sessions/261030-access-token
     path: sessions/261030-access-token.md
+  - id: sessions/261021-processes-tab
+    path: sessions/261021-processes-tab.md
     type: session

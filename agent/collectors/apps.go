@@ -1,6 +1,8 @@
 package collectors
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -8,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // AppInfo is one entry in the installed application inventory.
@@ -124,9 +127,12 @@ func collectPacmanApps() ([]AppInfo, error) {
 	if err != nil || !available {
 		return nil, err
 	}
-	foreignOutput, _, err := commandOutput("pacman", "-Qmq")
+	foreignOutput, available, err := commandOutputAllowEmptyExit1("pacman", "-Qmq")
 	if err != nil {
 		return nil, err
+	}
+	if !available {
+		foreignOutput = nil
 	}
 	foreign := make(map[string]bool)
 	for _, app := range parseNameVersionApps(foreignOutput, "pacman") {
@@ -146,7 +152,7 @@ func collectAURApps() ([]AppInfo, error) {
 	var apps []AppInfo
 	foundHelper := false
 	for _, helper := range []string{"paru", "yay"} {
-		output, available, err := commandOutput(helper, "-Qmq")
+		output, available, err := commandOutputAllowEmptyExit1(helper, "-Qmq")
 		if err != nil {
 			return nil, err
 		}
@@ -188,6 +194,35 @@ func collectAppImages() ([]AppInfo, error) {
 		}
 	}
 	return apps, nil
+}
+
+// commandOutputAllowEmptyExit1 is like commandOutput but treats an exit status of
+// 1 with empty stdout/stderr as "no items" instead of a failure. pacman -Qmq
+// (and AUR helpers) use that exit code to signal an empty foreign-package list.
+func commandOutputAllowEmptyExit1(name string, args ...string) ([]byte, bool, error) {
+	path, err := exec.LookPath(name)
+	if err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			return nil, false, nil
+		}
+		return nil, true, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, path, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	if err == nil {
+		return stdout.Bytes(), true, nil
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 &&
+		strings.TrimSpace(stdout.String()) == "" &&
+		strings.TrimSpace(stderr.String()) == "" {
+		return []byte{}, true, nil
+	}
+	return nil, true, fmt.Errorf("%s failed: %w", name, err)
 }
 
 func commandOutput(name string, args ...string) ([]byte, bool, error) {

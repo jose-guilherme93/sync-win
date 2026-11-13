@@ -375,6 +375,12 @@ Container:
 - Docker (multi-stage: Go + Node -> Alpine)
 - Docker Compose
 
+## P1.10 — Processes tab (backend, concluída)
+- [x] coletar tabela completa de processos com CPU delta normalizada por core
+- [x] expor endpoints de processos, histórico e sinais com gate de mutações remotas
+- [x] aplicar guard fail-closed para sinais, nice e ionice
+- [x] persistir histórico e eventos de processos com retenção
+
 Não adicionar inicialmente:
 - snapshots completos
 - backups integrais da home
