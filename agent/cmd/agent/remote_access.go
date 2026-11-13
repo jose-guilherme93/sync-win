@@ -2,23 +2,15 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/creack/pty"
 
 	"sync-win/agent/internal/remote"
 )
@@ -34,46 +26,6 @@ type tunnelMessage struct {
 	Cols   int    `json:"cols"`
 	Rows   int    `json:"rows"`
 }
-
-// ptySession is one live SSH session's local pseudo-terminal. The terminal size
-// the browser reports is applied here, so the remote sshd gets a real window
-// size: with a piped (pty-less) connection ssh allocates a 0x0 pty and
-// full-screen tools like btop fail with "Failed to get size of terminal".
-type ptySession struct {
-	mu     sync.Mutex
-	f      *os.File
-	cancel context.CancelFunc
-}
-
-func (s *ptySession) resize(cols, rows int) {
-	if cols <= 0 || rows <= 0 {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.f != nil {
-		_ = pty.Setsize(s.f, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
-	}
-}
-
-// kill ends the session's ssh process and closes its pty. It is what stops a
-// closed browser session from leaving an orphaned `ssh -tt` that holds a
-// session slot forever.
-func (s *ptySession) kill() {
-	s.mu.Lock()
-	cancel, f := s.cancel, s.f
-	s.mu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-	if f != nil {
-		_ = f.Close()
-	}
-}
-
-// activeSessions maps a session ticket to its live PTY so a resize control
-// message can find the session it belongs to.
-var activeSessions sync.Map
 
 // runRemoteTunnel keeps an outbound control link to the server for interactive
 // access. It reconnects with capped exponential backoff and refuses sessions
@@ -101,7 +53,7 @@ func runRemoteTunnel(ctx context.Context, serverURL, deviceID, deviceToken strin
 		}
 		backoff = time.Second
 		log.Printf("remote tunnel connected")
-		readTunnel(ctx, conn, serverURL, deviceID, deviceToken)
+		readTunnel(ctx, conn, deviceID, deviceToken)
 		_ = conn.Close(websocket.StatusNormalClosure, "")
 		if ctx.Err() != nil {
 			return
@@ -111,14 +63,14 @@ func runRemoteTunnel(ctx context.Context, serverURL, deviceID, deviceToken strin
 	}
 }
 
-func readTunnel(ctx context.Context, conn *websocket.Conn, serverURL, deviceID, deviceToken string) {
-	// A fresh control link means sessions from the previous one can no longer be
-	// reached; end them so their ssh processes do not hold every session slot.
-	activeSessions.Range(func(_, v any) bool {
-		v.(*ptySession).kill()
-		return true
-	})
-	sem := make(chan struct{}, syncwinContract.RemoteMaxSessions())
+// readTunnel handles the control messages. The terminal itself is not started
+// here: it is hosted by the root helper, in a service an agent update never
+// restarts, so a session survives the agent being replaced under it.
+func readTunnel(ctx context.Context, conn *websocket.Conn, deviceID, deviceToken string) {
+	// The live-session limit lives in the helper, which owns the terminals. This
+	// only bounds how many attaches the agent starts at once, so a burst of
+	// "open" frames cannot spawn an unbounded number of goroutines.
+	opening := make(chan struct{}, syncwinContract.RemoteMaxSessions())
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil {
@@ -130,31 +82,37 @@ func readTunnel(ctx context.Context, conn *websocket.Conn, serverURL, deviceID, 
 		}
 		switch msg.Type {
 		case "resize":
-			if v, ok := activeSessions.Load(msg.Ticket); ok {
-				v.(*ptySession).resize(msg.Cols, msg.Rows)
+			if err := remote.ResizeSession(helperSocket(), msg.Ticket, msg.Cols, msg.Rows); err != nil {
+				log.Printf("remote resize dropped: %v", err)
 			}
 		case "open":
 			select {
-			case sem <- struct{}{}:
+			case opening <- struct{}{}:
 				go func(m tunnelMessage) {
-					defer func() { <-sem }()
-					if err := runRemoteSession(ctx, serverURL, deviceID, deviceToken, m); err != nil {
-						log.Printf("remote session ended: %v", err)
+					defer func() { <-opening }()
+					if err := runRemoteSession(deviceID, deviceToken, m); err != nil {
+						log.Printf("remote session failed: %v", err)
 					}
 				}(msg)
 			default:
-				log.Printf("remote session refused: %d sessions already active", cap(sem))
+				log.Printf("remote session refused: too many attaches in flight")
 			}
 		}
 	}
 }
 
-// runRemoteSession performs one login: it injects an ephemeral key through the
-// root helper, dials the local sshd, and pumps the terminal.
-func runRemoteSession(ctx context.Context, serverURL, deviceID, deviceToken string, msg tunnelMessage) error {
+// runRemoteSession asks the helper to host one login.
+//
+// The agent keeps what only it knows: the local policy, and which account the
+// session targets. It never opens a pseudo-terminal or a socket of its own,
+// because those would die with it.
+func runRemoteSession(deviceID, deviceToken string, msg tunnelMessage) error {
 	policy := loadLocalPolicy()
 	if !remoteAccessAllowed(policy) {
 		return fmt.Errorf("disabled by local policy")
+	}
+	if strings.TrimSpace(msg.Ticket) == "" {
+		return errors.New("session ticket is missing")
 	}
 	user := strings.TrimSpace(msg.User)
 	if user == "" {
@@ -163,170 +121,50 @@ func runRemoteSession(ctx context.Context, serverURL, deviceID, deviceToken stri
 	if user == "" {
 		return fmt.Errorf("no target user configured (run: sync-win-agent set ssh-user <name>)")
 	}
-	host := strings.TrimSpace(syncwinContract.RemoteAccess.SSHHost)
-	if host == "" {
-		host = "127.0.0.1"
-	}
-	port := syncwinContract.RemoteAccess.SSHPort
-	if port <= 0 {
-		port = 22
-	}
-
-	keyDir, err := os.MkdirTemp("", "syncwin-remote-")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = os.RemoveAll(keyDir) }()
-	keyPath := filepath.Join(keyDir, "id")
-
-	if out, keyErr := exec.CommandContext(ctx, "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", keyPath).CombinedOutput(); keyErr != nil {
-		return fmt.Errorf("ssh-keygen: %v: %s", keyErr, strings.TrimSpace(string(out)))
-	}
-	pubBytes, readErr := os.ReadFile(keyPath + ".pub")
-	if readErr != nil {
-		return readErr
-	}
-
-	id := newSessionID()
-	socket := strings.TrimSpace(syncwinContract.RemoteAccess.HelperSocketPath)
-	if socket == "" {
-		socket = "/run/sync-win/helper.sock"
-	}
-	if injectErr := remote.Inject(socket, user, strings.TrimSpace(string(pubBytes)), id); injectErr != nil {
-		return fmt.Errorf("key injection failed: %w", injectErr)
-	}
-	defer func() {
-		if revokeErr := remote.Revoke(socket, user, id); revokeErr != nil {
-			log.Printf("remote key revoke failed: %v", revokeErr)
-		}
-	}()
-
-	conn, resp, err := websocket.Dial(ctx, sessionURL(serverURL, deviceID, deviceToken, msg.Ticket), nil)
-	if resp != nil && resp.Body != nil {
-		_ = resp.Body.Close()
-	}
-	if err != nil {
-		return fmt.Errorf("session attach failed: %w", err)
-	}
-	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
 
 	idle := time.Duration(msg.Idle) * time.Second
 	if idle <= 0 {
 		idle = time.Duration(syncwinContract.RemoteIdleSeconds()) * time.Second
 	}
-	ps := &ptySession{}
-	activeSessions.Store(msg.Ticket, ps)
-	defer activeSessions.Delete(msg.Ticket)
-	return pumpSSH(ctx, conn, keyPath, user, host, port, idle, msg.Cols, msg.Rows, ps)
-}
-
-// pumpSSH runs `ssh -tt` on a local pseudo-terminal and pipes it to the session
-// socket. The pty is what carries a real window size to the remote sshd.
-func pumpSSH(ctx context.Context, conn *websocket.Conn, keyPath, user, host string, port int, idle time.Duration, cols, rows int, ps *ptySession) error {
-	sessionCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	lastActivity := time.Now().UnixNano()
-	touch := func() { atomic.StoreInt64(&lastActivity, time.Now().UnixNano()) }
-	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-sessionCtx.Done():
-				return
-			case <-ticker.C:
-				if time.Since(time.Unix(0, atomic.LoadInt64(&lastActivity))) > idle {
-					log.Printf("remote session idle timeout after %s", idle)
-					cancel()
-					return
-				}
-			}
-		}
-	}()
-
-	args := []string{
-		"-tt",
-		"-i", keyPath,
-		"-o", "IdentitiesOnly=yes",
-		"-o", "PreferredAuthentications=publickey",
-		"-o", "BatchMode=yes",
-		"-o", "StrictHostKeyChecking=accept-new",
-		"-o", "UserKnownHostsFile=/dev/null",
-		"-o", "LogLevel=ERROR",
-		"-p", strconv.Itoa(port),
-		user + "@" + host,
+	spec := remote.SessionSpec{
+		Ticket:   msg.Ticket,
+		User:     user,
+		Idle:     idle,
+		Cols:     msg.Cols,
+		Rows:     msg.Rows,
+		DeviceID: deviceID,
+		Token:    deviceToken,
 	}
-	cmd := exec.CommandContext(sessionCtx, "ssh", args...)
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
-	if cols <= 0 {
-		cols = 120
-	}
-	if rows <= 0 {
-		rows = 30
-	}
-	f, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
-	if err != nil {
+	if err := remote.OpenSession(helperSocket(), spec); err != nil {
 		return err
 	}
-	ps.mu.Lock()
-	ps.f = f
-	ps.cancel = cancel
-	ps.mu.Unlock()
-	defer func() { _ = f.Close() }()
-
-	// socket -> pty. When the socket closes the session is over, so cancel the
-	// context to kill ssh: a `-tt` remote shell does not exit on stdin EOF, and
-	// an orphaned ssh process would hold a session slot forever.
-	go func() {
-		defer cancel()
-		for {
-			_, data, err := conn.Read(sessionCtx)
-			if err != nil {
-				return
-			}
-			touch()
-			if _, err := f.Write(data); err != nil {
-				return
-			}
-		}
-	}()
-
-	// pty (stdout+stderr) -> socket
-	buf := make([]byte, 32*1024)
-	for {
-		n, err := f.Read(buf)
-		if n > 0 {
-			touch()
-			if writeErr := conn.Write(sessionCtx, websocket.MessageBinary, buf[:n]); writeErr != nil {
-				break
-			}
-		}
-		if err != nil {
-			break
-		}
-	}
-	_ = cmd.Wait()
+	log.Printf("remote session opened for %s (hosted by the helper)", user)
 	return nil
 }
 
-func newSessionID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		// A random id is not security-critical (the helper scopes by user and
-		// marker); fall back to a time-based value rather than failing a login.
-		return fmt.Sprintf("%032x", time.Now().UnixNano())
+// helperSocket is the root helper's Unix socket, the only channel the agent has
+// to the privileged half of remote access.
+func helperSocket() string {
+	socket := strings.TrimSpace(syncwinContract.RemoteAccess.HelperSocketPath)
+	if socket == "" {
+		return "/run/sync-win/helper.sock"
 	}
-	return hex.EncodeToString(b)
+	return socket
+}
+
+// activeSessionCount reports how many terminals the helper is carrying. The
+// updater asks before it restarts the agent: each of those terminals is an
+// operator, and on a machine reached only this way it is their only way in.
+func activeSessionCount() int {
+	count, err := remote.SessionCount(helperSocket())
+	if err != nil {
+		return 0
+	}
+	return count
 }
 
 func tunnelURL(serverURL, deviceID, deviceToken string) string {
 	return websocketBase(serverURL) + "/api/devices/" + url.PathEscape(deviceID) + "/tunnel?" + url.Values{"device_token": {deviceToken}}.Encode()
-}
-
-func sessionURL(serverURL, deviceID, deviceToken, ticket string) string {
-	q := url.Values{"device_token": {deviceToken}, "ticket": {ticket}}
-	return websocketBase(serverURL) + "/api/devices/" + url.PathEscape(deviceID) + "/tunnel/session?" + q.Encode()
 }
 
 func websocketBase(serverURL string) string {

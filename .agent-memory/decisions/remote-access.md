@@ -32,10 +32,13 @@ below.
   link per device (presence + "open a session" requests). Each session is its own
   **data** pipe, not multiplexed: with ≤3 concurrent sessions per device that is
   simpler than a stream multiplexer and keeps control traffic free of payload.
-- **Agent is the SSH client** (Model A). It dials `127.0.0.1:22`. Because the
-  SSH handshake is loopback-local there is no network MITM, so host-key pinning
-  is unnecessary. Consequence to record in `SECURITY.md`: the relay sees terminal
-  I/O in clear text. The operator accepted this.
+- **The helper is the SSH client** (Model A, moved 2026-11-13). It dials
+  `127.0.0.1:22`; the agent only forwards `open`/`resize` from the control
+  tunnel. The move is deliberate: the agent is what an update replaces, and a
+  terminal it owns dies with it. Because the SSH handshake is loopback-local
+  there is no network MITM, so host-key pinning is unnecessary. Consequence to
+  record in `SECURITY.md`: the relay sees terminal I/O in clear text. The
+  operator accepted this. See `decisions/remote-safe-maintenance.md`.
 - **Ephemeral key**: per session the agent generates an ed25519 keypair and a
   root helper (path-unit, like the updater) appends the public key to the target
   user's `authorized_keys` with `restrict,pty,from="127.0.0.1"` and
