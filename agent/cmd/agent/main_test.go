@@ -236,6 +236,17 @@ func TestFetchCollectionInterval(t *testing.T) {
 	if got < 2*time.Second {
 		t.Fatalf("fallback interval = %s, want at least the fastest supported value", got)
 	}
+
+	// Live mode: the server owns the cadence. A 2-second interval (the lease
+	// floor) plus live_active must be honored as-is by this build.
+	live := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"collection_interval_seconds":2,"live_active":true}`))
+	}))
+	defer live.Close()
+	got, err = fetchCollectionInterval(live.URL, "device-1", "device-token")
+	if err != nil || got != 2*time.Second {
+		t.Fatalf("live lease interval = %s, err = %v, want 2s", got, err)
+	}
 }
 
 func TestSendPendingUpdatesPostsExplicitStatusAndRows(t *testing.T) {
