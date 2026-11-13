@@ -234,21 +234,37 @@ scoped to logins through the device's own sshd and gated at every layer.
 - The server **never** names a host or port. The agent always dials its own
   loopback (`127.0.0.1`). A compromised server therefore cannot use the agent to
   reach the device's LAN.
+- The **helper** opens the session's attach WebSocket, and it takes the
+  destination from root-owned configuration — its own environment, or the
+  `--server` the agent's unit was installed with. The unprivileged agent supplies
+  only the ticket, the target account and the device token, all validated, so a
+  compromised agent cannot use the root helper as a proxy to another host.
+
+### Sessions outlive the agent
+
+The terminal is hosted by the root helper, in a separate systemd unit that an
+agent update never restarts. This is deliberate: an update replaces the agent,
+and a terminal owned by the agent died with it, which once left a device whose
+only access path was that terminal with no way back in. `sync-win-agent-helper`
+is restarted only when its own unit changes; that is the one moment a hosted
+session ends with it.
 
 ### Credentials and the ephemeral key
 
 - The browser authenticates with the dashboard session cookie and redeems a
   one-time session ticket (short TTL, bound to owner and device).
 - The agent authenticates its tunnel with the device token, as it does elsewhere.
-- Per session the agent generates an **ed25519 key** with `ssh-keygen`. A
-  root-owned helper appends exactly one line to the target user's
+- Per session the helper generates an **ed25519 key** with `ssh-keygen` and runs
+  the local `ssh` client; the agent never holds the key or the terminal. The
+  helper appends exactly one line to the target user's
   `authorized_keys` — `restrict,pty,from="127.0.0.1",expiry-time=…` plus a
   `syncwin:<id>` marker; the key is rebuilt only from validated fields, so a key
   cannot smuggle options or extra lines. The line is removed when the session
   ends and expires on its own if it is not.
 - The helper listens on a root-owned Unix socket, answers **only** the agent's
   uid (checked with `SO_PEERCRED`), and validates every request before touching
-  a file. It is the only privileged component and its job is exactly this.
+  a file or the network. It is the only privileged component and its job is
+  exactly this.
 
 ### Reverse-proxy requirement
 

@@ -10,7 +10,9 @@ import (
 	"time"
 )
 
-const agentUnitPath = "/etc/systemd/system/sync-win-agent.service"
+// agentUnitPath is where the agent's own unit lives. A variable so tests can
+// point it at a temporary file.
+var agentUnitPath = "/etc/systemd/system/sync-win-agent.service"
 
 // runCleanupCommand bounds every external call: this runs at the start of an
 // auto-update, and a wedged systemctl must not hold the updater forever.
