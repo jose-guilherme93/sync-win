@@ -244,11 +244,23 @@ docker-build: ## Build the production Docker image
 # -----------------------------------------------------------------------------
 
 .PHONY: test
-test: test-server test-agent test-web ## Run all tests
+test: test-server test-agent test-installer test-web ## Run all tests
 
 .PHONY: test-e2e
 test-e2e: ## Run the browser end-to-end suite (requires `make dev-d` running)
 	@scripts/e2e.sh
+
+.PHONY: test-installer
+test-installer: ## Run the installer's remote-session guard tests
+	@scripts/install_test.sh
+
+.PHONY: e2e-remote
+e2e-remote: ## Prove a remote session survives an agent restart (dev stack + full test device)
+	cd agent && go run ./cmd/remotecheck \
+		-server http://localhost:$${DEV_HTTP_PORT:-8088} \
+		-token $${SYNCWIN_ACCESS_TOKEN:-dev-access-token-0123456789abcdef} \
+		-hostname ubuntu-full-1 -user devuser \
+		-restart 'docker exec sync-win-test-agent-full systemctl restart sync-win-agent'
 
 .PHONY: test-server
 test-server: ## Run server tests
