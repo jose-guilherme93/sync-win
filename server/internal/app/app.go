@@ -1005,6 +1005,10 @@ func (s *Server) handleDeviceDetail(w http.ResponseWriter, r *http.Request) {
 		s.handleTelemetryHistoryV2(w, r, parts[0])
 		return
 	}
+	if len(parts) == 3 && parts[1] == "telemetry" && parts[2] == "series" {
+		s.handleTelemetrySeries(w, r, parts[0])
+		return
+	}
 	if len(parts) == 3 && parts[1] == "storage" && parts[2] == "history" {
 		s.handleStorageHistory(w, r, parts[0])
 		return
@@ -2224,6 +2228,92 @@ func (s *Server) handleTelemetryHistoryV2(w http.ResponseWriter, r *http.Request
 		"to":         to.Format(time.RFC3339),
 		"points":     points,
 		"count":      len(points),
+	})
+}
+
+// telemetrySeriesWindows are the predeclared chart windows the dashboard uses.
+// A fixed set keeps the resolution choice and the point cap predictable.
+var telemetrySeriesWindows = map[string]time.Duration{
+	"30m": 30 * time.Minute,
+	"1h":  time.Hour,
+	"12h": 12 * time.Hour,
+	"24h": 24 * time.Hour,
+	"7d":  7 * 24 * time.Hour,
+	"30d": 30 * 24 * time.Hour,
+}
+
+// maxTelemetrySeriesPoints caps one series response. A window that would
+// render more is decimated by stride server-side; the client never downloads
+// thousands of rows just to draw a line.
+const maxTelemetrySeriesPoints = 900
+
+// handleTelemetrySeries serves the compact chart series for a device. Unlike
+// /telemetry/history-v2 it returns only the series values, never the raw ~8 KB
+// telemetry payload, and supports ?since= so the dashboard can fetch only the
+// delta instead of re-reading the whole window.
+func (s *Server) handleTelemetrySeries(w http.ResponseWriter, r *http.Request, deviceID string) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	device, err := s.store.GetDevice(deviceID)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
+		return
+	}
+	if device.OwnerID != s.ownerID(r) {
+		s.writeError(w, http.StatusForbidden, errors.New("not authorized"))
+		return
+	}
+
+	window := r.URL.Query().Get("window")
+	duration, ok := telemetrySeriesWindows[window]
+	if !ok {
+		s.writeError(w, http.StatusBadRequest, errors.New("invalid 'window' (expected 30m, 1h, 12h, 24h, 7d or 30d)"))
+		return
+	}
+	var since int64
+	if v := r.URL.Query().Get("since"); v != "" {
+		parsed, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, errors.New("invalid 'since' timestamp (expected unix seconds)"))
+			return
+		}
+		since = parsed
+	}
+
+	to := time.Now().UTC()
+	from := to.Add(-duration)
+	points, resolution, err := s.store.GetTelemetrySeries(deviceID, from, to)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if since != 0 {
+		filtered := points[:0:0]
+		for _, p := range points {
+			if p.T > since {
+				filtered = append(filtered, p)
+			}
+		}
+		points = filtered
+	}
+	if len(points) > maxTelemetrySeriesPoints {
+		stride := (len(points) + maxTelemetrySeriesPoints - 1) / maxTelemetrySeriesPoints
+		strided := points[:0:0]
+		for i := 0; i < len(points); i += stride {
+			strided = append(strided, points[i])
+		}
+		points = strided
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"window":     window,
+		"resolution": resolution,
+		"from":       from.Unix(),
+		"to":         to.Unix(),
+		"points":     points,
 	})
 }
 
