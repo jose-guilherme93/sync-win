@@ -61,6 +61,11 @@ type Server struct {
 	// storageRollup remembers the last rollup per device. The daily table only
 	// needs the day's last sample, not one write per heartbeat.
 	storageRollup sync.Map
+	// liveLeases holds the in-memory Live viewing leases; nothing is persisted
+	// and a restart simply drops the accelerated cadence for one lease period.
+	liveLeases *liveLeaseStore
+	// now is the lease clock; tests replace it to exercise expiry.
+	now func() time.Time
 }
 
 type registerRequest struct {
@@ -163,7 +168,7 @@ func Run() error {
 		// own tokens, so a misconfigured dashboard token must not stop the fleet.
 		structLogger.Warn(logging.CatSecurity, logging.EventAppStarted, flags.AccessTokenProblem, nil)
 	}
-	server := &Server{store: dataStore, logStore: logStore, log: structLogger, aggregator: aggregator, notifier: notifier, dockerQueue: dockerQueue, dockerBroadcaster: dockerBroadcaster, streamTickets: newStreamTicketStore(), rateLimiter: newRateLimiter(), tunnelHub: tunnel.NewHub(), flags: flags, trustProxy: envBool("SYNCWIN_TRUST_PROXY", false), logStreamInterval: time.Second}
+	server := &Server{store: dataStore, logStore: logStore, log: structLogger, aggregator: aggregator, notifier: notifier, dockerQueue: dockerQueue, dockerBroadcaster: dockerBroadcaster, streamTickets: newStreamTicketStore(), rateLimiter: newRateLimiter(), tunnelHub: tunnel.NewHub(), liveLeases: newLiveLeaseStore(), flags: flags, trustProxy: envBool("SYNCWIN_TRUST_PROXY", false), logStreamInterval: time.Second}
 
 	// Logging settings are persisted so an operator's choice survives a
 	// restart. Seed the row on first boot from the configured defaults, then
@@ -1025,6 +1030,10 @@ func (s *Server) handleDeviceDetail(w http.ResponseWriter, r *http.Request) {
 		s.handleDeviceSettings(w, r, parts[0])
 		return
 	}
+	if len(parts) == 2 && parts[1] == "live" {
+		s.handleDeviceLive(w, r, parts[0])
+		return
+	}
 	if len(parts) == 2 && parts[1] == "updates" {
 		s.handleDeviceUpdates(w, r, parts[0])
 		return
@@ -1283,7 +1292,13 @@ func (s *Server) handleDeviceSettings(w http.ResponseWriter, r *http.Request, de
 			s.writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(settings)
+		resp := deviceSettingsResponse{DeviceSettings: settings}
+		if s.liveLeases.active(deviceID, s.liveClock()) {
+			resp.LiveActive = true
+			// Only while the lease holds: the stored value stays untouched.
+			resp.CollectionIntervalSeconds = liveIntervalSeconds
+		}
+		_ = json.NewEncoder(w).Encode(resp)
 	case http.MethodPatch:
 		if s.ownerID(r) != device.OwnerID {
 			s.writeError(w, http.StatusForbidden, errors.New("not authorized"))
