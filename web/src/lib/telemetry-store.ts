@@ -82,6 +82,22 @@ export function setHistoryFromAPI(deviceId: string, points: ChartPoint[]) {
   })
 }
 
+// appendSeriesPoints adds the points a live poll returned, keeping what is
+// already on screen. It is an append, not a replace: a delta of one sample must
+// never drop the minute behind it.
+export function appendSeriesPoints(deviceId: string, points: ChartPoint[]) {
+  if (points.length === 0) return
+  store.update((map) => {
+    const existing = map.get(deviceId) || []
+    const seen = new Set(existing.map((point) => point.timestamp))
+    const added = points.filter((point) => !seen.has(point.timestamp))
+    if (added.length === 0) return map
+    const next = new Map(map)
+    next.set(deviceId, [...existing, ...added].slice(-MAX_POINTS))
+    return next
+  })
+}
+
 // resetTelemetry clears all live telemetry. Used on sign-out so one account's
 // charts never bleed into the next session on the same browser.
 export function resetTelemetry() {
