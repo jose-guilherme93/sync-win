@@ -170,13 +170,45 @@ The service runs with the following protections:
 
 ## Rollback
 
-If any critical step fails after modifying the system:
+If any critical step fails after modifying the system, the previous
+installation is restored and **started again**:
 
-1. **Binary installed but enrollment failed**: Binary is removed, service file is removed
-2. **Service installed but start failed**: Service is stopped, binary is backed up
-3. **Existing installation**: Previous binary is restored from backup
+1. The previous unit file is copied back from the backup the installer made.
+2. The previous binary is copied back from its backup.
+3. `systemctl daemon-reload` runs, and the restored unit is started.
 
-The rollback is automatic via the `trap rollback EXIT` mechanism.
+Only a first install, which had nothing to restore, removes the files it
+created. A rollback never leaves a device with a unit that cannot start: on a
+machine reached only through the SyncWin terminal, that would be a machine with
+no way back in.
+
+The rollback is automatic via the `trap rollback EXIT` mechanism, so it also
+runs when the session carrying the installer is cut.
+
+## Running maintenance from a remote terminal
+
+A SyncWin remote terminal is hosted by `sync-win-agent-helper`, a separate root
+service, so it does not belong to the agent and does not end when the agent is
+restarted. Do not run a maintenance command in the foreground anyway: the
+installer used to stop the agent it depended on, so both the installer and
+`sync-win-agent update` look for `SYNCWIN_REMOTE_SESSION` in their environment —
+set by the helper on the ssh client of every session — and move themselves
+behind PID 1 with `systemd-run --collect` before doing any work. Follow the run
+with:
+
+```bash
+journalctl -u syncwin-install-<timestamp> -f     # installer
+journalctl -u syncwin-agent-update-<timestamp> -f  # updater
+```
+
+The updater also prints how many active terminals the restart will close.
+
+## Recovering a device that is not reporting
+
+If the agent is not running, SyncWin cannot reach the device at all: there is no
+tunnel to open a session on. Use console access, another machine on the same
+network, or the device's Tailscale address, then either restore the backup the
+installer left next to the unit and binary, or re-run an up-to-date installer.
 
 ## Idempotency
 
