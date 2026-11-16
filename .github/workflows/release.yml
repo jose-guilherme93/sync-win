@@ -25,6 +25,11 @@
 # CHANGELOG.md and used as the GitHub Release body. A missing or empty section
 # fails before the image is built, so a tag never points at an empty release.
 #
+# THE RELEASE PR IS MARKED RELEASED: Release Please skips every later analysis
+# while a merged release PR still carries `autorelease: pending`, and it cannot
+# know that this workflow tagged the version. The last step moves that label to
+# `autorelease: tagged`; skipping it silently stops all future release PRs.
+#
 # ORDERING IS THE POINT: the image is pushed BEFORE the Git tag is created.
 # The deployment watches the repository tag, so tagging first would advertise a
 # version whose image does not exist yet and the deploy would fail on a pull
@@ -46,6 +51,7 @@ on:
 permissions:
   contents: write   # create the git tag and the GitHub Release
   packages: write   # push the image to ghcr.io
+  pull-requests: write  # move the release PR from autorelease: pending to tagged
 
 concurrency:
   group: release-main
@@ -250,6 +256,35 @@ jobs:
           tag_name: ${{ steps.version.outputs.tag }}
           name: ${{ steps.version.outputs.tag }}
           body_path: release-notes.md
+
+      # ------------------------------------------------------------------
+      # Release Please aborts every later run with "untagged, merged release PRs
+      # outstanding" while the release PR still carries `autorelease: pending`.
+      # Tagging lives here rather than in release-please, so the label has to be
+      # moved here too: without this step the next release PR is never opened and
+      # the only way out is relabelling by hand.
+      # ------------------------------------------------------------------
+      - name: Mark the release pull request as released
+        if: steps.version.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          number="$(gh pr list --repo "$REPO" --state merged \
+            --label "autorelease: pending" --limit 50 \
+            --json number,title \
+            --jq '[.[] | select(.title | contains("release '"${VERSION}"'"))][0].number // empty')"
+          if [ -z "${number}" ]; then
+            echo "No merged release PR for ${VERSION} is waiting for the label."
+            exit 0
+          fi
+          gh label create "autorelease: tagged" --repo "$REPO" --color ededed \
+            --description "release-please: this release PR has been released" --force >/dev/null
+          gh pr edit "${number}" --repo "$REPO" \
+            --remove-label "autorelease: pending" --add-label "autorelease: tagged"
+          echo "Marked #${number} as released (${VERSION})."
 
 # -----------------------------------------------------------------------------
 # Why this builds linux/amd64 only
