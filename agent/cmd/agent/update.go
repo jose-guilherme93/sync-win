@@ -24,6 +24,57 @@ import (
 
 const maxAgentDownloadBytes = 128 << 20
 
+// remoteSessionEnv is set by the agent on the ssh client of an interactive
+// remote-access session, and inherited by everything typed into it.
+const remoteSessionEnv = "SYNCWIN_REMOTE_SESSION"
+
+// detachEnv marks a run that has already been moved behind PID 1.
+const detachEnv = "SYNCWIN_DETACHED"
+
+// detachRequired reports whether this run must move itself out of the session
+// that started it. An update restarts the agent, and in a SyncWin remote
+// terminal the agent is the parent of that terminal, so a foreground run dies
+// halfway with the session it interrupted.
+func detachRequired(remoteSession, detached string) bool {
+	return strings.TrimSpace(remoteSession) != "" && strings.TrimSpace(detached) != "1"
+}
+
+// reexecUpdateDetached re-runs this same command as a transient systemd unit,
+// which PID 1 owns and the agent restart cannot take down.
+//
+// The arguments reach systemd-run as an argv, never as a shell string, so a flag
+// value can never turn into a command.
+func reexecUpdateDetached(args []string) error {
+	executable := executableOf()
+	if executable == "" {
+		return errors.New("cannot locate the agent binary for a detached update")
+	}
+	if _, err := exec.LookPath("systemd-run"); err != nil {
+		return errors.New("systemd-run is unavailable; let the update timer run it instead")
+	}
+	unit := fmt.Sprintf("syncwin-agent-update-%d", time.Now().Unix())
+	cmdArgs := []string{
+		"--collect",
+		"--quiet",
+		"--unit=" + unit,
+		"--description=SyncWin agent update",
+		"--setenv=" + detachEnv + "=1",
+		executable, "update",
+	}
+	cmdArgs = append(cmdArgs, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "systemd-run", cmdArgs...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("start the detached update: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	fmt.Println("This terminal belongs to the agent the update restarts, so the update")
+	fmt.Println("was moved out of it and keeps running.")
+	fmt.Printf("Follow it with: journalctl -u %s -f\n", unit)
+	fmt.Println("The agent reconnects on its own when the update finishes.")
+	return nil
+}
+
 // agentUpdatePublicKey is the base64 Ed25519 public key used to authenticate
 // auto-updates. It is injected at build time with
 // -ldflags "-X main.agentUpdatePublicKey=<key>". An empty key makes the updater
@@ -51,6 +102,18 @@ func cmdUpdate(args []string) error {
 	}
 	server := strings.TrimRight(*serverURL, "/")
 
+	// An update restarts the agent. When this command was typed into a SyncWin
+	// remote terminal, that agent is the parent of this shell: restarting it ends
+	// the session and takes the half-finished update down with it, which is how a
+	// device lost its only way in. Move the run behind PID 1 first, so the restart
+	// interrupts the operator's terminal and nothing else.
+	if detachRequired(os.Getenv(remoteSessionEnv), os.Getenv(detachEnv)) {
+		if err := reexecUpdateDetached(args); err != nil {
+			return err
+		}
+		return nil
+	}
+
 	// Remove anything older installs left behind before doing any work. The
 	// update service runs as root every 15 minutes, so this is the place that
 	// can clean system paths on devices that are never reinstalled.
@@ -65,6 +128,9 @@ func cmdUpdate(args []string) error {
 		if state := loadAgentState(); state != nil {
 			id, token = state.DeviceID, state.DeviceToken
 		}
+	}
+	if active := activeSessionCount(); active > 0 {
+		fmt.Printf("warning: %d active remote session(s) will be closed when the agent restarts\n", active)
 	}
 	return updateAgentAtIdentity(executableOf(), server, *service, *userSystemd, id, token)
 }

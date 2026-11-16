@@ -61,6 +61,23 @@ type pending struct {
 	user     string
 	expires  time.Time
 	ready    chan SessionConn
+
+	// mu guards taken, which says whether a browser received the pipe. The
+	// reaper and AwaitSession both claim it, and only the winner may keep it.
+	mu    sync.Mutex
+	taken bool
+}
+
+// claim reports whether the caller is the one that takes the pipe. It returns
+// false once anything else has claimed it.
+func (p *pending) claim() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.taken {
+		return false
+	}
+	p.taken = true
+	return true
 }
 
 // Hub tracks live agent control links and pairs a browser's session request
@@ -69,6 +86,17 @@ type Hub struct {
 	mu      sync.Mutex
 	agents  map[string]AgentLink
 	pending map[string]*pending
+
+	// SessionTTL bounds how long a ticket waits for the browser and the agent.
+	// Zero means InboundSessionTTL; tests shorten it.
+	SessionTTL time.Duration
+}
+
+func (h *Hub) sessionTTL() time.Duration {
+	if h.SessionTTL > 0 {
+		return h.SessionTTL
+	}
+	return InboundSessionTTL
 }
 
 // NewHub returns an empty hub.
@@ -134,7 +162,7 @@ func (h *Hub) RequestSession(deviceID, user string, idleSeconds, cols, rows int)
 	h.pending[ticket] = &pending{
 		deviceID: deviceID,
 		user:     user,
-		expires:  now.Add(InboundSessionTTL),
+		expires:  now.Add(h.sessionTTL()),
 		ready:    make(chan SessionConn, 1),
 	}
 	h.mu.Unlock()
@@ -184,6 +212,14 @@ func (h *Hub) AwaitSession(ctx context.Context, ticket, deviceID string) (Sessio
 	}
 	select {
 	case conn := <-p.ready:
+		if !p.claim() {
+			// The reaper got there first and already closed this pipe.
+			if conn != nil {
+				_ = conn.Close()
+			}
+			h.consume(ticket)
+			return nil, ErrUnknownTicket
+		}
 		h.consume(ticket)
 		if conn == nil {
 			return nil, ErrUnknownTicket
@@ -211,10 +247,34 @@ func (h *Hub) DeliverSession(ticket string, deviceID string, conn SessionConn) b
 	h.mu.Unlock()
 	select {
 	case p.ready <- conn:
+		// A pipe nobody redeems must not stay open on the device. The tab can
+		// close, or the attach can be rejected before AwaitSession is reached;
+		// either way an unclaimed ssh process and an authorized key would live
+		// on until the session's idle timeout.
+		go h.reapIfUnclaimed(ticket, p, conn)
 		return true
 	default:
 		return false
 	}
+}
+
+// attachGrace is how long past the ticket's expiry the reaper waits, so a
+// browser that is still inside its own wait window wins the race.
+const attachGrace = 250 * time.Millisecond
+
+func (h *Hub) reapIfUnclaimed(ticket string, p *pending, conn SessionConn) {
+	wait := time.Until(p.expires) + attachGrace
+	if wait < 0 {
+		wait = 0
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	<-timer.C
+	if !p.claim() {
+		return
+	}
+	h.consume(ticket)
+	_ = conn.Close()
 }
 
 func (h *Hub) consume(ticket string) {

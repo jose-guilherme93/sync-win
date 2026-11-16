@@ -109,30 +109,146 @@ ROLLBACK_NEEDED=""
 ROLLBACK_BACKUP_BINARY=""
 ROLLBACK_BACKUP_SERVICE=""
 
+# rollback restores the previous installation, and then makes sure an agent is
+# running.
+#
+# It used to delete the unit file and stop there. On a device whose only way in
+# was the SyncWin remote terminal -- which is a child of that very agent -- a
+# rollback that ran because the session was cut left the machine with a binary
+# and no unit: no agent, no tunnel, no second chance. Restoring the backup and
+# starting it is the difference between a failed update and a lost machine.
 rollback() {
     if [ -z "$ROLLBACK_NEEDED" ]; then
         return
     fi
     warn "Rolling back changes..."
-    case "$ROLLBACK_NEEDED" in
-        service_installed)
-            rm -f "$SYNCWIN_SERVICE_FILE"
-            systemctl daemon-reload 2>/dev/null || true
-            ;;
-        binary_installed)
-            if [ -n "$ROLLBACK_BACKUP_BINARY" ] && [ -f "$ROLLBACK_BACKUP_BINARY" ]; then
-                mv -f "$ROLLBACK_BACKUP_BINARY" "$SYNCWIN_BINARY"
-            else
-                rm -f "$SYNCWIN_BINARY"
-            fi
-            rm -f "$SYNCWIN_SERVICE_FILE"
-            systemctl daemon-reload 2>/dev/null || true
-            ;;
-    esac
+    local restored_unit=0
+    if [ -n "$ROLLBACK_BACKUP_SERVICE" ] && [ -f "$ROLLBACK_BACKUP_SERVICE" ]; then
+        cp -a "$ROLLBACK_BACKUP_SERVICE" "$SYNCWIN_SERVICE_FILE"
+        restored_unit=1
+    elif [ "$ROLLBACK_NEEDED" = "service_installed" ] || [ "$ROLLBACK_NEEDED" = "binary_installed" ]; then
+        # First install: there was no unit before, so removing ours is correct.
+        rm -f "$SYNCWIN_SERVICE_FILE"
+    fi
+    if [ -n "$ROLLBACK_BACKUP_BINARY" ] && [ -f "$ROLLBACK_BACKUP_BINARY" ]; then
+        cp -a "$ROLLBACK_BACKUP_BINARY" "$SYNCWIN_BINARY"
+    elif [ "$restored_unit" = "0" ]; then
+        # Nothing was here before this install, so nothing should be left now.
+        rm -f "$SYNCWIN_BINARY"
+    fi
+    systemctl daemon-reload 2>/dev/null || true
+    if [ "$restored_unit" = "1" ]; then
+        systemctl restart "$SYNCWIN_SERVICE_NAME" >/dev/null 2>&1 \
+            || warn "Could not restart the restored agent; check: systemctl status $SYNCWIN_SERVICE_NAME"
+    fi
     discard_backups
     ROLLBACK_NEEDED=""
 }
 trap rollback EXIT
+
+# =============================================================================
+# Remote-session guard
+# =============================================================================
+#
+# Every install restarts the agent. Inside a SyncWin remote-access terminal the
+# SSH client carrying that terminal is a child of the agent, so the restart ends
+# the operator's only channel -- and the rollback trap, which fires because the
+# session died, then takes the agent away with it. That is how a maintenance
+# command became a machine nobody could reach.
+#
+# So a run that starts inside such a session does not work in the foreground:
+# it copies itself and re-runs behind PID 1 in a transient systemd unit, which
+# the agent cannot take down. The terminal may drop; the work does not.
+
+# Variables the detached run must inherit, because they are the operator's
+# choices rather than this script's defaults.
+SYNCWIN_DETACH_PASSTHROUGH="SYNCWIN_SERVER SYNCWIN_TOKEN SYNCWIN_AUTO_UPDATE SYNCWIN_SSH_ON_INSTALL SYNCWIN_INSTALL_LYNIS SUDO_USER"
+
+# install_must_detach reports whether this run has to move behind PID 1.
+install_must_detach() {
+    [ "${SYNCWIN_DETACHED:-0}" = "1" ] && return 1
+    [ -n "${SYNCWIN_REMOTE_SESSION:-}" ] || return 1
+    return 0
+}
+
+# install_detach_env_safe reports whether every value that would be handed to
+# systemd-run is a single line.
+#
+# install_detach_argv speaks one argument per line, so a value containing a
+# newline would smuggle an extra argument into the detached command. The values
+# come from the operator's environment and from the server's install link, so
+# they are checked rather than trusted.
+install_detach_env_safe() {
+    local name value
+    for name in $SYNCWIN_DETACH_PASSTHROUGH; do
+        value="${!name:-}"
+        case "$value" in
+            *$'\n'*|*$'\r'*) return 1 ;;
+        esac
+    done
+    return 0
+}
+
+# install_detach_argv prints one argv element per line for `systemd-run`.
+#
+# One element per line keeps the caller's array construction free of word
+# splitting, and passing the installer path as a plain argument means no
+# operator-supplied value is ever handed to a shell.
+install_detach_argv() {
+    local copy="$1" unit="$2" name
+    printf '%s\n' systemd-run \
+        --collect \
+        --quiet \
+        --unit="$unit" \
+        --description="SyncWin agent install" \
+        --setenv=SYNCWIN_DETACHED=1 \
+        --setenv=SYNCWIN_YES=1
+    for name in $SYNCWIN_DETACH_PASSTHROUGH; do
+        if [ -n "${!name:-}" ]; then
+            printf '%s\n' "--setenv=${name}=${!name}"
+        fi
+    done
+    printf '%s\n' bash "$copy"
+}
+
+# detach_and_exit re-executes the installer behind PID 1 and returns the
+# operator to a working terminal with the command that follows the run.
+detach_and_exit() {
+    local script="$1" unit copy
+    if [ ! -f "$script" ] || [ ! -r "$script" ]; then
+        error "This installer was piped into bash, so it cannot move itself behind systemd."
+        error "Save it to a file and run it again with sudo:"
+        error "  curl -fsSL <installer-url> -o /tmp/syncwin-install.sh && sudo bash /tmp/syncwin-install.sh"
+        exit 1
+    fi
+    unit="syncwin-install-$(date +%Y%m%d%H%M%S)"
+    copy="/run/${unit}.sh"
+    if ! install_detach_env_safe; then
+        error "An install variable contains a newline; refusing to build a detached command."
+        error "Re-run the installer with SYNCWIN_SERVER, SYNCWIN_TOKEN and the rest on one line."
+        exit 1
+    fi
+    if ! install -m 0700 "$script" "$copy"; then
+        error "Could not stage the installer at $copy"
+        exit 1
+    fi
+
+    local -a argv=()
+    while IFS= read -r line; do
+        argv+=("$line")
+    done < <(install_detach_argv "$copy" "$unit")
+
+    if ! "${argv[@]}"; then
+        error "Could not start the detached install"
+        exit 1
+    fi
+    printf "\n"
+    warn "This terminal belongs to the agent this install restarts, so the install"
+    warn "was moved out of it. It keeps running and the agent comes back on its own."
+    printf "  Follow it with: journalctl -u %s -f\n" "$unit"
+    printf "  Reconnect from the dashboard in a few seconds.\n\n"
+    exit 0
+}
 
 # =============================================================================
 # Dependency checks
@@ -665,8 +781,12 @@ WantedBy=multi-user.target'
     fi
 
     ROLLBACK_NEEDED="service_installed"
-    systemctl stop "$SYNCWIN_SERVICE_NAME" 2>/dev/null || true
 
+    # Write the unit before touching the running agent. The stop used to come
+    # first, with the rollback armed: on a device reached through the agent's own
+    # terminal that stop killed the operator's session and the trap that fired
+    # afterwards deleted the unit it had never installed. The restart in
+    # start_service is the only thing that needs to stop the agent.
     echo "$service_content" > "$SYNCWIN_SERVICE_FILE"
 
     # Recompute the supplementary groups for this host. The template cannot be
@@ -979,8 +1099,15 @@ configure_service() {
 }
 
 start_service() {
-    systemctl enable "$SYNCWIN_SERVICE_NAME" >/dev/null 2>&1
-    systemctl restart "$SYNCWIN_SERVICE_NAME"
+    systemctl enable "$SYNCWIN_SERVICE_NAME" >/dev/null 2>&1 || true
+    if ! systemctl restart "$SYNCWIN_SERVICE_NAME"; then
+        error "The new agent could not be started"
+        # Roll back on the spot instead of leaving the device with a unit that
+        # does not come up: this is the last step that can strand a machine.
+        rollback
+        error "The previous installation was restored."
+        exit 1
+    fi
     sleep 2
     if systemctl is-active --quiet "$SYNCWIN_SERVICE_NAME"; then
         success "Service is running"
@@ -1078,12 +1205,19 @@ print_summary() {
 # =============================================================================
 
 main() {
+    local script_path="${BASH_SOURCE[0]}"
+    if [ -f "$script_path" ]; then
+        script_path="$(cd "$(dirname "$script_path")" && pwd)/$(basename "$script_path")"
+    fi
     for arg in "$@"; do
         case "$arg" in
             --yes|-y) SYNCWIN_YES=1 ;;
         esac
     done
     require_root
+    if install_must_detach; then
+        detach_and_exit "$script_path"
+    fi
     step "0" "Choosing capabilities..."
     prompt_capabilities
     step "1" "Detecting operating system..."
@@ -1131,5 +1265,11 @@ main() {
 
     print_summary
 }
+
+# scripts/install_test.sh sources this file to exercise the guard functions
+# without installing anything. Everything above is definition-only.
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+    return 0
+fi
 
 main "$@"
