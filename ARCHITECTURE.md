@@ -47,7 +47,7 @@ The agent runs on each Linux device. It is the only component allowed to touch t
 - collecting installed application inventory (apt, flatpak, pacman, AUR, AppImages)
 - reconnecting to the server only through a fresh enrollment flow after credential loss
 - enforcing local policy: any command type can be disabled via `/etc/sync-win/policy.json`
-- interactive remote access (opt-in, off by default): keeps an outbound tunnel, and for each session injects an ephemeral key through a root helper and runs `ssh` against its own loopback
+- interactive remote access (opt-in, off by default): keeps an outbound tunnel, and for each session asks the root helper to inject an ephemeral key and run `ssh` against the device's own loopback. The terminal is hosted by the helper, not by the agent, so it survives an agent update
 - surviving server outages via exponential backoff with jitter
 - persisting state across restarts (`~/.local/state/sync-win/agent-state.json`)
 
@@ -141,7 +141,7 @@ Communication is API-first and intentionally simple:
 4. The web dashboard reads the server data and shows the current device state.
 5. Docker management commands flow from the dashboard to the server (command queue), then to the agent, and results flow back. The agent polls that queue every two seconds on its own goroutine, independent of the telemetry cycle. A completed `list` replaces the cached container snapshot, and the server pushes the new state to open dashboards over SSE.
 6. Notifications flow from the server dispatcher to enabled providers asynchronously.
-7. For remote access, the agent keeps an outbound tunnel; the server issues a one-time ticket, and bytes flow browser → server → agent → loopback sshd. The server never names a host or port.
+7. For remote access, the agent keeps an outbound control tunnel; the server issues a one-time ticket, the agent hands the session to the root helper, and bytes flow browser → server → helper → loopback sshd. The server never names a host or port, and neither does the agent: the helper reads the attach destination from root-owned configuration. Hosting the terminal in the helper is what lets an agent update restart the agent without dropping the operator's session.
 
 No direct server-to-client shell execution is allowed, with one scoped exception:
 the opt-in remote-access tunnel, which is mediated by the device's local policy

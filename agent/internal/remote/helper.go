@@ -28,6 +28,10 @@ type Helper struct {
 	// operations run.
 	InjectFn func(user, key, id string) error
 	RevokeFn func(user, id string) error
+
+	// Host runs interactive sessions. Nil disables them, which is the state of
+	// a helper that was not given a session host.
+	Host *SessionHost
 }
 
 // Serve listens on the helper socket until the context is canceled.
@@ -59,6 +63,9 @@ func (h *Helper) Serve(ctx context.Context) error {
 	go func() {
 		<-ctx.Done()
 		_ = ln.Close()
+		if h.Host != nil {
+			h.Host.CloseAll()
+		}
 	}()
 
 	for {
@@ -95,27 +102,55 @@ func (h *Helper) handle(conn net.Conn) {
 		writeResp(conn, Response{Error: err.Error()})
 		return
 	}
-	if err := h.dispatch(req); err != nil {
+	// Attaching waits for a dial and an ssh handshake; a key operation does not.
+	// The deadline is extended only for the action that needs it.
+	if req.Action == ActionSessionOpen {
+		_ = conn.SetDeadline(time.Now().Add(h.sessionTimeout()))
+	}
+	resp, err := h.dispatch(req)
+	if err != nil {
 		writeResp(conn, Response{Error: err.Error()})
 		return
 	}
-	writeResp(conn, Response{OK: true})
+	writeResp(conn, resp)
 }
 
-func (h *Helper) dispatch(req Request) error {
+func (h *Helper) sessionTimeout() time.Duration {
+	if h.Timeout > 30*time.Second {
+		return h.Timeout
+	}
+	return 30 * time.Second
+}
+
+func (h *Helper) dispatch(req Request) (Response, error) {
 	switch req.Action {
 	case ActionInject:
 		if h.InjectFn != nil {
-			return h.InjectFn(req.User, req.Key, req.ID)
+			return Response{OK: true}, h.InjectFn(req.User, req.Key, req.ID)
 		}
-		return InjectUser(req.User, req.Key, h.KeyType, h.Options, req.ID, h.TTL)
+		return Response{OK: true}, InjectUser(req.User, req.Key, h.KeyType, h.Options, req.ID, h.TTL)
 	case ActionRevoke:
 		if h.RevokeFn != nil {
-			return h.RevokeFn(req.User, req.ID)
+			return Response{OK: true}, h.RevokeFn(req.User, req.ID)
 		}
-		return RevokeUser(req.User, req.ID)
+		return Response{OK: true}, RevokeUser(req.User, req.ID)
+	case ActionSessionOpen:
+		if h.Host == nil {
+			return Response{}, errors.New("this helper does not host sessions")
+		}
+		return Response{OK: true}, h.Host.Open(req.Spec())
+	case ActionSessionResize:
+		if h.Host == nil {
+			return Response{}, errors.New("this helper does not host sessions")
+		}
+		return Response{OK: true}, h.Host.Resize(req.Ticket, req.Cols, req.Rows)
+	case ActionSessionCount:
+		if h.Host == nil {
+			return Response{OK: true}, nil
+		}
+		return Response{OK: true, Sessions: h.Host.Count()}, nil
 	default:
-		return errors.New("unknown action")
+		return Response{}, errors.New("unknown action")
 	}
 }
 

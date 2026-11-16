@@ -173,3 +173,82 @@ func TestRegisterAgentReplacesAndClosesOldLink(t *testing.T) {
 		t.Fatal("live link should be gone after unregister")
 	}
 }
+
+// aSessionConn is a byte pipe that records its own closure.
+type aSessionConn struct {
+	mu     sync.Mutex
+	closed bool
+}
+
+func (c *aSessionConn) Read([]byte) (int, error)    { return 0, io.EOF }
+func (c *aSessionConn) Write(p []byte) (int, error) { return len(p), nil }
+
+func (c *aSessionConn) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closed = true
+	return nil
+}
+
+func (c *aSessionConn) isClosed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed
+}
+
+// A pipe that no browser redeems -- the tab closed, or the attach was rejected
+// before AwaitSession ran -- used to stay open on the device, keeping an ssh
+// process and an authorized key alive until the session's idle timeout.
+func TestUnclaimedSessionIsClosed(t *testing.T) {
+	h := NewHub()
+	h.SessionTTL = 30 * time.Millisecond
+	h.RegisterAgent("dev-1", &fakeLink{})
+
+	ticket, err := h.RequestSession("dev-1", "alice", 900, 0, 0)
+	if err != nil {
+		t.Fatalf("RequestSession: %v", err)
+	}
+	conn := &aSessionConn{}
+	if !h.DeliverSession(ticket, "dev-1", conn) {
+		t.Fatal("DeliverSession refused a live ticket")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if conn.isClosed() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("a session nobody attached to was never closed")
+}
+
+func TestClaimedSessionIsNotClosedByTheReaper(t *testing.T) {
+	h := NewHub()
+	h.SessionTTL = 30 * time.Millisecond
+	h.RegisterAgent("dev-1", &fakeLink{})
+
+	ticket, err := h.RequestSession("dev-1", "alice", 900, 0, 0)
+	if err != nil {
+		t.Fatalf("RequestSession: %v", err)
+	}
+	conn := &aSessionConn{}
+	if !h.DeliverSession(ticket, "dev-1", conn) {
+		t.Fatal("DeliverSession refused a live ticket")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	attached, err := h.AwaitSession(ctx, ticket, "dev-1")
+	if err != nil {
+		t.Fatalf("AwaitSession: %v", err)
+	}
+	if attached != conn {
+		t.Fatal("AwaitSession returned another pipe")
+	}
+
+	time.Sleep(150 * time.Millisecond)
+	if conn.isClosed() {
+		t.Fatal("the reaper closed a session the browser is using")
+	}
+}

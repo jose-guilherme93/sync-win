@@ -28,7 +28,7 @@ The project is built around three main components:
    - monitors Docker containers via local socket
    - reports the network topology on the slow inventory cycle: routes, ARP/NDP neighbours, wireless quality, tunnels, and the Tailscale peer list from the daemon's local API socket
    - executes Docker management commands (start, stop, restart, kill, remove, exec, compose, prune)
-   - opt-in interactive remote access (off by default): keeps an outbound tunnel and, per session, injects an ephemeral key through the root helper and runs `ssh` against its own loopback
+   - opt-in interactive remote access (off by default): keeps an outbound tunnel and, per session, asks the root helper to inject an ephemeral key and run `ssh` against the device's own loopback. The helper hosts the terminal, so an agent update restarts the agent without dropping the session
    - enforces local policy: any command type can be disabled via `/etc/sync-win/policy.json`
    - survives server outages via exponential backoff with jitter
    - persists state across restarts (systemd `StateDirectory`, so
@@ -39,7 +39,7 @@ The project is built around three main components:
    - Svelte 5 + TypeScript 6 + Vite 8 + Chart.js 4
    - token-first: a single access-token screen, configured only through the server's `.env`
    - Home is the fleet: a dense list with online state, last-seen time and inline CPU/RAM/disk percentage meters. The sidebar carries fleet and administration navigation only — never a device menu, not even a disabled one
-   - device Overview: axis-labelled Performance/Network/Disk I/O charts whose legends show last/average/min/max for every series, plus load and cores, storage, interfaces, top processes and system facts
+   - device Overview: a vitals strip (CPU, memory, disk /, temp, load, network) above axis-labelled Performance/Network/Disk I/O charts whose legends show last/average/min/max for every series, plus load and cores, storage, interfaces, top processes and system facts. Charts draw as SVG plots (`ui/SeriesPlot.svelte`) fed by `GET /api/devices/{id}/telemetry/series?window=…&since=…` (client: `lib/telemetry-series.ts`, with a history-v2 fallback): the first paint shows the newest slice of the window and the rest fills in leftward, the 30 s refetch requests only the delta, and loading state is a mountain stroke, never a skeleton
    - opening a device leaves the fleet: the sidebar is hidden, the device header shows identity plus a `Home` back button, and the 15 sections become one horizontally scrollable tab row (hardware · system · access) rendered by `shell/DeviceTabs.svelte`: Overview, CPU & Thermal, Memory, Storage, Network, Topology (the interactive network map), Sensors, Docker, Processes, Services (services and ports side by side with a detail drawer), Packages, Logs, Security (audit history plus host posture), Remote access, Settings
    - Docker container management (list, start/stop/restart/kill/remove, exec, compose, prune)
    - Remote access screen: tabbed SSH terminal (xterm.js, up to six concurrent sessions, tabs named by the running program) and a scrollable recent-session audit; device actions live in Settings → Maintenance
@@ -321,6 +321,12 @@ had never been executed in its real form.
   rolls back on any non-zero exit. Automatic updates being unavailable is a
   degraded outcome; refusing to install the agent is a broken one. Keep those
   separate, and only make the essential steps fatal.
+- **Never run a restarting operation from the terminal it restarts.** A remote
+  terminal is a child of the agent. Anything that stops or restarts the agent —
+  the installer, `sync-win-agent update`, `restart_agent` — must first move
+  itself behind PID 1 (`systemd-run --collect`) when `SYNCWIN_REMOTE_SESSION` is
+  set, and a rollback must always leave a startable unit. A device whose only
+  way in is that terminal has no recovery path at all.
 - **A failing test is a finding until proven otherwise.** Four tests failing at
   once once exposed a filter that folded an unset value onto a default. Check the
   code before changing the test.
@@ -345,9 +351,11 @@ promise about new surface area that was not made.
 From the repository root:
 
 ```bash
-make test          # server + agent go test, web unit tests + svelte-check
-make test-race     # server + agent go test with the race detector
-make lint          # go vet + svelte-check
+make test           # server + agent go test, web unit tests + svelte-check
+make test-race      # server + agent go test with the race detector
+make test-installer # the installer's remote-session guard cases
+make e2e-remote     # a remote session must survive an agent restart (dev stack)
+make lint           # go vet + svelte-check
 ```
 
 Or the underlying commands directly:
