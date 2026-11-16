@@ -55,7 +55,7 @@ func newTestServer(t *testing.T) *Server {
 	structLogger := logging.New(logCfg, logStore)
 	t.Cleanup(func() { structLogger.Stop() })
 
-	return &Server{store: st, logStore: logStore, log: structLogger, aggregator: store.NewAggregator(st), dockerQueue: docker.NewQueue(time.Minute), dockerBroadcaster: docker.NewBroadcaster(), streamTickets: newStreamTicketStore(), rateLimiter: newRateLimiter(), tunnelHub: tunnel.NewHub(), flags: featureFlags{AccessToken: testAccessToken}, logStreamInterval: 10 * time.Millisecond}
+	return &Server{store: st, logStore: logStore, log: structLogger, aggregator: store.NewAggregator(st), dockerQueue: docker.NewQueue(time.Minute), dockerBroadcaster: docker.NewBroadcaster(), streamTickets: newStreamTicketStore(), rateLimiter: newRateLimiter(), tunnelHub: tunnel.NewHub(), liveLeases: newLiveLeaseStore(), flags: featureFlags{AccessToken: testAccessToken}, logStreamInterval: 10 * time.Millisecond}
 }
 
 func TestAgentInstallScriptRegistersAndVerifies(t *testing.T) {

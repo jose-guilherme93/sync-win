@@ -423,6 +423,31 @@ Get raw telemetry history for charts. Requires session token.
 
 **Response:** `200 OK` (array of telemetry snapshots)
 
+#### `GET /api/devices/{id}/telemetry/series`
+
+The chart series alone, without the rest of each snapshot. Same owner check as
+`history`; the window is named rather than computed by the client.
+
+**Query parameters:**
+- `window`: `30m`, `1h`, `12h`, `24h`, `7d` or `30d`
+- `since`: optional unix seconds; when present only points after it are returned,
+  so a 30 s refresh sends the delta instead of the window
+
+**Response:** `200 OK` with `{ "points": [{ "t", "cpu", "mem", "disk", "rx", "tx", "temp" }] }`.
+Absent fields are `null`, and a window wider than 900 points is strided on the
+server.
+
+#### `POST /api/devices/{id}/live`
+
+Leases the fast collection cadence to whoever is watching. Body:
+`{ "active": true }` opens or renews a 60 s lease; `{ "active": false }` releases
+it. While a lease holds, the settings the agent polls report
+`collection_interval_seconds: 2` and `live_active: true`; the stored interval is
+never modified, and the lease expires 60 s after the last renewal (15 minutes at
+most from the first activation).
+
+**Response:** `200 OK` `{ "active": true, "until": <unix seconds> }`
+
 ### Apps
 
 #### `POST /api/devices/{id}/apps`

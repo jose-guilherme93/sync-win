@@ -76,11 +76,17 @@
   // device look stale. The topbar range now only controls how often the charts
   // refetch their history.
   let currentRange: RangeId = DEFAULT_RANGE
+  // DeviceOverview ends Live itself (ceiling, hidden tab or leaving the
+  // screen) by resetting the shared range to 1h; the fleet poll must follow
+  // that reset even though it did not come from the topbar.
+  const unsubCurrentRange = selectedRange.subscribe((value) => (currentRange = value))
+  onDestroy(unsubCurrentRange)
   // Fleet polling while no device is open. Once a device screen is up the poll
   // follows the agent's reporting cadence instead, which is what gives the live
-  // chart its detail inside a one-minute window.
+  // chart its detail inside a one-minute window. While Live is open the fleet
+  // is not downloaded at all: DeviceOverview drives a 1 s single-device
+  // telemetry poll, and this timer only keeps the notification feed moving.
   const DEVICE_POLL_MS = 10000
-  const DEVICE_LIVE_POLL_MS = 2000
   const MAX_POLL_MS = 60000
   const PANEL_REFRESH_MS = 60000
   // Top processes, Docker containers and the security posture only exist in
@@ -490,18 +496,23 @@
       schedulePoll(DEVICE_POLL_MS)
       return
     }
+    // Only the live window needs the fast poll, and it does not go through
+    // here: while Live is open on a device, DeviceOverview polls that one
+    // device's telemetry every second with a small payload. Downloading the
+    // whole fleet in parallel would duplicate every sample, so this timer
+    // skips loadDevices and only keeps the notification feed moving.
+    if (isDeviceSection && currentRange === 'live' && selectedDeviceId) {
+      await pollNotifications()
+      schedulePoll(DEVICE_POLL_MS)
+      return
+    }
     await Promise.all([loadDevices(false), pollNotifications()])
     // The summary merge keeps the selected device live; the detail payload is
     // only needed for the heavy fields and is refreshed on its own cadence.
     if (selectedDeviceId && Date.now() - lastDetailLoad >= DETAIL_REFRESH_MS) {
       void loadDeviceDetail(selectedDeviceId)
     }
-    // Only the live window needs the fast poll: every other range reads stored
-    // history and its resolution is minutes, so polling it every two seconds
-    // would be load for nothing.
-    const liveView = isDeviceSection && currentRange === 'live'
-    const base = liveView ? DEVICE_LIVE_POLL_MS : DEVICE_POLL_MS
-    schedulePoll(Math.min(base * 2 ** Math.min(consecutiveFailures, 4), MAX_POLL_MS))
+    schedulePoll(Math.min(DEVICE_POLL_MS * 2 ** Math.min(consecutiveFailures, 4), MAX_POLL_MS))
   }
 
   function schedulePoll(delay: number) {

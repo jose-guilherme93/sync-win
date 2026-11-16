@@ -3374,6 +3374,160 @@ func (s *Store) RemoveDevice(deviceID string) error {
 	return s.DeleteDevice(deviceID)
 }
 
+// TelemetrySeriesPoint is one compact chart point for /telemetry/series. The
+// pointer fields distinguish "the agent did not report this" (null) from a
+// real 0 reading; the raw payload blob never travels with these points.
+type TelemetrySeriesPoint struct {
+	T    int64    `json:"t"`
+	CPU  *float64 `json:"cpu"`
+	Mem  *float64 `json:"mem"`
+	Disk *float64 `json:"disk"`
+	RX   *float64 `json:"rx"`
+	TX   *float64 `json:"tx"`
+	Temp *float64 `json:"temp"`
+}
+
+// GetTelemetrySeries returns the compact chart series for a time range. It
+// reuses the existing resolution machinery: raw payloads for short windows
+// (falling back to telemetry_downsampled when raw is empty) and
+// ResolutionForInterval / GetBestHistory for longer ones. Disk usage is only
+// carried in raw samples, so it is null for downsampled resolutions.
+func (s *Store) GetTelemetrySeries(deviceID string, from, to time.Time) ([]TelemetrySeriesPoint, string, error) {
+	resolution := ResolutionForInterval(from, to)
+	if resolution == "raw" {
+		points, err := s.getTelemetrySeriesRaw(deviceID, from, to)
+		if err != nil {
+			return nil, resolution, err
+		}
+		if len(points) > 0 {
+			return points, "raw", nil
+		}
+	}
+	points, res, err := s.GetBestHistory(deviceID, from, to)
+	if err != nil {
+		return nil, res, err
+	}
+	return downsampledSeries(points), res, nil
+}
+
+// rawSeriesPayload carries only the fields the series endpoint needs, with
+// pointers so an absent field stays null instead of collapsing to 0.
+type rawSeriesPayload struct {
+	CPUUsagePercent  *float64        `json:"cpu_usage_percent"`
+	MemoryUsedBytes  *uint64         `json:"memory_used_bytes"`
+	MemoryTotalBytes *uint64         `json:"memory_total_bytes"`
+	CPUTemperature   *float64        `json:"cpu_temperature"`
+	NetworkIFaces    []NetworkIface  `json:"network_ifaces"`
+	DiskPartitions   []DiskPartition `json:"disk_partitions"`
+}
+
+func seriesMemPct(used, total *uint64) *float64 {
+	if used == nil || total == nil || *total == 0 {
+		return nil
+	}
+	pct := float64(*used) / float64(*total) * 100
+	return &pct
+}
+
+// seriesRootDisk picks the root filesystem usage, falling back to the largest
+// partition the agent reported.
+func seriesRootDisk(parts []DiskPartition) *float64 {
+	var chosen *DiskPartition
+	var largest *DiskPartition
+	for i := range parts {
+		p := &parts[i]
+		if p.Mount == "/" {
+			chosen = p
+			break
+		}
+		if largest == nil || p.TotalBytes > largest.TotalBytes {
+			largest = p
+		}
+	}
+	if chosen == nil {
+		chosen = largest
+	}
+	if chosen == nil {
+		return nil
+	}
+	pct := chosen.UsedPercent
+	return &pct
+}
+
+func seriesNetRates(ifaces []NetworkIface) (rx, tx *float64) {
+	if ifaces == nil {
+		return nil, nil
+	}
+	var rxSum, txSum float64
+	for _, iface := range ifaces {
+		if iface.Name == "lo" || iface.Name == "docker0" {
+			continue
+		}
+		rxSum += iface.RXRate
+		txSum += iface.TXRate
+	}
+	return &rxSum, &txSum
+}
+
+// getTelemetrySeriesRaw parses stored raw payloads into series points.
+func (s *Store) getTelemetrySeriesRaw(deviceID string, from, to time.Time) ([]TelemetrySeriesPoint, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rows, err := s.db.QueryContext(context.Background(),
+		"SELECT payload, received_at FROM telemetry_raw WHERE device_id = ? AND received_at >= ? AND received_at <= ? ORDER BY id ASC LIMIT ?",
+		deviceID, timeText(from), timeText(to), maxTelemetryRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var points []TelemetrySeriesPoint
+	for rows.Next() {
+		var payload, received string
+		if err := rows.Scan(&payload, &received); err != nil {
+			return nil, err
+		}
+		var hw rawSeriesPayload
+		if err := json.Unmarshal([]byte(payload), &hw); err != nil {
+			continue
+		}
+		receivedAt := textTime(received)
+		point := TelemetrySeriesPoint{T: receivedAt.Unix()}
+		if hw.CPUUsagePercent != nil {
+			cpu := *hw.CPUUsagePercent
+			point.CPU = &cpu
+		}
+		point.Mem = seriesMemPct(hw.MemoryUsedBytes, hw.MemoryTotalBytes)
+		point.Disk = seriesRootDisk(hw.DiskPartitions)
+		point.RX, point.TX = seriesNetRates(hw.NetworkIFaces)
+		if hw.CPUTemperature != nil {
+			temp := *hw.CPUTemperature
+			point.Temp = &temp
+		}
+		points = append(points, point)
+	}
+	return points, rows.Err()
+}
+
+// downsampledSeries maps stored aggregate rows onto the compact series shape.
+func downsampledSeries(rows []TelemetryDownsampled) []TelemetrySeriesPoint {
+	points := make([]TelemetrySeriesPoint, 0, len(rows))
+	for _, r := range rows {
+		ts := textTime(r.Timestamp)
+		cpu, mem, rx, tx, temp := r.CPUAvg, r.MemAvg, r.NetRXAvg, r.NetTXAvg, r.TempAvg
+		points = append(points, TelemetrySeriesPoint{
+			T:    ts.Unix(),
+			CPU:  &cpu,
+			Mem:  &mem,
+			Disk: nil,
+			RX:   &rx,
+			TX:   &tx,
+			Temp: &temp,
+		})
+	}
+	return points
+}
+
 // SaveExtraDirs is an alias for SetSyncConfig.
 func (s *Store) SaveExtraDirs(ownerID string, dirs []string) error {
 	return s.SetSyncConfig(ownerID, dirs)

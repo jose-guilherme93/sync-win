@@ -61,6 +61,11 @@ type Server struct {
 	// storageRollup remembers the last rollup per device. The daily table only
 	// needs the day's last sample, not one write per heartbeat.
 	storageRollup sync.Map
+	// liveLeases holds the in-memory Live viewing leases; nothing is persisted
+	// and a restart simply drops the accelerated cadence for one lease period.
+	liveLeases *liveLeaseStore
+	// now is the lease clock; tests replace it to exercise expiry.
+	now func() time.Time
 }
 
 type registerRequest struct {
@@ -163,7 +168,7 @@ func Run() error {
 		// own tokens, so a misconfigured dashboard token must not stop the fleet.
 		structLogger.Warn(logging.CatSecurity, logging.EventAppStarted, flags.AccessTokenProblem, nil)
 	}
-	server := &Server{store: dataStore, logStore: logStore, log: structLogger, aggregator: aggregator, notifier: notifier, dockerQueue: dockerQueue, dockerBroadcaster: dockerBroadcaster, streamTickets: newStreamTicketStore(), rateLimiter: newRateLimiter(), tunnelHub: tunnel.NewHub(), flags: flags, trustProxy: envBool("SYNCWIN_TRUST_PROXY", false), logStreamInterval: time.Second}
+	server := &Server{store: dataStore, logStore: logStore, log: structLogger, aggregator: aggregator, notifier: notifier, dockerQueue: dockerQueue, dockerBroadcaster: dockerBroadcaster, streamTickets: newStreamTicketStore(), rateLimiter: newRateLimiter(), tunnelHub: tunnel.NewHub(), liveLeases: newLiveLeaseStore(), flags: flags, trustProxy: envBool("SYNCWIN_TRUST_PROXY", false), logStreamInterval: time.Second}
 
 	// Logging settings are persisted so an operator's choice survives a
 	// restart. Seed the row on first boot from the configured defaults, then
@@ -1005,6 +1010,10 @@ func (s *Server) handleDeviceDetail(w http.ResponseWriter, r *http.Request) {
 		s.handleTelemetryHistoryV2(w, r, parts[0])
 		return
 	}
+	if len(parts) == 3 && parts[1] == "telemetry" && parts[2] == "series" {
+		s.handleTelemetrySeries(w, r, parts[0])
+		return
+	}
 	if len(parts) == 3 && parts[1] == "storage" && parts[2] == "history" {
 		s.handleStorageHistory(w, r, parts[0])
 		return
@@ -1019,6 +1028,10 @@ func (s *Server) handleDeviceDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(parts) == 2 && parts[1] == "settings" {
 		s.handleDeviceSettings(w, r, parts[0])
+		return
+	}
+	if len(parts) == 2 && parts[1] == "live" {
+		s.handleDeviceLive(w, r, parts[0])
 		return
 	}
 	if len(parts) == 2 && parts[1] == "updates" {
@@ -1279,7 +1292,13 @@ func (s *Server) handleDeviceSettings(w http.ResponseWriter, r *http.Request, de
 			s.writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(settings)
+		resp := deviceSettingsResponse{DeviceSettings: settings}
+		if s.liveLeases.active(deviceID, s.liveClock()) {
+			resp.LiveActive = true
+			// Only while the lease holds: the stored value stays untouched.
+			resp.CollectionIntervalSeconds = liveIntervalSeconds
+		}
+		_ = json.NewEncoder(w).Encode(resp)
 	case http.MethodPatch:
 		if s.ownerID(r) != device.OwnerID {
 			s.writeError(w, http.StatusForbidden, errors.New("not authorized"))
@@ -2224,6 +2243,92 @@ func (s *Server) handleTelemetryHistoryV2(w http.ResponseWriter, r *http.Request
 		"to":         to.Format(time.RFC3339),
 		"points":     points,
 		"count":      len(points),
+	})
+}
+
+// telemetrySeriesWindows are the predeclared chart windows the dashboard uses.
+// A fixed set keeps the resolution choice and the point cap predictable.
+var telemetrySeriesWindows = map[string]time.Duration{
+	"30m": 30 * time.Minute,
+	"1h":  time.Hour,
+	"12h": 12 * time.Hour,
+	"24h": 24 * time.Hour,
+	"7d":  7 * 24 * time.Hour,
+	"30d": 30 * 24 * time.Hour,
+}
+
+// maxTelemetrySeriesPoints caps one series response. A window that would
+// render more is decimated by stride server-side; the client never downloads
+// thousands of rows just to draw a line.
+const maxTelemetrySeriesPoints = 900
+
+// handleTelemetrySeries serves the compact chart series for a device. Unlike
+// /telemetry/history-v2 it returns only the series values, never the raw ~8 KB
+// telemetry payload, and supports ?since= so the dashboard can fetch only the
+// delta instead of re-reading the whole window.
+func (s *Server) handleTelemetrySeries(w http.ResponseWriter, r *http.Request, deviceID string) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	device, err := s.store.GetDevice(deviceID)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
+		return
+	}
+	if device.OwnerID != s.ownerID(r) {
+		s.writeError(w, http.StatusForbidden, errors.New("not authorized"))
+		return
+	}
+
+	window := r.URL.Query().Get("window")
+	duration, ok := telemetrySeriesWindows[window]
+	if !ok {
+		s.writeError(w, http.StatusBadRequest, errors.New("invalid 'window' (expected 30m, 1h, 12h, 24h, 7d or 30d)"))
+		return
+	}
+	var since int64
+	if v := r.URL.Query().Get("since"); v != "" {
+		parsed, parseErr := strconv.ParseInt(v, 10, 64)
+		if parseErr != nil {
+			s.writeError(w, http.StatusBadRequest, errors.New("invalid 'since' timestamp (expected unix seconds)"))
+			return
+		}
+		since = parsed
+	}
+
+	to := time.Now().UTC()
+	from := to.Add(-duration)
+	points, resolution, err := s.store.GetTelemetrySeries(deviceID, from, to)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if since != 0 {
+		filtered := points[:0:0]
+		for _, p := range points {
+			if p.T > since {
+				filtered = append(filtered, p)
+			}
+		}
+		points = filtered
+	}
+	if len(points) > maxTelemetrySeriesPoints {
+		stride := (len(points) + maxTelemetrySeriesPoints - 1) / maxTelemetrySeriesPoints
+		strided := points[:0:0]
+		for i := 0; i < len(points); i += stride {
+			strided = append(strided, points[i])
+		}
+		points = strided
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"window":     window,
+		"resolution": resolution,
+		"from":       from.Unix(),
+		"to":         to.Unix(),
+		"points":     points,
 	})
 }
 
