@@ -39,8 +39,8 @@ func TestGetTelemetrySeriesRawWindowExtractsSeries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AppendTelemetry(device.ID, payload); err != nil {
-		t.Fatal(err)
+	if appendErr := st.AppendTelemetry(device.ID, payload); appendErr != nil {
+		t.Fatal(appendErr)
 	}
 
 	now := time.Now().UTC()
@@ -92,8 +92,8 @@ func TestGetTelemetrySeriesAbsentFieldsAreNullNotZero(t *testing.T) {
 	// Go struct marshaller would write explicit zeros, so build the JSON by
 	// hand to exercise true absence.
 	payload := []byte(`{"cpu_usage_percent":7.5}`)
-	if err := st.AppendTelemetry(device.ID, payload); err != nil {
-		t.Fatal(err)
+	if appendErr := st.AppendTelemetry(device.ID, payload); appendErr != nil {
+		t.Fatal(appendErr)
 	}
 
 	now := time.Now().UTC()
@@ -139,8 +139,8 @@ func TestGetTelemetrySeriesDownsampledWindowUsesStoredTables(t *testing.T) {
 			TempAvg:     55,
 			SampleCount: 6,
 		}
-		if err := st.AppendTelemetryDownsampled(agg); err != nil {
-			t.Fatal(err)
+		if appendErr := st.AppendTelemetryDownsampled(agg); appendErr != nil {
+			t.Fatal(appendErr)
 		}
 	}
 

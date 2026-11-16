@@ -3473,14 +3473,14 @@ func seriesNetRates(ifaces []NetworkIface) (rx, tx *float64) {
 func (s *Store) getTelemetrySeriesRaw(deviceID string, from, to time.Time) ([]TelemetrySeriesPoint, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	rows, err := s.db.Query(
+	rows, err := s.db.QueryContext(context.Background(),
 		"SELECT payload, received_at FROM telemetry_raw WHERE device_id = ? AND received_at >= ? AND received_at <= ? ORDER BY id ASC LIMIT ?",
 		deviceID, timeText(from), timeText(to), maxTelemetryRows,
 	)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var points []TelemetrySeriesPoint
 	for rows.Next() {
 		var payload, received string

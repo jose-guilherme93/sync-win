@@ -68,8 +68,7 @@ func setStoredInterval(t *testing.T, s *Server, deviceID, sessionToken string, s
 }
 
 func itoa(n int) string {
-	return strings.TrimSpace(strings.Replace(strings.Replace(
-		jsonNumber(n), " ", "", -1), "\n", "", -1))
+	return strings.TrimSpace(strings.NewReplacer(" ", "", "\n", "").Replace(jsonNumber(n)))
 }
 
 func jsonNumber(n int) string {
@@ -101,8 +100,8 @@ func TestLiveLeaseAcceleratesSettings(t *testing.T) {
 		Active bool  `json:"active"`
 		Until  int64 `json:"until"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatal(err)
+	if decodeErr := json.Unmarshal(rec.Body.Bytes(), &resp); decodeErr != nil {
+		t.Fatal(decodeErr)
 	}
 	if !resp.Active {
 		t.Fatalf("activate response = %+v", resp)

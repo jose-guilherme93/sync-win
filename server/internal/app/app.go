@@ -2289,8 +2289,8 @@ func (s *Server) handleTelemetrySeries(w http.ResponseWriter, r *http.Request, d
 	}
 	var since int64
 	if v := r.URL.Query().Get("since"); v != "" {
-		parsed, err := strconv.ParseInt(v, 10, 64)
-		if err != nil {
+		parsed, parseErr := strconv.ParseInt(v, 10, 64)
+		if parseErr != nil {
 			s.writeError(w, http.StatusBadRequest, errors.New("invalid 'since' timestamp (expected unix seconds)"))
 			return
 		}
