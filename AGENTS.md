@@ -150,9 +150,10 @@ Every other branch in the repository is stale; two branches is the whole model.
 
 `make release` runs the path end to end (merge `develop` into `main`, wait for
 release-please, merge its pull request, wait for the image): one command, no
-hand-stepped waits, and every gate intact. The release pull request skips the CI
-jobs because it only rewrites the version files — the full suite runs again on
-the merge to `main`, and `Release` publishes only after that run is green.
+hand-stepped waits, and every gate intact. The release pull request runs its CI
+jobs with every expensive step skipped, because it only rewrites the version
+files; the full suite runs again on the merge to `main`, and `Release` publishes
+only after that run is green.
 
 ## Commit and release convention
 
