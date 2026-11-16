@@ -71,6 +71,16 @@ git fetch --quiet origin
 [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/develop)" ] \
     || die "develop is not up to date with origin; pull first"
 
+# main only ever moves by merging develop plus the release commit, so it can hold
+# merge commits develop does not have. Bringing them back is content-free and it
+# is what makes the develop->main pull request mergeable at all.
+behind="$(git rev-list --count origin/develop..origin/main)"
+if [ "${behind}" != "0" ]; then
+    say "main is ${behind} commit(s) ahead; bringing them back into develop"
+    git merge --no-edit --quiet origin/main
+    git push --quiet origin develop
+fi
+
 if [ "$(git rev-list --count origin/main..origin/develop)" = "0" ]; then
     say "Nothing to release"
     echo "develop has no commit that main does not already have."
