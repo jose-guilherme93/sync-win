@@ -53,7 +53,11 @@ wait_checks() {
         case "$state" in
             CLEAN) return 0 ;;
             DIRTY) die "#${pr} has conflicts; resolve them on develop first" ;;
-            BEHIND) die "#${pr} is behind; merge main into develop and push" ;;
+            # BEHIND is normal right after the merge that made this release: the
+            # release-please branch is rebuilt on top of the new main a few
+            # seconds later, and that push is also what starts a fresh CI run to
+            # approve. Waiting is the correct reaction, not giving up.
+            BEHIND) echo "#${pr} is behind main; waiting for the branch to catch up" ;;
         esac
         sleep 15
     done
