@@ -11,6 +11,17 @@ Versions are decided by release-please: it reads the Conventional Commits on
 version, and a breaking change increases the major version. Merging that pull
 request publishes the image and creates the tag.
 
+## [0.17.1](https://github.com/jose-guilherme93/sync-win/compare/v0.17.0...v0.17.1) (2026-11-16)
+
+
+### Bug Fixes
+
+* **agent:** render unit placeholders so the updater can repair units ([40686c5](https://github.com/jose-guilherme93/sync-win/commit/40686c58eaf5b29353eefa6de1270268d3095377))
+* **ci:** pin release-please to main so it can bound its walk ([86da81a](https://github.com/jose-guilherme93/sync-win/commit/86da81ae1ba896424759a2dec968bb444ce02127))
+* **ci:** pin release-please to main so it can bound its walk ([6fc7a06](https://github.com/jose-guilherme93/sync-win/commit/6fc7a0612644a91e0ca00f2ca660fdc250a989eb))
+* per-core CPU share, full pid, unit refresh and disabled actions ([b37df9f](https://github.com/jose-guilherme93/sync-win/commit/b37df9fa77cbb9a9c4d031f3337b6512685ae714))
+* **processes:** per-core CPU share, full pid, honest disabled actions ([763ec28](https://github.com/jose-guilherme93/sync-win/commit/763ec2849e3915b3a82f2c9132508202bb44c4c1))
+
 ## [0.17.0](https://github.com/jose-guilherme93/sync-win/compare/v0.16.1...v0.17.0) (2026-11-11)
 
 
