@@ -258,23 +258,23 @@ func (h *SessionHost) start(session *hostedSession, spec SessionSpec, attachURL 
 		generate = generateKey
 	}
 	if keyErr := generate(ctx, keyPath); keyErr != nil {
-		os.RemoveAll(keyDir)
+		_ = os.RemoveAll(keyDir)
 		return keyErr
 	}
 	pub, err := os.ReadFile(keyPath + ".pub")
 	if err != nil {
-		os.RemoveAll(keyDir)
+		_ = os.RemoveAll(keyDir)
 		return err
 	}
-	if err := h.Inject(spec.User, strings.TrimSpace(string(pub)), spec.Ticket); err != nil {
-		os.RemoveAll(keyDir)
-		return fmt.Errorf("key injection failed: %w", err)
+	if injectErr := h.Inject(spec.User, strings.TrimSpace(string(pub)), spec.Ticket); injectErr != nil {
+		_ = os.RemoveAll(keyDir)
+		return fmt.Errorf("key injection failed: %w", injectErr)
 	}
 
 	conn, err := h.dialSession(ctx, attachURL)
 	if err != nil {
 		_ = h.Revoke(spec.User, spec.Ticket)
-		os.RemoveAll(keyDir)
+		_ = os.RemoveAll(keyDir)
 		return fmt.Errorf("session attach failed: %w", err)
 	}
 	session.conn = conn
@@ -283,7 +283,7 @@ func (h *SessionHost) start(session *hostedSession, spec SessionSpec, attachURL 
 	if err != nil {
 		_ = conn.Close()
 		_ = h.Revoke(spec.User, spec.Ticket)
-		os.RemoveAll(keyDir)
+		_ = os.RemoveAll(keyDir)
 		return err
 	}
 	session.term = term

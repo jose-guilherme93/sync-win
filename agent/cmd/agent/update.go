@@ -62,7 +62,9 @@ func reexecUpdateDetached(args []string) error {
 		executable, "update",
 	}
 	cmdArgs = append(cmdArgs, args...)
-	out, err := exec.Command("systemd-run", cmdArgs...).CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "systemd-run", cmdArgs...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("start the detached update: %w: %s", err, strings.TrimSpace(string(out)))
 	}

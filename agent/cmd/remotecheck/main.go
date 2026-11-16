@@ -99,8 +99,8 @@ func run(cfg config) error {
 	defer session.close()
 
 	first := fmt.Sprintf("SYNCWIN-BEFORE-%d", time.Now().UnixNano())
-	if err := session.expect(first, cfg.wait); err != nil {
-		return fmt.Errorf("the shell did not answer before the restart: %w", err)
+	if expectErr := session.expect(first, cfg.wait); expectErr != nil {
+		return fmt.Errorf("the shell did not answer before the restart: %w", expectErr)
 	}
 	fmt.Println("ok: the shell answers before the agent restart")
 
@@ -108,8 +108,8 @@ func run(cfg config) error {
 		fmt.Println("skipped: no -restart command, so nothing was replaced")
 		return nil
 	}
-	if err := runCommand(cfg.restart); err != nil {
-		return fmt.Errorf("restart the agent: %w", err)
+	if restartErr := runCommand(cfg.restart); restartErr != nil {
+		return fmt.Errorf("restart the agent: %w", restartErr)
 	}
 	pidAfter, err := agentPID(cfg.restart)
 	if err != nil {
@@ -132,6 +132,14 @@ func run(cfg config) error {
 
 // --- dashboard API ----------------------------------------------------------
 
+// newRequest builds an API request with a context, so no call can hang forever.
+func newRequest(ctx context.Context, method, url string, body []byte) (*http.Request, error) {
+	if body == nil {
+		return http.NewRequestWithContext(ctx, method, url, nil)
+	}
+	return http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
+}
+
 func signIn(base, token string) (*http.Client, error) {
 	jar, err := cookiejar.New(nil)
 	if err != nil {
@@ -139,7 +147,14 @@ func signIn(base, token string) (*http.Client, error) {
 	}
 	client := &http.Client{Jar: jar, Timeout: 30 * time.Second}
 	body, _ := json.Marshal(map[string]string{"token": token})
-	resp, err := client.Post(strings.TrimRight(base, "/")+"/api/auth/login", "application/json", bytes.NewReader(body))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req, err := newRequest(ctx, http.MethodPost, strings.TrimRight(base, "/")+"/api/auth/login", body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("sign in: %w", err)
 	}
@@ -152,7 +167,13 @@ func signIn(base, token string) (*http.Client, error) {
 }
 
 func findDevice(client *http.Client, base, hostname string) (string, error) {
-	resp, err := client.Get(strings.TrimRight(base, "/") + "/api/devices")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req, err := newRequest(ctx, http.MethodGet, strings.TrimRight(base, "/")+"/api/devices", nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("list devices: %w", err)
 	}
@@ -203,9 +224,10 @@ func attach(client *http.Client, base, deviceID, user string) (*terminal, error)
 		return nil, err
 	}
 	body, _ := json.Marshal(map[string]any{"user": user, "cols": 120, "rows": 30})
-	req, err := http.NewRequest(http.MethodPost,
-		strings.TrimRight(base, "/")+"/api/devices/"+url.PathEscape(deviceID)+"/remote-access/session",
-		bytes.NewReader(body))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req, err := newRequest(ctx, http.MethodPost,
+		strings.TrimRight(base, "/")+"/api/devices/"+url.PathEscape(deviceID)+"/remote-access/session", body)
 	if err != nil {
 		return nil, err
 	}
@@ -223,8 +245,8 @@ func attach(client *http.Client, base, deviceID, user string) (*terminal, error)
 	var issued struct {
 		Ticket string `json:"ticket"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&issued); err != nil {
-		return nil, fmt.Errorf("decode the ticket: %w", err)
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&issued); decodeErr != nil {
+		return nil, fmt.Errorf("decode the ticket: %w", decodeErr)
 	}
 	if issued.Ticket == "" {
 		return nil, errors.New("the server returned no ticket")
@@ -255,8 +277,6 @@ func attach(client *http.Client, base, deviceID, user string) (*terminal, error)
 	}
 	header := http.Header{}
 	header.Set("Cookie", strings.Join(pairs, "; "))
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	conn, wsResp, err := websocket.Dial(ctx, parsed.String(), &websocket.DialOptions{HTTPHeader: header})
 	if wsResp != nil && wsResp.Body != nil {
 		_ = wsResp.Body.Close()
@@ -344,7 +364,9 @@ func agentPID(command string) (string, error) {
 	if show == command {
 		return "", errors.New("the restart command must contain `systemctl restart sync-win-agent`")
 	}
-	out, err := exec.Command("sh", "-c", show).CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "sh", "-c", show).CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -352,7 +374,9 @@ func agentPID(command string) (string, error) {
 }
 
 func runCommand(command string) error {
-	out, err := exec.Command("sh", "-c", command).CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "sh", "-c", command).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
 	}
