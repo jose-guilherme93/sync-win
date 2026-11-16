@@ -288,9 +288,11 @@ jobs:
       # Container logs are the only place a server-side 5xx or a proxy error will
       # show up, and they are gone once the job ends.
       - name: Dump stack logs on failure
-        if: failure()
+        if: failure() && env.IS_RELEASE_PR != 'true'
         run: docker compose -f compose.dev.yaml logs --no-color
 
       - name: Tear down
-        if: always()
+        # A checkout that never ran leaves no compose file to tear down, and the
+        # teardown step would fail the job on a missing path.
+        if: always() && env.IS_RELEASE_PR != 'true'
         run: docker compose -f compose.dev.yaml down -v
