@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -57,6 +58,9 @@ type Server struct {
 	// logStreamInterval is how often the log SSE endpoint checks the table for
 	// new rows. It is a field so tests can shorten it.
 	logStreamInterval time.Duration
+	// storageRollup remembers the last rollup per device. The daily table only
+	// needs the day's last sample, not one write per heartbeat.
+	storageRollup sync.Map
 }
 
 type registerRequest struct {
@@ -207,6 +211,7 @@ func Run() error {
 	mux.HandleFunc("/api/sync-config", server.handleSyncConfig)
 	mux.HandleFunc("/api/agent/version", server.handleAgentVersion)
 	mux.HandleFunc("/api/devices", server.handleDevices)
+	mux.HandleFunc("/api/agents/usage", server.handleAgentUsage)
 	mux.HandleFunc("/api/devices/", server.handleDeviceDetail)
 	mux.HandleFunc("/api/agent/install.sh", server.handleAgentInstallScript)
 	mux.HandleFunc("/api/agent/unit", server.handleAgentUnitTemplate)
@@ -849,6 +854,77 @@ func shellDoubleQuote(value string) string {
 	).Replace(value)
 }
 
+// storageRollupEvery is how often a device's daily storage row is written.
+const storageRollupEvery = 5 * time.Minute
+
+func (s *Server) shouldRollupStorage(deviceID string) bool {
+	now := time.Now()
+	if value, ok := s.storageRollup.Load(deviceID); ok {
+		if last, ok := value.(time.Time); ok && now.Sub(last) < storageRollupEvery {
+			return false
+		}
+	}
+	s.storageRollup.Store(deviceID, now)
+	return true
+}
+
+// handleAgentUsage serves the per-device history of the agent's own cost.
+//
+// The fleet view needs one series per device to draw a sparkline; asking the
+// per-device telemetry history N times would be N authentication checks and N
+// scans for the same two numbers. This reads the raw window once and returns
+// the downsample.
+func (s *Server) handleAgentUsage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	ownerID, ok := s.requireSession(w, r)
+	if !ok {
+		return
+	}
+
+	to := time.Now().UTC()
+	from := to.Add(-2 * time.Hour)
+	if v := r.URL.Query().Get("from"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, errors.New("invalid 'from' timestamp (expected RFC3339)"))
+			return
+		}
+		from = t
+	}
+	if v := r.URL.Query().Get("to"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, errors.New("invalid 'to' timestamp (expected RFC3339)"))
+			return
+		}
+		to = t
+	}
+	if to.Before(from) {
+		s.writeError(w, http.StatusBadRequest, errors.New("'to' must not be before 'from'"))
+		return
+	}
+	// The raw window is bounded by retention anyway; cap it so a hand-written
+	// query cannot turn into a full-table scan.
+	if to.Sub(from) > 24*time.Hour {
+		from = to.Add(-24 * time.Hour)
+	}
+
+	series, err := s.store.AgentUsageSeries(ownerID, from, to, 0)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"from":    from.Format(time.RFC3339),
+		"to":      to.Format(time.RFC3339),
+		"devices": series,
+	})
+}
+
 func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -861,6 +937,7 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(devices)
 	case http.MethodPost:
 		ownerID, ok := s.requireSession(w, r)
@@ -926,6 +1003,10 @@ func (s *Server) handleDeviceDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(parts) == 3 && parts[1] == "telemetry" && parts[2] == "history-v2" {
 		s.handleTelemetryHistoryV2(w, r, parts[0])
+		return
+	}
+	if len(parts) == 3 && parts[1] == "storage" && parts[2] == "history" {
+		s.handleStorageHistory(w, r, parts[0])
 		return
 	}
 	if len(parts) == 3 && parts[1] == "telemetry" && parts[2] == "delete" && r.Method == http.MethodDelete {
@@ -1902,6 +1983,15 @@ func (s *Server) handleTelemetry(w http.ResponseWriter, r *http.Request, deviceI
 	req.Hardware.ProcessHistory = nil
 
 	updated, err := s.store.UpdateHardwareStats(deviceID, req.Hardware)
+	if err == nil && s.shouldRollupStorage(deviceID) {
+		// Best effort: the daily rollup feeds the Storage screen, and failing it
+		// must never fail a heartbeat the device depends on. It runs at most
+		// every five minutes per device: the table keeps one row per day, so a
+		// write per heartbeat bought nothing but WAL churn.
+		if derr := s.store.UpsertStorageDaily(deviceID, req.Hardware.DiskPartitions, time.Now().UTC()); derr != nil {
+			s.log.Warn(logging.CatDevice, logging.EventAppError, "storage rollup failed", map[string]any{"device_id": deviceID, "error": derr.Error()})
+		}
+	}
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
@@ -1969,18 +2059,66 @@ func (s *Server) handleTelemetryHistory(w http.ResponseWriter, r *http.Request, 
 	_ = json.NewEncoder(w).Encode(points)
 }
 
+// handleStorageHistory serves the daily per-mount usage kept in storage_daily.
+// It is what makes the growth chart and its ETA real rather than extrapolated
+// from the two-hour raw window.
+func (s *Server) handleStorageHistory(w http.ResponseWriter, r *http.Request, deviceID string) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	ownerID, ok := s.requireSession(w, r)
+	if !ok {
+		return
+	}
+	device, err := s.store.GetDevice(deviceID)
+	// A device of another owner answers the same as one that does not exist:
+	// otherwise an unauthenticated caller can enumerate real device IDs.
+	if err != nil || device.OwnerID != ownerID {
+		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
+		return
+	}
+
+	days := 90
+	if v := r.URL.Query().Get("days"); v != "" {
+		parsed, parseErr := strconv.Atoi(v)
+		if parseErr != nil || parsed <= 0 {
+			s.writeError(w, http.StatusBadRequest, errors.New("invalid 'days' (expected a positive integer)"))
+			return
+		}
+		// Clamp here and echo the effective value: the store refuses windows over
+		// 400, and a response claiming 401 while returning 90 is a lie.
+		if parsed > 400 {
+			parsed = 400
+		}
+		days = parsed
+	}
+
+	mounts, err := s.store.StorageDailyHistory(deviceID, days)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"device_id": deviceID,
+		"days":      days,
+		"mounts":    mounts,
+	})
+}
+
 func (s *Server) handleTelemetryHistoryV2(w http.ResponseWriter, r *http.Request, deviceID string) {
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	device, err := s.store.GetDevice(deviceID)
-	if err != nil {
-		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
+	ownerID, ok := s.requireSession(w, r)
+	if !ok {
 		return
 	}
-	if device.OwnerID != s.ownerID(r) {
-		s.writeError(w, http.StatusForbidden, errors.New("not authorized"))
+	device, err := s.store.GetDevice(deviceID)
+	if err != nil || device.OwnerID != ownerID {
+		s.writeError(w, http.StatusNotFound, errors.New("device not found"))
 		return
 	}
 
@@ -2542,8 +2680,14 @@ SYNCWIN_TOKEN="%s"
 	if query.Get("ssh") == "1" {
 		preamble += "SYNCWIN_SSH_ON_INSTALL=\"1\"\n"
 	}
-	if query.Get("autoupdate") == "0" {
-		preamble += "SYNCWIN_AUTO_UPDATE=\"0\"\n"
+	if query.Get("ssh") == "0" {
+		preamble += "SYNCWIN_SSH_ON_INSTALL=\"0\"\n"
+	}
+	if v := query.Get("autoupdate"); v == "1" || v == "0" {
+		preamble += "SYNCWIN_AUTO_UPDATE=\"" + v + "\"\n"
+	}
+	if v := query.Get("lynis"); v == "1" || v == "0" {
+		preamble += "SYNCWIN_LYNIS=\"" + v + "\"\n"
 	}
 	script := preamble + "\n"
 	// Append the static installer from the embedded filesystem.
@@ -2599,7 +2743,6 @@ func (s *Server) handleAgentUnitTemplate(w http.ResponseWriter, r *http.Request)
 	unit := strings.NewReplacer(
 		"{{SERVER_URL}}", serverURL,
 		"{{DEVICE_ID}}", deviceID,
-		"{{DEVICE_TOKEN}}", token,
 	).Replace(string(template))
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")

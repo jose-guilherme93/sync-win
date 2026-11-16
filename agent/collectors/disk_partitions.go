@@ -23,6 +23,10 @@ func CollectDiskPartitions() []DiskPartition {
 		"xfs": true, "btrfs": true, "f2fs": true,
 		"ntfs": true, "vfat": true, "exfat": true,
 		"fuseblk": true, // NTFS via ntfs-3g
+		"zfs":     true, "tmpfs": true,
+		// A container's root is an overlay mount; without it the agent inside one
+		// reports only tmpfs and the disk reads as empty.
+		"overlay": true,
 	}
 
 	var partitions []DiskPartition
@@ -41,9 +45,15 @@ func CollectDiskPartitions() []DiskPartition {
 		device := fields[0]
 		mount := fields[1]
 		fsType := fields[2]
+		options := fields[3]
 
 		// Skip virtual/pseudo filesystems
 		if !validTypes[fsType] {
+			continue
+		}
+		// Every user session gets its own tmpfs. Only the ones that can fill up
+		// and matter to an operator are reported.
+		if fsType == "tmpfs" && mount != "/tmp" && mount != "/dev/shm" && mount != "/run" {
 			continue
 		}
 		// Skip duplicates (same mount point)
@@ -59,6 +69,13 @@ func CollectDiskPartitions() []DiskPartition {
 			btrfsDevices[device] = true
 		}
 
+		// A bind-mounted file (Docker's /etc/hosts, /etc/resolv.conf) is not a
+		// filesystem: statfs on it returns the backing disk, which made a
+		// container look like a 96%-full 91 GB machine.
+		if info, err := os.Stat(mount); err != nil || !info.IsDir() {
+			continue
+		}
+
 		var stat syscall.Statfs_t
 		if err := syscall.Statfs(mount, &stat); err != nil {
 			continue
@@ -66,19 +83,40 @@ func CollectDiskPartitions() []DiskPartition {
 
 		totalBytes := stat.Blocks * uint64(stat.Bsize)
 		freeBytes := stat.Bavail * uint64(stat.Bsize)
+		reservedBytes := (stat.Bfree - stat.Bavail) * uint64(stat.Bsize)
 		usedBytes := totalBytes - freeBytes
 		var usedPercent float64
 		if totalBytes > 0 {
 			usedPercent = float64(usedBytes) * 100 / float64(totalBytes)
 		}
 
+		// Inode exhaustion fills a filesystem that still has free blocks, which
+		// is common under /var and invisible in a bytes-only view.
+		var inodesTotal, inodesUsed, inodesFree uint64
+		var inodesPct float64
+		if stat.Files > 0 {
+			inodesTotal = stat.Files
+			inodesFree = stat.Ffree
+			inodesUsed = inodesTotal - inodesFree
+			inodesPct = float64(inodesUsed) * 100 / float64(inodesTotal)
+		}
+
 		partitions = append(partitions, DiskPartition{
-			Mount:       mount,
-			Device:      device,
-			TotalBytes:  totalBytes,
-			UsedBytes:   usedBytes,
-			FreeBytes:   freeBytes,
-			UsedPercent: usedPercent,
+			Mount:         mount,
+			Device:        device,
+			FSType:        fsType,
+			Options:       options,
+			ReadOnly:      strings.Contains(","+options+",", ",ro,"),
+			TotalBytes:    totalBytes,
+			UsedBytes:     usedBytes,
+			FreeBytes:     freeBytes,
+			AvailBytes:    freeBytes,
+			ReservedBytes: reservedBytes,
+			UsedPercent:   usedPercent,
+			InodesTotal:   inodesTotal,
+			InodesUsed:    inodesUsed,
+			InodesFree:    inodesFree,
+			InodesUsedPct: inodesPct,
 		})
 	}
 

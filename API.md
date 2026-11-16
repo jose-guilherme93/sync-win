@@ -197,6 +197,49 @@ JSON responses are gzip-compressed when the client sends `Accept-Encoding: gzip`
 ]
 ```
 
+### `GET /api/agents/usage`
+
+Per-device history of the agent's own cost, read from the raw telemetry window.
+The dashboard's **Agents** screen draws one sparkline per device from it; a
+single request replaces one telemetry-history read per device.
+
+**Query:** `from`, `to` (RFC3339, optional). Defaults to the last two hours and
+is capped at 24 hours. Samples are downsampled to at most 60 points per device.
+
+**Response:** `200 OK`
+```json
+{
+  "from": "2024-01-01T10:00:00Z",
+  "to": "2024-01-01T12:00:00Z",
+  "devices": {
+    "dev-1": [{ "t": "2024-01-01T10:00:05Z", "rss": 12000000, "cpu": 0.41 }]
+  }
+}
+```
+
+A device that never reported `agent_memory_bytes` and `agent_cpu_usage` is
+absent from `devices` rather than present with zeroes: absent and idle are
+different readings.
+
+### `GET /api/devices/{id}/storage/history`
+
+Daily per-mount usage, kept in `storage_daily` (one row per mount per day, 400
+days). The Storage screen uses it for the growth chart and the "full in N days"
+forecast.
+
+**Query:** `days` (optional, default 90, at most 400).
+
+**Response:** `200 OK`
+```json
+{
+  "device_id": "dev-1",
+  "days": 90,
+  "mounts": {
+    "/": [{ "day": "2026-11-08", "total_bytes": 100, "used_bytes": 42, "free_bytes": 58, "inodes_used": 40, "inodes_total": 1000 }]
+  }
+}
+```
+
 ### `GET /api/devices/{id}`
 
 List the synced preference files for a device.
@@ -344,7 +387,10 @@ Submit hardware telemetry from the agent.
     "power_watts": 15.0,
     "battery_percent": 85.0,
     "battery_status": "charging",
-    "agent_version": "0.5.8",
+    "agent_version": "0.11.5",
+    "agent_update_status": "current",
+    "agent_update_target": "0.11.5",
+    "agent_update_at": "2024-01-01T00:00:00Z",
     "operating_system": "linux",
     "architecture": "amd64",
     "cpu_model": "Intel Core i7-12700K",

@@ -108,7 +108,22 @@ O agent valida tamanho, encoding e paths relativos, rejeita traversal/symlinks, 
 
 Campos enviados (todos opcionais no display, mas parte do contrato):
 
-`cpu_usage_percent, memory_used_bytes, memory_total_bytes, disk_read_bytes, disk_write_bytes, disk_read_rate, disk_write_rate, net_rx_rate, net_tx_rate, uptime_seconds, load_average, cpu_model, cpu_clock_mhz, core_voltage_v, kernel_version, operating_system, power_watts, architecture, desktop_environment, locale, timezone, agent_version`
+`cpu_usage_percent, memory_used_bytes, memory_total_bytes, disk_read_bytes, disk_write_bytes, disk_read_rate, disk_write_rate, net_rx_rate, net_tx_rate, uptime_seconds, load_average, cpu_model, cpu_clock_mhz, core_voltage_v, kernel_version, operating_system, power_watts, architecture, desktop_environment, locale, timezone, agent_version, agent_update_status, agent_update_target, agent_update_error, agent_update_at`
+
+`agent_update_status` é o resultado da última tentativa do atualizador
+automático: `requested` (o daemon viu uma versão nova e pediu a atualização),
+`current` (checou e não havia nada a fazer), `updated` (binário trocado e
+serviço reiniciado) ou `failed`. O atualizador roda como root em uma unit
+própria e não tem outro canal para o dashboard, então grava o resultado em
+`/var/lib/sync-win/agent-update-state.json` (o mesmo diretório de estado do
+daemon, via `STATE_DIRECTORY`; a unit de update de instalações antigas não
+declara `StateDirectory`, por isso o caminho do sistema é usado como fallback em
+vez de `$HOME` do root). O daemon lê esse arquivo e o envia na telemetria.
+Arquivo ausente significa que o atualizador nunca rodou neste dispositivo — o
+dashboard deve tratar isso como `unknown`, nunca como falha.
+`agent_update_error` carrega o motivo real (ex.: binário construído sem chave de
+assinatura, endpoint de assinatura em 404); `agent_update_target` é a versão que
+a tentativa buscava e `agent_update_at` o instante da checagem.
 
 `cpu_clock_mhz` é a frequência média atual entre as CPUs lógicas, lida de
 `cpufreq/scaling_cur_freq` (kHz) com fallback para a linha `cpu MHz` de
@@ -118,6 +133,25 @@ reportado quando um canal `hwmon` tem label de rail de CPU (`Vcore`, `CPU`,
 omitido em vez de exibir um rail de 12 V como se fosse tensão de core.
 
 Campos adicionais coletados: `battery_percent`, `battery_status`, `network_ifaces[]` (inclui `rx_errors`/`tx_errors`), `disk_partitions[]`, `swap_used_bytes`/`swap_total_bytes`, `cpu_core_usage[]`, `top_cpu_processes[]`/`top_mem_processes[]`/`stopped_processes[]`/`zombie_processes[]`/`process_summary`, `processes[]`/`process_stats`/`process_history`/`processes_collected`/`process_io_available`, `docker_available`/`docker_containers[]`, `lynis_available` e `logs[]`. `power_watts` é a potência instantânea real (watts), não a porcentagem da bateria.
+
+### Storage (`disk_partitions[]`, `disk_devices[]`)
+
+Cada filesystem reporta `mount`, `device`, `fstype`, `options` (a linha do
+`/proc/mounts`), `read_only`, `total_bytes`/`used_bytes`/`free_bytes`,
+`avail_bytes` (o que um processo sem privilégio ainda pode escrever),
+`reserved_bytes` (blocos reservados que `df` conta como usados para o usuário) e
+`inodes_total`/`inodes_used`/`inodes_free`/`inodes_used_percent`. Inode é um
+limite independente: um filesystem pode encher sem que os blocos acabem.
+
+Cada disco físico reporta `name`, `model`, `serial`, `size_bytes`, `rotational`,
+`removable`, `temperature_c` (hwmon do kernel, quando existe), os contadores de
+`/proc/diskstats` (`read_bytes`, `write_bytes`) e, calculados entre duas
+amostras, `read_rate`, `write_rate`, `iops`, `await_ms` e `util_percent`. O
+bloco `smart` só está disponível quando `smartctl` existe e pode ser executado;
+`available:false` traz o motivo em `reason` e nunca deve ser exibido como um
+disco saudável. `tests[]` é o log de self-test (tipo, resultado e a hora de
+power-on em que rodou). Uma leitura de SMART é feita no máximo a cada 15
+minutos.
 
 ### Taxas de rede são agregadas pelo agente
 

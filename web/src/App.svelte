@@ -14,6 +14,7 @@
   import DeviceOverview from './components/screens/DeviceOverview.svelte'
   import Alerts from './components/screens/Alerts.svelte'
   import Findings from './components/screens/Findings.svelte'
+  import Agents from './components/screens/Agents.svelte'
   import Reports from './components/screens/Reports.svelte'
   import Storage from './components/screens/Storage.svelte'
   import Network from './components/screens/Network.svelte'
@@ -70,8 +71,6 @@
   // Install-time capabilities. SSH is genuinely opt-in (off); auto-update is
   // on by default because a device that stops updating is stranded, but the
   // operator can turn it off here.
-  let enableSsh = false
-  let enableAutoUpdate = true
   // The device list/heartbeat poll is fixed. It used to follow the chart range,
   // which meant a 30-day window polled every five minutes and made a healthy
   // device look stale. The topbar range now only controls how often the charts
@@ -259,16 +258,22 @@
     return s
   })()
   $: installServerIsLocal = /^(https?:\/\/)?(localhost|127\.0\.0\.1|::1|\[::1\])(:\d+)?(\/|$)/.test(normalizedInstallServer)
+  // A dashboard served over https that hands out an http address (or an
+  // internal host port) produces a command that fails on every other machine.
+  $: installServerRisk =
+    typeof location !== 'undefined' &&
+    location.protocol === 'https:' &&
+    (!/^https:\/\//.test(normalizedInstallServer) || /:(8080|8086|5173)\b/.test(normalizedInstallServer))
   let enrollmentToken = ''
   let enrollmentLoading = false
   let enrollmentAttempted = false
   let enrollmentError = ''
-  $: installQuery = (() => {
-    const params = new URLSearchParams()
-    if (enableSsh) params.set('ssh', '1')
-    if (!enableAutoUpdate) params.set('autoupdate', '0')
-    return params.toString()
-  })()
+  // Capabilities default to on; the installer asks for none of them because we
+  // always send an explicit value for each.
+  let installSsh = true
+  let installAutoupdate = true
+  let installLynis = true
+  $: installQuery = `ssh=${installSsh ? 1 : 0}&autoupdate=${installAutoupdate ? 1 : 0}&lynis=${installLynis ? 1 : 0}`
   $: installCommand = signedIn && enrollmentToken
     ? `curl -fsSL "${normalizedInstallServer}/install/${enrollmentToken}${installQuery ? `?${installQuery}` : ''}" -o /tmp/sync-win-install.sh && sudo bash /tmp/sync-win-install.sh`
     : ''
@@ -907,6 +912,7 @@
     devices: 'Devices',
     alerts: 'Alerts',
     findings: 'Findings',
+    agents: 'Agents',
     reports: 'Reports',
     notifications: 'Notifications',
     configuration: 'Settings'
@@ -1653,6 +1659,8 @@
             <Alerts {devices} authHeaders={ownerHeaders} onSelect={selectDevice} />
           {:else if navState.section === 'findings'}
             <Findings {devices} onSelect={selectDevice} />
+          {:else if navState.section === 'agents'}
+            <Agents {devices} {shippedAgentVersion} />
           {:else if navState.section === 'reports'}
             <Reports {devices} onSelect={selectDevice} />
           {:else if navState.section === 'configuration'}
@@ -1813,16 +1821,15 @@
         <div>
           <p class="eyebrow">Installation</p>
           <h2 id="install-modal-title">Add a Linux device</h2>
-          <small>Run this once on the target machine. A temporary enrollment token is generated for each install.</small>
+          <small>Run once on the target machine.</small>
         </div>
         <button class="ghost" on:click={closeAddDevice}>Close</button>
       </div>
 
-      {#if installServerIsLocal}
+      {#if installServerRisk}
         <div class="warn-banner" role="alert">
-          <strong>Dashboard accessed via localhost — this command only works on this machine.</strong>
-          To install on another device, replace the address below with the server's reachable address
-          (e.g. <code>http://100.x.x.x:8080</code>).
+          <strong>This address is not reachable the way this dashboard is.</strong>
+          The dashboard is on <code>{typeof location !== 'undefined' ? location.protocol : 'https:'}</code>; install with the public https address and no internal port.
         </div>
       {/if}
 
@@ -1830,17 +1837,21 @@
         <span class="section-label">Capabilities</span>
         <div class="cap-toggles">
           <label class="toggle-row">
-            <input type="checkbox" bind:checked={enableSsh} />
+            <input type="checkbox" bind:checked={installSsh} />
             <span class="toggle-text">
               <strong>SSH remote access</strong>
-              <em>Open a terminal from this dashboard. No port is opened on the device.</em>
             </span>
           </label>
           <label class="toggle-row">
-            <input type="checkbox" bind:checked={enableAutoUpdate} />
+            <input type="checkbox" bind:checked={installAutoupdate} />
             <span class="toggle-text">
               <strong>Automatic updates</strong>
-              <em>Keep the agent current. Turning this off means the device stops receiving fixes.</em>
+            </span>
+          </label>
+          <label class="toggle-row">
+            <input type="checkbox" bind:checked={installLynis} />
+            <span class="toggle-text">
+              <strong>Security audit (lynis)</strong>
             </span>
           </label>
         </div>
@@ -1851,9 +1862,6 @@
           <span class="section-label">Agent connects to</span>
           <input type="text" bind:value={installServer} spellcheck="false" aria-label="Server address used by installed agents" />
         </label>
-        <small class="install-hint">
-          Dev stack: API on host port <strong>8088</strong>, server container on <strong>8080</strong>, dashboard on <strong>5173</strong>.
-        </small>
       </div>
 
       {#if enrollmentLoading}
@@ -1887,11 +1895,17 @@
         <div class="cap-row">
           <div class="cap-text">
             <strong>Automatic updates</strong>
-            <code>sudo sync-win-agent update</code>
+            <code>sudo sync-win-agent set update on</code>
           </div>
-          <button class="ghost" on:click={() => copyText('sudo sync-win-agent update')}>Copy</button>
+          <button class="ghost" on:click={() => copyText('sudo sync-win-agent set update on')}>Copy</button>
         </div>
-        <p class="muted">The agent never changes a capability on its own.</p>
+        <div class="cap-row">
+          <div class="cap-text">
+            <strong>Security audit (lynis)</strong>
+            <code>sudo sync-win-agent set lynis on</code>
+          </div>
+          <button class="ghost" on:click={() => copyText('sudo sync-win-agent set lynis on')}>Copy</button>
+        </div>
       </details>
     </div>
   </div>

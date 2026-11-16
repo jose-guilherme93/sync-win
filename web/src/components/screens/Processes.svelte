@@ -109,6 +109,9 @@
   let killConfirmText = ''
   let killBusy = false
   let killBlockedReason: string | null = null
+  let killPos = { x: 0, y: 0 }
+  let killPopoverEl: HTMLElement | undefined = undefined
+  let killInput: HTMLInputElement | undefined = undefined
   let actionError = ''
 
   let refreshTimer: ReturnType<typeof setInterval> | null = null
@@ -430,6 +433,11 @@
 
   function onGlobalKey(event: KeyboardEvent) {
     if (event.key === 'Escape') {
+      if (killTarget) {
+        event.preventDefault()
+        closeKill()
+        return
+      }
       if (viewsOpen) viewsOpen = false
       return
     }
@@ -572,17 +580,39 @@
     await load()
   }
 
-  function openKill(row: ProcessRow) {
+  function openKill(row: ProcessRow, event?: MouseEvent) {
     killTarget = row
     killBlockedReason = snapshot ? signalBlockReason(row, snapshot) : null
     killConfirmText = ''
     killBusy = false
+    killPos = { x: event?.clientX ?? 0, y: event?.clientY ?? 0 }
   }
 
   function closeKill() {
     killTarget = null
     killBlockedReason = null
     killConfirmText = ''
+  }
+
+  function anchorKill(node: HTMLElement) {
+    const margin = 8
+    const apply = () => {
+      const rect = node.getBoundingClientRect()
+      const w = rect.width || node.offsetWidth || 260
+      const h = rect.height || node.offsetHeight || 120
+      const vw = window.innerWidth
+      const vh = window.innerHeight
+      let left = killPos.x
+      let top = killPos.y
+      if (left + w + margin > vw) left = killPos.x - w
+      if (top + h + margin > vh) top = killPos.y - h
+      left = Math.max(margin, Math.min(left, vw - w - margin))
+      top = Math.max(margin, Math.min(top, vh - h - margin))
+      node.style.left = `${left}px`
+      node.style.top = `${top}px`
+    }
+    requestAnimationFrame(apply)
+    return { destroy() {} }
   }
 
   async function confirmKill() {
@@ -678,6 +708,18 @@
     void loadHistory(true)
   }
 
+  function onDocClick(event: MouseEvent) {
+    if (!killTarget) return
+    if (killPopoverEl && killPopoverEl.contains(event.target as Node)) return
+    closeKill()
+  }
+
+  $: if (killTarget) {
+    void tick().then(() => {
+      if (!killBlockedReason) killInput?.focus()
+    })
+  }
+
   onMount(() => {
     if (refreshTimer) clearInterval(refreshTimer)
     refreshTimer = setInterval(() => void load(), 30_000)
@@ -686,11 +728,13 @@
     // visit to the tree layout.
     void loadHistory()
     window.addEventListener('keydown', onGlobalKey)
+    document.addEventListener('click', onDocClick, true)
   })
 
   onDestroy(() => {
     if (refreshTimer) clearInterval(refreshTimer)
     window.removeEventListener('keydown', onGlobalKey)
+    document.removeEventListener('click', onDocClick, true)
   })
 </script>
 
@@ -966,7 +1010,7 @@
                       <td class="qacell">
                         <span class="qa">
                           <button class="qab" disabled={!signalsEnabled} title={signalsEnabled ? 'TERM' : ACTIONS_OFF} on:click|stopPropagation={() => doSignal(row, 'TERM')}>T</button>
-                          <button class="qab crit" disabled={!signalsEnabled} title={signalsEnabled ? 'KILL' : ACTIONS_OFF} on:click|stopPropagation={() => openKill(row)}>K</button>
+                          <button class="qab crit" disabled={!signalsEnabled} title={signalsEnabled ? 'KILL' : ACTIONS_OFF} on:click|stopPropagation={(e) => openKill(row, e as MouseEvent)}>K</button>
                           <button class="qab" disabled={!signalsEnabled} title={signalsEnabled ? 'STOP' : ACTIONS_OFF} on:click|stopPropagation={() => doSignal(row, 'STOP')}>S</button>
                           <button class="qab" disabled={!signalsEnabled} title={signalsEnabled ? 'CONT' : ACTIONS_OFF} on:click|stopPropagation={() => doSignal(row, 'CONT')}>C</button>
                         </span>
@@ -1207,26 +1251,44 @@
     </aside>
   {/if}
 
-  <!-- kill modal -->
+  <!-- kill popover (anchored, no backdrop) -->
   {#if killTarget}
-    <div class="backdrop" role="presentation">
-      <div class="dialog" role="alertdialog" aria-modal="true">
-        <h3>Kill {killTarget.name}?</h3>
-        {#if killBlockedReason}
-          <p class="blocked">Blocked: {killBlockedReason}</p>
-        {:else}
-          <p>Type {killTarget.pid} to confirm.</p>
-          <input bind:value={killConfirmText} placeholder={String(killTarget.pid)} />
-        {/if}
-        <div class="actions">
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="kill-pop"
+      bind:this={killPopoverEl}
+      use:anchorKill
+      role="dialog"
+      tabindex="-1"
+      aria-modal="false"
+      aria-label="Kill confirmation"
+      on:click|stopPropagation
+    >
+      {#if killBlockedReason}
+        <div class="kill-line">Blocked · protected</div>
+        <div class="kill-pid muted">pid {killTarget.pid}</div>
+        <div class="kill-actions">
+          <button class="btn" on:click={closeKill}>Close</button>
+        </div>
+      {:else}
+        <div class="kill-line">Kill {killTarget.name}</div>
+        <div class="kill-pid muted">pid {killTarget.pid}</div>
+        <input
+          bind:this={killInput}
+          bind:value={killConfirmText}
+          placeholder={String(killTarget.pid)}
+          on:keydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void confirmKill() } }}
+        />
+        <div class="kill-actions">
           <button class="btn" on:click={closeKill}>Cancel</button>
           <button
             class="btn crit"
-            disabled={!!killBlockedReason || killConfirmText.trim() !== String(killTarget.pid) || killBusy}
+            disabled={killConfirmText.trim() !== String(killTarget.pid) || killBusy}
             on:click={confirmKill}
           >Kill</button>
         </div>
-      </div>
+      {/if}
     </div>
   {/if}
 </section>
@@ -1415,9 +1477,12 @@
   @keyframes slide-in { from { transform: translateX(16px); opacity: 0 } to { transform: none; opacity: 1 } }
   .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
   .blocked { color: var(--crit); font-size: 0.75rem; margin: 0; }
-  .dialog { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; width: min(420px, 90vw); display: grid; gap: 0.75rem; z-index: 41; position: relative; }
-  .dialog input { padding: 0.45rem 0.6rem; background: var(--card-inset); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-family: var(--mono); }
-  .dialog h3 { margin: 0; color: var(--text-bright); font-size: 1rem; }
+  .kill-pop { position: fixed; z-index: 60; width: 264px; max-width: calc(100vw - 16px); background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: var(--radius); box-shadow: var(--shadow-pop); padding: 0.75rem; display: grid; gap: 0.5rem; }
+  .kill-pop .kill-line { color: var(--text-bright); font-size: 0.85rem; font-weight: 600; margin: 0; }
+  .kill-pop .kill-pid.muted { color: var(--text-faint); font-size: 0.72rem; font-family: var(--mono); margin: 0; }
+  .kill-pop input { padding: 0.45rem 0.6rem; background: var(--card-inset); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-family: var(--mono); }
+  .kill-pop .kill-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
+  .btn.crit { border-color: rgba(248, 113, 113, 0.45); color: var(--crit); }
 
   /* ---- history ---- */
   .histgrid { display: grid; grid-template-columns: minmax(280px, 360px) minmax(0, 1fr); gap: 0.85rem; align-items: start; }

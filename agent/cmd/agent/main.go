@@ -485,6 +485,10 @@ type telemetryStats struct {
 	AgentCPUUsage      float64        `json:"agent_cpu_usage"`
 	AgentMemoryBytes   uint64         `json:"agent_memory_bytes,omitempty"`
 	AgentVersion       string         `json:"agent_version"`
+	AgentUpdateStatus  string         `json:"agent_update_status,omitempty"`
+	AgentUpdateTarget  string         `json:"agent_update_target,omitempty"`
+	AgentUpdateError   string         `json:"agent_update_error,omitempty"`
+	AgentUpdateAt      string         `json:"agent_update_at,omitempty"`
 	OperatingSystem    string         `json:"operating_system"`
 	Architecture       string         `json:"architecture"`
 	CPUModel           string         `json:"cpu_model,omitempty"`
@@ -507,6 +511,7 @@ type telemetryStats struct {
 	DiskReadRate       float64                    `json:"disk_read_rate,omitempty"`
 	DiskWriteRate      float64                    `json:"disk_write_rate,omitempty"`
 	DiskPartitions     []diskPartition            `json:"disk_partitions,omitempty"`
+	DiskDevices        []diskDevice               `json:"disk_devices,omitempty"`
 	SwapUsedBytes      uint64                     `json:"swap_used_bytes,omitempty"`
 	SwapTotalBytes     uint64                     `json:"swap_total_bytes,omitempty"`
 	MemoryBuffersBytes uint64                     `json:"memory_buffers_bytes,omitempty"`
@@ -542,12 +547,40 @@ type telemetryStats struct {
 }
 
 type diskPartition struct {
-	Mount       string  `json:"mount"`
-	Device      string  `json:"device"`
-	TotalBytes  uint64  `json:"total_bytes"`
-	UsedBytes   uint64  `json:"used_bytes"`
-	FreeBytes   uint64  `json:"free_bytes"`
-	UsedPercent float64 `json:"used_percent"`
+	Mount         string  `json:"mount"`
+	Device        string  `json:"device"`
+	FSType        string  `json:"fstype,omitempty"`
+	Options       string  `json:"options,omitempty"`
+	ReadOnly      bool    `json:"read_only,omitempty"`
+	TotalBytes    uint64  `json:"total_bytes"`
+	UsedBytes     uint64  `json:"used_bytes"`
+	FreeBytes     uint64  `json:"free_bytes"`
+	AvailBytes    uint64  `json:"avail_bytes,omitempty"`
+	ReservedBytes uint64  `json:"reserved_bytes,omitempty"`
+	UsedPercent   float64 `json:"used_percent"`
+	InodesTotal   uint64  `json:"inodes_total,omitempty"`
+	InodesUsed    uint64  `json:"inodes_used,omitempty"`
+	InodesFree    uint64  `json:"inodes_free,omitempty"`
+	InodesUsedPct float64 `json:"inodes_used_percent,omitempty"`
+}
+
+// diskDevice mirrors collectors.DiskDevice on the wire.
+type diskDevice struct {
+	Name         string                  `json:"name"`
+	Model        string                  `json:"model,omitempty"`
+	Serial       string                  `json:"serial,omitempty"`
+	SizeBytes    uint64                  `json:"size_bytes"`
+	Rotational   bool                    `json:"rotational"`
+	Removable    bool                    `json:"removable,omitempty"`
+	TemperatureC float64                 `json:"temperature_c,omitempty"`
+	ReadBytes    uint64                  `json:"read_bytes,omitempty"`
+	WriteBytes   uint64                  `json:"write_bytes,omitempty"`
+	ReadRate     float64                 `json:"read_rate,omitempty"`
+	WriteRate    float64                 `json:"write_rate,omitempty"`
+	IOPS         float64                 `json:"iops,omitempty"`
+	AwaitMs      float64                 `json:"await_ms,omitempty"`
+	UtilPercent  float64                 `json:"util_percent,omitempty"`
+	SMART        *collectors.SmartHealth `json:"smart,omitempty"`
 }
 
 type processInfo struct {
@@ -699,6 +732,7 @@ func cmdDaemon(args []string) {
 	serverURL := fs.String("server", "http://localhost:8080", "server URL")
 	deviceID := fs.String("device-id", "", "device ID")
 	deviceToken := fs.String("device-token", "", "device token")
+	deviceTokenFile := fs.String("device-token-file", "", "path to file containing the device token")
 	interval := fs.Duration("interval", time.Duration(syncwinContract.Telemetry.IntervalSecondsDefault)*time.Second, "telemetry interval")
 	preferenceInterval := fs.Duration("preference-interval", time.Duration(syncwinContract.PreferencesSync.IntervalSecondsDefault)*time.Second, "preference sync interval")
 	appsInterval := fs.Duration("apps-interval", time.Duration(syncwinContract.AppsInventory.RefreshIntervalSeconds)*time.Second, "application inventory interval")
@@ -725,6 +759,10 @@ func cmdDaemon(args []string) {
 	}
 
 	state := loadAgentState()
+
+	// The installer writes the token to a 0640 file and the unit points at it,
+	// so the credential never sits in a world-readable unit.
+	*deviceToken = resolveDeviceToken(*deviceToken, *deviceTokenFile)
 
 	// If credentials not provided via flags, load from state file.
 	if strings.TrimSpace(*deviceID) == "" {
@@ -1565,6 +1603,10 @@ type hardwareSample struct {
 	At             time.Time
 }
 
+// diskReader is the daemon's per-device I/O sampler: it keeps the previous
+// counters, so it must be one instance for the process.
+var diskReader = collectors.NewDiskDeviceReader()
+
 // collectHardwareStats collects real hardware data from /proc, /sys, and collectors.
 // Independent data sources are collected in parallel using goroutines.
 // It returns the telemetry payload and the sample to feed into the next call.
@@ -1601,6 +1643,10 @@ func collectHardwareStats(prev *hardwareSample, now time.Time, sampleDocker bool
 	stats.OperatingSystem = runtime.GOOS
 	stats.Architecture = runtime.GOARCH
 	stats.AgentVersion = agentVersion
+	// The updater runs in its own root unit and has no other channel back to
+	// the dashboard. A missing file means it has never run here, which is not
+	// the same as a failed attempt.
+	applyUpdateStateToStats(&stats)
 	stats.CollectedAt = now.Format(time.RFC3339)
 
 	// Parallel collectors for heavier I/O operations
@@ -1701,6 +1747,14 @@ func collectHardwareStats(prev *hardwareSample, now time.Time, sampleDocker bool
 	go func() {
 		defer wg.Done()
 		diskParts = collectors.CollectDiskPartitions()
+	}()
+
+	// Block devices: per-disk throughput, latency and SMART
+	var diskDevices []collectors.DiskDevice
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		diskDevices = diskReader.Collect(now)
 	}()
 
 	// Memory expanded (swap, buffers, cached)
@@ -1905,12 +1959,40 @@ func collectHardwareStats(prev *hardwareSample, now time.Time, sampleDocker bool
 	// Disk partitions
 	for _, p := range diskParts {
 		stats.DiskPartitions = append(stats.DiskPartitions, diskPartition{
-			Mount:       p.Mount,
-			Device:      p.Device,
-			TotalBytes:  p.TotalBytes,
-			UsedBytes:   p.UsedBytes,
-			FreeBytes:   p.FreeBytes,
-			UsedPercent: p.UsedPercent,
+			Mount:         p.Mount,
+			Device:        p.Device,
+			FSType:        p.FSType,
+			Options:       p.Options,
+			ReadOnly:      p.ReadOnly,
+			TotalBytes:    p.TotalBytes,
+			UsedBytes:     p.UsedBytes,
+			FreeBytes:     p.FreeBytes,
+			AvailBytes:    p.AvailBytes,
+			ReservedBytes: p.ReservedBytes,
+			UsedPercent:   p.UsedPercent,
+			InodesTotal:   p.InodesTotal,
+			InodesUsed:    p.InodesUsed,
+			InodesFree:    p.InodesFree,
+			InodesUsedPct: p.InodesUsedPct,
+		})
+	}
+	for _, d := range diskDevices {
+		stats.DiskDevices = append(stats.DiskDevices, diskDevice{
+			Name:         d.Name,
+			Model:        d.Model,
+			Serial:       d.Serial,
+			SizeBytes:    d.SizeBytes,
+			Rotational:   d.Rotational,
+			Removable:    d.Removable,
+			TemperatureC: d.TemperatureC,
+			ReadBytes:    d.ReadBytes,
+			WriteBytes:   d.WriteBytes,
+			ReadRate:     d.ReadRate,
+			WriteRate:    d.WriteRate,
+			IOPS:         d.IOPS,
+			AwaitMs:      d.AwaitMs,
+			UtilPercent:  d.UtilPercent,
+			SMART:        d.SMART,
 		})
 	}
 
@@ -2465,7 +2547,7 @@ func policyDefaultsMap() map[string]any {
 // Linux account the ephemeral key will target.
 func cmdSet(args []string) error {
 	if len(args) != 2 {
-		return fmt.Errorf("usage: sync-win-agent set <ssh|ssh-user> <on|off|username>")
+		return fmt.Errorf("usage: sync-win-agent set <ssh|ssh-user|update|lynis> <on|off|username>")
 	}
 	key := strings.TrimSpace(args[0])
 	value := strings.TrimSpace(args[1])
@@ -2485,8 +2567,29 @@ func cmdSet(args []string) error {
 			return fmt.Errorf("invalid user name: %q", value)
 		}
 		policy["ssh_user"] = value
+	case "update":
+		enabled, err := parseOnOff(value)
+		if err != nil {
+			return err
+		}
+		// Automatic updates are systemd units, not a policy key.
+		return cmdSetUpdate(enabled)
+	case "signals":
+		enabled, err := parseOnOff(value)
+		if err != nil {
+			return err
+		}
+		// Kill/renice from the dashboard. The server has its own gate
+		// (SYNCWIN_ENABLE_REMOTE_MUTATIONS); both must be on.
+		policy["allow_process_signals"] = enabled
+	case "lynis":
+		enabled, err := parseOnOff(value)
+		if err != nil {
+			return err
+		}
+		policy["allow_lynis_audit"] = enabled
 	default:
-		return fmt.Errorf("unknown setting %q (supported: ssh, ssh-user)", key)
+		return fmt.Errorf("unknown setting %q (supported: ssh, ssh-user, update, lynis)", key)
 	}
 
 	if err := writePolicyMap(path, policy); err != nil {
