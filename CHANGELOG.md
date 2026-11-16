@@ -11,6 +11,28 @@ Versions are decided by release-please: it reads the Conventional Commits on
 version, and a breaking change increases the major version. Merging that pull
 request publishes the image and creates the tag.
 
+## [0.18.0](https://github.com/jose-guilherme93/sync-win/compare/v0.17.2...v0.18.0) (2026-11-16)
+
+
+### Features
+
+* agent fleet screen, updater outcome reporting and storage charts ([a7af979](https://github.com/jose-guilherme93/sync-win/commit/a7af9793f1a2217e567aa1ad0664da503de03e9e))
+* **live:** lease the fast collection cadence to someone watching ([c451092](https://github.com/jose-guilherme93/sync-win/commit/c451092a7699805b06f95b6a65a1ce5b9eadd21f))
+* overview on a live series, and a terminal that says when it dropped ([56702dd](https://github.com/jose-guilherme93/sync-win/commit/56702dd844b3baa74a1bfa3a7df46bc51fcd064c))
+* **telemetry:** compact /telemetry/series endpoint for dashboard charts ([9927488](https://github.com/jose-guilherme93/sync-win/commit/9927488a112eed36f69a947287ce6487e2af257e))
+* **web:** a remote terminal that says when it dropped ([4cd9bf7](https://github.com/jose-guilherme93/sync-win/commit/4cd9bf7ff753034c88c604f4ada5e69fd2ac281c))
+* **web:** overview on a compact series, with a smooth reveal and live mode ([8e05d6d](https://github.com/jose-guilherme93/sync-win/commit/8e05d6d62cbf14e6a60f84c3bf145674e076c94c))
+
+
+### Bug Fixes
+
+* **ci:** gate the release PR's steps, not its jobs ([04379ce](https://github.com/jose-guilherme93/sync-win/commit/04379ce11fa468ba30addc2960107ba09e18a3d0))
+* **ci:** gate the release PR's steps, not its jobs ([e545ce2](https://github.com/jose-guilherme93/sync-win/commit/e545ce2f0f962c38627daa5292257fc5e9674d26))
+* **ci:** keep the e2e teardown out of the release PR ([21256c9](https://github.com/jose-guilherme93/sync-win/commit/21256c944846ce28fcf90ae5c9164d9b9c0bd5e5))
+* **ci:** keep the e2e teardown out of the release PR ([839dc2c](https://github.com/jose-guilherme93/sync-win/commit/839dc2c145eb3ce0986072dca1c26428f6d92306))
+* **release:** bring main back into develop before opening the PR ([d0e375f](https://github.com/jose-guilherme93/sync-win/commit/d0e375f2c2d1f2342c812ad39a4a71b9384e6324))
+* **release:** bring main back into develop before opening the PR ([2efc5cc](https://github.com/jose-guilherme93/sync-win/commit/2efc5cc3d2bc53153be124f78fa919a3b49348c6))
+
 ## [0.17.2](https://github.com/jose-guilherme93/sync-win/compare/v0.17.1...v0.17.2) (2026-11-16)
 
 
