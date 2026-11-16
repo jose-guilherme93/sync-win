@@ -224,13 +224,13 @@ func TestCollectProcessesCPUDeltaMath(t *testing.T) {
 	if firefox.CPUPercent != 20 {
 		t.Errorf("cpu_percent = %v, want 20", firefox.CPUPercent)
 	}
-	// Two cores halve the machine-normalised percentage.
+	// One core's worth of jiffies is 100% regardless of how many cores exist.
 	rows2, _, _, err := CollectProcesses(root, 250, 2, prev, 10*time.Second, time.Unix(2000, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := findRow(rows2, 1000).CPUPercent; got != 10 {
-		t.Errorf("cpu_percent on 2 cores = %v, want 10", got)
+	if got := findRow(rows2, 1000).CPUPercent; got != 20 {
+		t.Errorf("cpu_percent on 2 cores = %v, want 20 (per-core share)", got)
 	}
 	// IO rates are deltas too.
 	if firefox.IOReadBps != 307.2 || firefox.IOWriteBps != 614.4 {

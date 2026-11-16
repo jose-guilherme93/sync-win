@@ -73,10 +73,10 @@ func parseProcStatLine(pid int, line string) (procStatSnapshot, bool) {
 // zombie) pay for status and cmdline reads. That makes the cycle cheaper than
 // the previous comm+status+stat pass while carrying far more information.
 //
-// CPUPercent keeps the machine-share meaning used by the rest of the payload:
-// a process saturating one core on a four-core machine reports 25. Threads are
-// reported separately so a multi-threaded process is not mistaken for a small
-// one.
+// CPUPercent is a share of one core, like top: saturating a core reports 100
+// on any machine, and a multi-threaded process can exceed it up to the core
+// count. Threads are reported separately so a multi-threaded process is not
+// mistaken for a small one.
 func CollectProcessSnapshot(topLimit, problemLimit, cmdlineChars, cpuCores int, prev ProcessCPUSample, elapsed time.Duration) (ProcessSnapshot, ProcessCPUSample) {
 	var snap ProcessSnapshot
 	entries, err := os.ReadDir("/proc")
@@ -150,12 +150,12 @@ func CollectProcessSnapshot(topLimit, problemLimit, cmdlineChars, cpuCores int, 
 		if seconds > 0 {
 			if before, ok := prev[row.pid]; ok && row.cpuTime > before {
 				jiffies := float64(row.cpuTime - before)
-				cpuPercent = jiffies / clockTicks / seconds / float64(cpuCores) * 100.0
+				cpuPercent = jiffies / clockTicks / seconds * 100.0
 				if cpuPercent < 0 {
 					cpuPercent = 0
 				}
-				if cpuPercent > 100 {
-					cpuPercent = 100
+				if maxPercent := float64(cpuCores) * 100.0; cpuPercent > maxPercent {
+					cpuPercent = maxPercent
 				}
 			}
 		}
