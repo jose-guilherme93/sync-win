@@ -88,6 +88,17 @@ export function buildTimeTicks(from: number, to: number, limit = 8): number[] {
   return ticks
 }
 
+// Ruler maximum for plots without an explicit bound (rates, bytes/s): the
+// smallest of the 1/2/4/5×10ⁿ steps that covers the data, so the top ruler
+// label is a round number the eye can divide by two.
+export function niceMax(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 1
+  const base = 10 ** Math.floor(Math.log10(value))
+  const scaled = value / base
+  const step = scaled <= 1 ? 1 : scaled <= 2 ? 2 : scaled <= 4 ? 4 : scaled <= 5 ? 5 : 10
+  return step * base
+}
+
 export function formatTimeTick(ms: number, spanMs: number): string {
   const date = new Date(ms)
   if (!Number.isFinite(date.getTime())) return ''

@@ -39,12 +39,13 @@ The project is built around three main components:
    - Svelte 5 + TypeScript 6 + Vite 8 + Chart.js 4
    - token-first: a single access-token screen, configured only through the server's `.env`
    - Home is the fleet: a dense list with online state, last-seen time and inline CPU/RAM/disk percentage meters. The sidebar carries fleet and administration navigation only — never a device menu, not even a disabled one
-   - device Overview: a vitals strip (CPU, memory, disk /, temp, load, network) above axis-labelled Performance/Network/Disk I/O charts whose legends show last/average/min/max for every series, plus load and cores, storage, interfaces, top processes and system facts. Charts draw as SVG plots (`ui/SeriesPlot.svelte`) fed by `GET /api/devices/{id}/telemetry/series?window=…&since=…` (client: `lib/telemetry-series.ts`, with a history-v2 fallback): the first paint shows the newest slice of the window and the rest fills in leftward, the 30 s refetch requests only the delta, and loading state is a mountain stroke, never a skeleton
+   - device Overview: axis-labelled Performance/Network/Disk I/O charts whose legends show last/average/min/max for every series, plus load and cores, storage, interfaces, top processes and system facts
    - opening a device leaves the fleet: the sidebar is hidden, the device header shows identity plus a `Home` back button, and the 15 sections become one horizontally scrollable tab row (hardware · system · access) rendered by `shell/DeviceTabs.svelte`: Overview, CPU & Thermal, Memory, Storage, Network, Topology (the interactive network map), Sensors, Docker, Processes, Services (services and ports side by side with a detail drawer), Packages, Logs, Security (audit history plus host posture), Remote access, Settings
    - Docker container management (list, start/stop/restart/kill/remove, exec, compose, prune)
    - Remote access screen: tabbed SSH terminal (xterm.js, up to six concurrent sessions, tabs named by the running program) and a scrollable recent-session audit; device actions live in Settings → Maintenance
    - Lynis security audit: run audit, read the stored report (hardening index, warnings/suggestions/categories) and history; host posture (public listeners, pending updates, failed units)
    - fleet-wide Administration → Settings screen: the application log viewer (filter by level, category, device, time window; live tail; metadata detail) plus the log level and retention controls
+   - fleet-wide Agents screen (sidebar, next to Findings): what each agent costs on its own machine — RSS and CPU as a share of that machine's capacity, a two-hour RSS line per device, the installed version against the one the server ships, and the last update outcome with its reason; the server version and signature availability head the screen
    - notification settings and inbox with real-time SSE push
    - device notes and attachments
 
@@ -146,6 +147,12 @@ against it.
    release-please sees, and it answers with the release pull request.
 
 Every other branch in the repository is stale; two branches is the whole model.
+
+`make release` runs the path end to end (merge `develop` into `main`, wait for
+release-please, merge its pull request, wait for the image): one command, no
+hand-stepped waits, and every gate intact. The release pull request skips the CI
+jobs because it only rewrites the version files — the full suite runs again on
+the merge to `main`, and `Release` publishes only after that run is green.
 
 ## Commit and release convention
 

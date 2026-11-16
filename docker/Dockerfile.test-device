@@ -17,6 +17,10 @@ FROM ubuntu:24.04
 ENV container=docker \
     DEBIAN_FRONTEND=noninteractive
 
+# Passwordless sudo for the one login account: this is a disposable dev device,
+# and a remote terminal that cannot restart a service cannot exercise the thing
+# the terminal exists for -- an agent update under a live session. Never copy
+# this line into a real device.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         systemd \
@@ -29,9 +33,12 @@ RUN apt-get update \
         nginx \
         lynis \
         openssh-server \
+        sudo \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --shell /bin/bash devuser \
     && usermod -p '*' devuser \
+    && printf 'devuser ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/devuser \
+    && chmod 0440 /etc/sudoers.d/devuser \
     && ssh-keygen -A \
     && mkdir -p /run/sshd \
     && ln -sf /lib/systemd/system/ssh.service /etc/systemd/system/multi-user.target.wants/ssh.service

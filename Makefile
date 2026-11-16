@@ -240,6 +240,14 @@ docker-build: ## Build the production Docker image
 	docker build -f docker/Dockerfile.server -t $${IMAGE_NAME:-sync-win}:$${IMAGE_TAG:-latest} .
 
 # -----------------------------------------------------------------------------
+# Release
+# -----------------------------------------------------------------------------
+
+.PHONY: release
+release: ## Merge develop into main, merge the release PR and wait for the published image
+	@scripts/release.sh
+
+# -----------------------------------------------------------------------------
 # Quality
 # -----------------------------------------------------------------------------
 

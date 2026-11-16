@@ -4,6 +4,7 @@
   import { computedStatus, deviceLabel, type Device } from '../../lib/types'
   import { formatRelative } from '../../lib/format'
   import { isAgentOutdated } from '../../lib/version'
+  import { agentCannotSelfUpdate } from '../../lib/agent-health'
   import { RANGES, DEFAULT_RANGE, type RangeId } from '../../lib/timerange'
 
   // The topbar answers "which device am I looking at, is it alive, and how
@@ -56,10 +57,17 @@
         {#if device.hardware?.agent_version}
           <span class="sep" aria-hidden="true">·</span>
           {#if isAgentOutdated(device.hardware.agent_version, shippedAgentVersion)}
-            <span
-              class="agent-outdated"
-              title={`Agent ${device.hardware.agent_version}. The server ships ${shippedAgentVersion}. The agent keeps syncing, but screens that read newer fields — the network map peers, for example — stay empty until it updates.`}
-            >agent {device.hardware.agent_version} · update</span>
+            {#if agentCannotSelfUpdate(device)}
+              <span
+                class="agent-blocked"
+                title={`Agent ${device.hardware.agent_version} was built without the update signing key, so it cannot install updates itself. Reinstall the agent once from Administration → Settings; automatic updates resume afterwards.`}
+              >agent {device.hardware.agent_version} · reinstall</span>
+            {:else}
+              <span
+                class="agent-outdated"
+                title={`Agent ${device.hardware.agent_version}. The server ships ${shippedAgentVersion}. The agent keeps syncing, but screens that read newer fields — the network map peers, for example — stay empty until it updates.`}
+              >agent {device.hardware.agent_version} · update</span>
+            {/if}
           {:else}
             <span class="agent">agent {device.hardware.agent_version}</span>
           {/if}
@@ -146,13 +154,20 @@
   }
 
   .agent,
-  .agent-outdated {
+  .agent-outdated,
+  .agent-blocked {
     font-variant-numeric: tabular-nums;
   }
 
   .agent-outdated {
     color: var(--warn);
     cursor: help;
+  }
+
+  .agent-blocked {
+    color: var(--danger, #ef5350);
+    cursor: help;
+    font-weight: 600;
   }
 
   .os {

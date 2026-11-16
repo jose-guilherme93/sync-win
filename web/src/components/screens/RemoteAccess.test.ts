@@ -37,6 +37,14 @@ vi.mock('@xterm/xterm', () => ({
     reset() {
       this.writes = []
     }
+    // The drop writer reads the transcript back through the buffer API; the
+    // stub serves two content rows so the faint re-emission is observable.
+    buffer = {
+      active: {
+        length: 2,
+        getLine: (y: number) => (y < 2 ? { translateToString: () => `out-${y}` } : null)
+      }
+    }
     focus() {
       this.focused = true
     }
@@ -177,12 +185,14 @@ describe('RemoteAccess screen', () => {
     vi.unstubAllGlobals()
   })
 
-  it('lists recent sessions in a side panel instead of under the terminal', async () => {
+  it('keeps the session audit as a collapsed footer line until it is opened', async () => {
+    const hourAgo = (hours: number) => new Date(Date.now() - hours * 3600 * 1000).toISOString()
     stubFetch((url) => {
       if (url.endsWith('/remote-access/sessions')) {
         return json({
           sessions: [
-            { id: 's1', user: 'zoe', started_at: '2026-10-21T12:00:00Z', ended_at: '2026-10-21T12:05:00Z', reason: 'closed' }
+            { id: 's1', user: 'zoe', started_at: hourAgo(1), ended_at: hourAgo(1 - 0.7), reason: 'closed' },
+            { id: 's2', user: 'zoe', started_at: hourAgo(3) }
           ]
         })
       }
@@ -191,10 +201,60 @@ describe('RemoteAccess screen', () => {
     })
     render(RemoteAccess, { props: { device, authHeaders: { Authorization: 'Bearer owner-session' } } })
 
-    expect(await screen.findByRole('heading', { name: 'Sessions' })).toBeTruthy()
-    const row = (await screen.findByText('zoe')).closest('li')
-    expect(row?.textContent).toContain('closed')
-    expect(screen.getByText('1 recent')).toBeTruthy()
+    const toggle = await screen.findByRole('button', { name: 'Previous sessions' })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    // Collapsed, the audit is only the counter line; the rows do not render.
+    await screen.findByText('2 · 24h')
+    expect(screen.queryByText('zoe')).toBeNull()
+
+    await fireEvent.click(toggle)
+
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    const users = screen.getAllByText('zoe')
+    expect(users).toHaveLength(2)
+    const [ended, open] = users
+    expect(ended.closest('div')!.textContent).toMatch(/^zoe \d{2}:\d{2} 42m closed$/)
+    expect(open.closest('div')!.textContent).toMatch(/^zoe \d{2}:\d{2} — open$/)
+  })
+
+  it('marks a dropped session with the drop line, the tab dot and the live count', async () => {
+    ticketFetch()
+    await renderScreen()
+    await openTerminal(1)
+
+    FakeSocket.instances[0].closeWith('timeout')
+
+    // Everything already on screen is re-emitted faint; the drop stamp is the
+    // plain last line.
+    const written = xterm.terminals[0].writes.join('')
+    expect(written).toContain('\x1b[2mout-0')
+    expect(written).toMatch(/\[\d{2}:\d{2} timeout\]/)
+    await screen.findByText(/1\/6 · 0 live/)
+    expect(screen.getByRole('tab', { name: 'alice' }).querySelector('.dot')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Disconnect alice' })).toBeNull()
+  })
+
+  it('reconnects the dropped tab in place with a fresh ticket', async () => {
+    const calls = ticketFetch()
+    await renderScreen()
+    await openTerminal(1)
+    FakeSocket.instances[0].closeWith('timeout')
+
+    await screen.findByRole('button', { name: 'Reconnect alice' })
+    await fireEvent.click(screen.getByRole('button', { name: 'Reconnect alice' }))
+    await vi.waitFor(() => expect(FakeSocket.instances).toHaveLength(2))
+
+    // Same tab, no new tab; the dot and the resume icon are gone while
+    // connecting, and the ticket path runs again for the same account.
+    expect(screen.getAllByRole('tab')).toHaveLength(1)
+    expect(screen.getByRole('tab', { name: 'alice' }).getAttribute('aria-selected')).toBe('true')
+    await vi.waitFor(() => expect(screen.getByRole('tab', { name: 'alice' }).querySelector('.dot')).toBeNull())
+    expect(screen.queryByRole('button', { name: /Reconnect/ })).toBeNull()
+    expect(FakeSocket.instances[1].url).toContain('ticket=tkt-2')
+    expect(calls.filter((call) => call.method === 'POST')).toHaveLength(2)
+
+    FakeSocket.instances[1].open()
+    expect(await screen.findByText(/1\/6 · 1 live/)).toBeTruthy()
   })
 
   it('opens a terminal in a tab as the chosen account', async () => {
@@ -336,12 +396,15 @@ describe('RemoteAccess screen', () => {
     await renderScreen()
     await openTerminal(1)
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Disconnect alice' }))
 
     expect(FakeSocket.instances[0].closed).toBe(true)
     expect(screen.getAllByRole('tab')).toHaveLength(1)
-    expect(screen.queryByRole('button', { name: 'Disconnect' })).toBeNull()
-    expect(screen.getByText(/0 connected/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Disconnect alice' })).toBeNull()
+    await screen.findByText(/0 live/)
+    // A deliberate disconnect ends like a drop: the stamp lands, faint.
+    const written = xterm.terminals[0].writes.join('')
+    expect(written).toMatch(/\[\d{2}:\d{2} closed\]/)
   })
 
   it('uses the account chosen before the tab was created', async () => {

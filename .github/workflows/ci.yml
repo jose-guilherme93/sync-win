@@ -21,6 +21,11 @@ jobs:
   lint-go:
     name: Lint Go (${{ matrix.module }})
     runs-on: ubuntu-latest
+    # The release pull request only rewrites version.txt, the manifest and the
+    # changelog: the same tree already ran the full suite on develop, and the
+    # merge to main runs it again before anything is published. Repeating it here
+    # only delays the release. A skipped job still satisfies a required check.
+    if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'release-please--') }}
     strategy:
       fail-fast: false
       matrix:
@@ -47,6 +52,11 @@ jobs:
   test-go:
     name: Test Go
     runs-on: ubuntu-latest
+    # The release pull request only rewrites version.txt, the manifest and the
+    # changelog: the same tree already ran the full suite on develop, and the
+    # merge to main runs it again before anything is published. Repeating it here
+    # only delays the release. A skipped job still satisfies a required check.
+    if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'release-please--') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -66,6 +76,11 @@ jobs:
   build-go:
     name: Build Go
     runs-on: ubuntu-latest
+    # The release pull request only rewrites version.txt, the manifest and the
+    # changelog: the same tree already ran the full suite on develop, and the
+    # merge to main runs it again before anything is published. Repeating it here
+    # only delays the release. A skipped job still satisfies a required check.
+    if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'release-please--') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -85,6 +100,11 @@ jobs:
   web:
     name: Build Web
     runs-on: ubuntu-latest
+    # The release pull request only rewrites version.txt, the manifest and the
+    # changelog: the same tree already ran the full suite on develop, and the
+    # merge to main runs it again before anything is published. Repeating it here
+    # only delays the release. A skipped job still satisfies a required check.
+    if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'release-please--') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -112,6 +132,11 @@ jobs:
   docker-build:
     name: Build Docker Image
     runs-on: ubuntu-latest
+    # The release pull request only rewrites version.txt, the manifest and the
+    # changelog: the same tree already ran the full suite on develop, and the
+    # merge to main runs it again before anything is published. Repeating it here
+    # only delays the release. A skipped job still satisfies a required check.
+    if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'release-please--') }}
     needs: [test-go, web]
     steps:
       - uses: actions/checkout@v4
@@ -184,6 +209,11 @@ jobs:
   e2e:
     name: Browser end-to-end
     runs-on: ubuntu-latest
+    # The release pull request only rewrites version.txt, the manifest and the
+    # changelog: the same tree already ran the full suite on develop, and the
+    # merge to main runs it again before anything is published. Repeating it here
+    # only delays the release. A skipped job still satisfies a required check.
+    if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'release-please--') }}
     # A green run takes about 4m30s, of which the browser suite is under 3m.
     # This bound is the backstop for a wedge that no individual step timeout
     # catches: it used to be 30 minutes, which meant one hung CDP session cost

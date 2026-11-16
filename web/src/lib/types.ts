@@ -26,6 +26,7 @@ export type HardwareStats = {
   disk_read_rate: number
   disk_write_rate: number
   disk_partitions?: DiskPartition[]
+  disk_devices?: DiskDevice[]
   network_ifaces?: NetworkIface[]
   net_rx_rate?: number
   net_tx_rate?: number
@@ -41,6 +42,12 @@ export type HardwareStats = {
   agent_version?: string
   agent_cpu_usage?: number
   agent_memory_bytes?: number
+  // Outcome of the last automatic-update attempt, reported by the updater
+  // through its own state file. Absent means it has never run here.
+  agent_update_status?: string
+  agent_update_target?: string
+  agent_update_error?: string
+  agent_update_at?: string
   gpu_temperature_celsius?: number
   battery_percent?: number
   battery_status?: string
@@ -61,10 +68,76 @@ export type HardwareStats = {
 export type DiskPartition = {
   mount: string
   device: string
+  fstype?: string
+  options?: string
+  read_only?: boolean
   total_bytes: number
   used_bytes: number
   free_bytes: number
+  avail_bytes?: number
+  reserved_bytes?: number
   used_percent: number
+  inodes_total?: number
+  inodes_used?: number
+  inodes_free?: number
+  inodes_used_percent?: number
+}
+
+export type SmartTest = {
+  type?: string
+  result?: string
+  hours?: number
+}
+
+export type SmartHealth = {
+  available: boolean
+  reason?: string
+  passed: boolean
+  status_known?: boolean
+  temperature_c?: number
+  power_on_hours?: number
+  data_written_bytes?: number
+  wear_percent?: number
+  reallocated?: number
+  pending?: number
+  crc_errors?: number
+  last_test_type?: string
+  last_test_result?: string
+  last_test_hours?: number
+  tests?: SmartTest[]
+}
+
+export type DiskDevice = {
+  name: string
+  model?: string
+  serial?: string
+  size_bytes: number
+  rotational: boolean
+  removable?: boolean
+  temperature_c?: number
+  read_bytes?: number
+  write_bytes?: number
+  read_rate?: number
+  write_rate?: number
+  iops?: number
+  await_ms?: number
+  util_percent?: number
+  smart?: SmartHealth
+}
+
+export type StorageDailyPoint = {
+  day: string
+  total_bytes: number
+  used_bytes: number
+  free_bytes: number
+  inodes_used: number
+  inodes_total: number
+}
+
+export type StorageHistory = {
+  device_id: string
+  days: number
+  mounts: Record<string, StorageDailyPoint[]>
 }
 
 export type NetworkIface = {
@@ -321,6 +394,19 @@ export type Device = {
 }
 
 export type AppInfo = { name: string; version: string; source: string; path?: string }
+
+// One sample of the agent's own cost, read from the raw telemetry window.
+export type AgentUsagePoint = {
+  t: string
+  rss: number
+  cpu: number
+}
+
+export type AgentUsageSeries = {
+  from: string
+  to: string
+  devices: Record<string, AgentUsagePoint[]>
+}
 
 // Client-side status fallback. The API reports a status, but it can lag the
 // last_seen_at by a poll interval, so the UI recomputes from the timestamp and

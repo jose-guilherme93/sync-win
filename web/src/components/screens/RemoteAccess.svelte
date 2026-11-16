@@ -4,7 +4,6 @@
   import { FitAddon } from '@xterm/addon-fit'
   import '@xterm/xterm/css/xterm.css'
   import { deviceLabel, type Device } from '../../lib/types'
-  import { formatRelative } from '../../lib/format'
   import { apiFetch, apiURL } from '../../lib/api'
   import {
     MAX_TERMINAL_TABS,
@@ -60,6 +59,7 @@
   let selectedUser = ''
   type Session = { id: string; user: string; started_at: string; ended_at?: string; reason?: string }
   let sessions: Session[] = []
+  let historyOpen = false
 
   async function loadSessions() {
     try {
@@ -330,15 +330,47 @@
       if (session.disposed) return
       const tab = findTab(id)
       // A socket that never opened was refused by the device (usually its
-      // session cap); say so instead of silently printing [disconnected].
+      // session cap); say so in the tab's own error line instead of a drop.
       if (tab && tab.status === 'connecting') {
         updateTab(id, { status: 'error', error: closeMessage(event?.reason) })
       } else {
         updateTab(id, { status: 'closed' })
+        writeDrop(session, (event?.reason || '').trim() || 'closed')
       }
-      session.term.writeln('\r\n\x1b[2m[disconnected]\x1b[0m')
       void loadSessions()
     }
+  }
+
+  // A dropped session ends the way the prototype draws it: everything already
+  // on screen goes faint and the last line is the plain drop stamp. xterm
+  // cannot restyle text that is already in its buffer, so the transcript is
+  // re-emitted in the faint tone; a cursor-less buffer still gets the stamp.
+  function writeDrop(session: LiveSession, reason: string) {
+    const now = new Date()
+    const hh = String(now.getHours()).padStart(2, '0')
+    const mm = String(now.getMinutes()).padStart(2, '0')
+    const stamp = `[${hh}:${mm} ${reason}]`
+    const buffer = session.term.buffer?.active
+    if (buffer && buffer.length > 0) {
+      const rows: string[] = []
+      for (let y = 0; y < buffer.length; y += 1) {
+        const text = buffer.getLine(y)?.translateToString(true) ?? ''
+        if (text) rows.push(text)
+      }
+      session.term.reset()
+      session.term.write(`\x1b[2m${rows.join('\r\n')}\x1b[0m\r\n\x1b[?25l${stamp}`)
+      return
+    }
+    session.term.write(`\r\n\x1b[?25l${stamp}`)
+  }
+
+  // Reconnect never leaves the tab and never mints another one: it re-uses the
+  // openTerminal path (fresh ticket, fresh socket) against the same pane and
+  // the same terminal, and the strip only sees the status flip back.
+  function reconnectTab(id: string) {
+    const tab = findTab(id)
+    if (!tab || tab.status === 'connecting' || tab.status === 'connected') return
+    void connectTab(id)
   }
 
   async function selectTab(id: string) {
@@ -383,6 +415,38 @@
     live.get(id)?.socket?.close()
   }
 
+  // Session audit rendering. The list stays a dry line set: user, clock time,
+  // duration, and the reason the server recorded — no table chrome, and no
+  // invented wording when the API omits one.
+  function clockTime(iso: string): string {
+    const date = new Date(iso)
+    if (Number.isNaN(date.getTime())) return '—'
+    return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+  }
+
+  function duration(s: Session): string {
+    if (!s.ended_at) return '—'
+    const start = new Date(s.started_at).getTime()
+    const end = new Date(s.ended_at).getTime()
+    if (Number.isNaN(start) || Number.isNaN(end) || end < start) return '—'
+    const minutes = Math.round((end - start) / 60000)
+    if (minutes < 60) return `${minutes}m`
+    return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, '0')}`
+  }
+
+  function outcome(s: Session): string {
+    if (!s.ended_at) return 'open'
+    return (s.reason || '').trim() || 'closed'
+  }
+
+  function recentCount(list: Session[]): number {
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000
+    return list.filter((s) => {
+      const started = new Date(s.started_at).getTime()
+      return Number.isNaN(started) || started >= cutoff
+    }).length
+  }
+
   onDestroy(() => {
     for (const id of [...live.keys()]) disposeSession(id)
   })
@@ -394,12 +458,11 @@
     <span class="target">target: {deviceLabel(device)}</span>
   </header>
 
-  <div class="remote-grid">
   <article class="card terminal-card">
     <header class="card-head term-head">
       <h2>SSH terminal</h2>
       <div class="term-tools">
-        <span class="muted">{tabs.length}/{MAX_TERMINAL_TABS} · {connectedCount} connected</span>
+        <span class="count" aria-live="polite">{tabs.length}/{MAX_TERMINAL_TABS} · {connectedCount} live</span>
         {#if remoteInfo && remoteInfo.users.length > 0}
           <select class="account" bind:value={selectedUser} aria-label="account for new terminal">
             {#each remoteInfo.users as user (user)}
@@ -416,21 +479,39 @@
           />
         {/if}
         {#if activeTab && activeTab.status === 'connected'}
-          <button class="ghost" on:click={() => disconnectTab(activeTab.id)}>Disconnect</button>
+          <button
+            class="unplug"
+            type="button"
+            aria-label={`Disconnect ${tabName(activeTab)}`}
+            data-tip={`Disconnect ${tabName(activeTab)}`}
+            on:click={() => disconnectTab(activeTab.id)}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <g transform="translate(-2.1 2.1) rotate(45 12 12)">
+                <path d="M6 8h12v4a6 6 0 0 1-12 0z"/>
+                <path d="M12 18v4"/>
+              </g>
+              <g transform="translate(2.1 -2.1) rotate(-135 12 12)">
+                <path d="M9 2v6M15 2v6"/>
+                <path d="M6 8h12v4a6 6 0 0 1-12 0z"/>
+                <path d="M12 18v4"/>
+              </g>
+            </svg>
+          </button>
         {/if}
       </div>
     </header>
     {#if remoteInfo && !remoteInfo.server_enabled}
-      <div class="notice">Remote access is disabled on the server (<code>SYNCWIN_ENABLE_REMOTE_ACCESS</code>).</div>
+      <div class="state-line">Remote access is disabled on the server (<code>SYNCWIN_ENABLE_REMOTE_ACCESS</code>).</div>
     {:else if remoteInfo && !remoteInfo.device_enabled}
-      <div class="notice">
+      <div class="state-line">
         The device last reported remote access as off. If you just enabled it locally
         (<code>sudo sync-win-agent set ssh on</code>), give it a few seconds — you can still try.
       </div>
     {:else if remoteInfo && !remoteInfo.connected}
-      <div class="notice">The device is not connected to the remote tunnel yet.</div>
+      <div class="state-line">The device is not connected to the remote tunnel yet.</div>
     {/if}
-    {#if remoteInfoError}<div class="error">{remoteInfoError}</div>{/if}
+    {#if remoteInfoError}<div class="state-line" role="alert">{remoteInfoError}</div>{/if}
     <div class="tabrow">
       <div class="tabstrip" role="tablist" aria-label="Terminal sessions">
         {#each tabs as tab (tab.id)}
@@ -443,12 +524,7 @@
               aria-controls={`term-panel-${tab.id}`}
               on:click={() => selectTab(tab.id)}
             >
-              <span
-                class="tab-dot"
-                class:on={tab.status === 'connected'}
-                class:err={tab.status === 'error'}
-                aria-hidden="true"
-              ></span>
+              {#if tab.status === 'closed'}<span class="dot" aria-hidden="true"></span>{/if}
               <span class="tab-label">{tabName(tab)}</span>
             </button>
             <button
@@ -469,53 +545,82 @@
         disabled={!canAddTab}
       >+</button>
     </div>
-    {#if termError}<div class="error" role="alert">{termError}</div>{/if}
+    {#if termError}<div class="state-line" role="alert">{termError}</div>{/if}
     {#if activeTab?.error}
-      <div class="error" role="alert">{activeTab.error}</div>
+      <div class="state-line" role="alert">{activeTab.error}</div>
     {/if}
     {#if tabs.length === 0}
       <div class="terminal empty-terminal" style:height={termHeight ? `${termHeight}px` : null}>
-        No terminal open. Press + to start one.
+        No terminal open.
       </div>
     {:else}
       {#each tabs as tab (tab.id)}
         <div
-          class="terminal"
+          class="term-pane"
           class:hidden={tab.id !== activeTabId}
           id={`term-panel-${tab.id}`}
           role="tabpanel"
           aria-labelledby={`term-tab-${tab.id}`}
-          style:height={termHeight ? `${termHeight}px` : null}
-          use:mountTerminal={tab.id}
-        ></div>
+        >
+          <div
+            class="terminal"
+            style:height={termHeight ? `${termHeight}px` : null}
+            use:mountTerminal={tab.id}
+          ></div>
+          {#if tab.status === 'closed'}
+            <button
+              class="resume"
+              type="button"
+              aria-label={`Reconnect ${tabName(tab)}`}
+              data-tip={`Reconnect ${tabName(tab)}`}
+              on:click={() => reconnectTab(tab.id)}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <g transform="translate(-2.1 2.1) rotate(45 12 12)">
+                  <path d="M6 8h12v4a6 6 0 0 1-12 0z"/>
+                  <path d="M12 18v4"/>
+                </g>
+                <g transform="translate(2.1 -2.1) rotate(-135 12 12)">
+                  <path d="M9 2v6M15 2v6"/>
+                  <path d="M6 8h12v4a6 6 0 0 1-12 0z"/>
+                  <path d="M12 18v4"/>
+                </g>
+              </svg>
+            </button>
+          {/if}
+        </div>
       {/each}
     {/if}
-  </article>
 
-  <aside class="card sessions-card">
-    <header class="card-head">
-      <h2>Sessions</h2>
-      <span class="muted">{sessions.length === 0 ? 'audit' : `${sessions.length} recent`}</span>
-    </header>
-    {#if sessions.length === 0}
-      <p class="sessions-empty">
-        No sessions yet. Opening a terminal records the account and when it ran here.
-      </p>
-    {:else}
-      <ul class="sessions">
-        {#each sessions as session (session.id)}
-          <li>
-            <span class="who">{session.user || 'default'}</span>
-            <span class="when">{formatRelative(session.started_at)}</span>
-            <span class="outcome" class:open={!session.ended_at}>
-              {session.ended_at ? (session.reason || 'closed') : 'open'}
-            </span>
-          </li>
-        {/each}
-      </ul>
-    {/if}
-  </aside>
-  </div>
+    <footer class="hist">
+      <button
+        class="hist-btn"
+        type="button"
+        aria-label="Previous sessions"
+        aria-expanded={historyOpen}
+        aria-controls="sessions-history"
+        on:click={() => (historyOpen = !historyOpen)}
+      >
+        <span>{recentCount(sessions)} · 24h</span>
+        <span class="spacer"></span>
+        <svg class="chev" class:open={historyOpen} width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 15l-6-6-6 6"/></svg>
+      </button>
+      {#if historyOpen}
+        <div class="hist-list" id="sessions-history">
+          {#each sessions as session (session.id)}
+            <div>
+              <span class="who">{session.user || 'default'}</span>
+              <span class="when">{clockTime(session.started_at)}</span>
+              <span class="dur">{duration(session)}</span>
+              <span class="why">{outcome(session)}</span>
+            </div>
+          {:else}
+            <p class="hist-empty">No sessions yet.</p>
+          {/each}
+        </div>
+      {/if}
+    </footer>
+  </article>
 </section>
 
 <style>
@@ -524,51 +629,68 @@
   .screen-head h2 { margin: 0; font-size: 0.95rem; color: var(--text-bright); }
   .target { color: var(--text-faint); font-size: 0.75rem; }
 
-  .remote-grid {
-    /* The aside is taken out of flow so its long audit list cannot stretch the
-       row: the terminal card owns the height and the aside fills it. */
-    position: relative;
-    padding-right: 272px;
-  }
-
-  .notice {
-    padding: 0.6rem 0.8rem; border: 1px solid rgba(251, 191, 36, 0.35);
-    border-radius: var(--radius-sm); background: var(--warn-dim);
-    color: var(--warn); font-size: 0.78rem; line-height: 1.5;
-  }
-  .error { padding: 0.6rem 0.8rem; border: 1px solid rgba(248, 113, 113, 0.4); border-radius: var(--radius-sm); background: var(--crit-dim); color: var(--crit); font-size: 0.78rem; }
-
   .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.9rem; overflow: hidden; }
   .card-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.6rem; }
   .card-head h2 { margin: 0; font-size: 0.82rem; font-weight: 600; color: var(--text); }
-  .muted { color: var(--text-faint); font-size: 0.72rem; }
 
-  .terminal-card code { background: var(--bg-elev); padding: 0 0.25rem; border-radius: 3px; font-size: 0.72rem; }
+  /* Server and device state stay as dry single lines, never a block. */
+  .state-line { color: var(--text-muted); font-size: 0.75rem; line-height: 1.5; margin: 0.1rem 0 0.35rem; }
+  .state-line code { background: var(--bg-elevated); padding: 0 0.25rem; border-radius: 3px; font-size: 0.72rem; }
+
   .term-head { margin-bottom: 0.25rem; }
   .term-tools { display: flex; align-items: center; gap: 0.4rem; min-width: 0; }
+  .count { color: var(--text-faint); font-size: 0.72rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .term-tools .account {
     width: 9.5rem;
     max-width: 38vw;
     padding: 0.34rem 0.5rem;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
-    background: var(--bg-elev);
+    background: var(--bg-elevated);
     color: var(--text);
     font-size: 0.75rem;
   }
-  .term-tools button.ghost {
+
+  /* Unplug (header) and resume (beside the drop line) share one quiet icon
+     treatment: monochrome at rest, red only under hover or focus. */
+  .unplug, .resume {
+    position: relative;
+    display: inline-grid;
+    place-items: center;
     margin: 0;
-    padding: 0.34rem 0.6rem;
+    padding: 0;
     border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
     background: transparent;
     color: var(--text-muted);
-    font-size: 0.75rem;
+    cursor: pointer;
   }
-  .term-tools button.ghost:hover {
-    border-color: var(--accent-border);
-    background: transparent;
+  .unplug { width: 1.7rem; height: 1.7rem; flex: none; }
+  .resume { width: 1.4rem; height: 1.4rem; }
+  .unplug:hover, .unplug:focus-visible, .resume:hover, .resume:focus-visible {
+    background: var(--crit-dim);
+    border-color: var(--border-strong);
+    color: var(--crit);
+  }
+  .unplug::after, .resume::after {
+    content: attr(data-tip);
+    position: absolute;
+    right: 0;
+    top: calc(100% + 6px);
+    padding: 4px 8px;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    background: var(--card-hover);
     color: var(--text);
+    font-size: 0.7rem;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms ease;
+    z-index: 6;
   }
+  .unplug:hover::after, .unplug:focus-visible::after, .resume:hover::after, .resume:focus-visible::after { opacity: 1; }
+
   .terminal {
     /* termHeight (measured against the scroll area) sets the real height; this
        is only the pre-measurement fallback. */
@@ -583,7 +705,9 @@
     border-radius: 0 0 var(--radius-sm) var(--radius-sm);
     background: #0b0f12;
   }
-  .terminal.hidden { display: none; }
+  .term-pane { position: relative; }
+  .term-pane.hidden { display: none; }
+  .term-pane .resume { position: absolute; left: 0.6rem; bottom: 0.55rem; }
   .empty-terminal {
     display: grid;
     place-items: center;
@@ -609,9 +733,9 @@
     border: 1px solid var(--border);
     border-bottom: 0;
     border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-    background: var(--bg-elev);
+    background: var(--bg-elevated);
   }
-  .tab.active { border-color: var(--accent-border); background: #0b0f12; }
+  .tab.active { background: #0b0f12; }
   .tab [role='tab'] {
     display: flex;
     align-items: center;
@@ -627,9 +751,7 @@
   }
   .tab.active [role='tab'] { color: var(--text-bright); }
   .tab [role='tab']:hover { background: transparent; color: var(--text); }
-  .tab-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-faint); flex: none; }
-  .tab-dot.on { background: var(--ok); }
-  .tab-dot.err { background: var(--crit); }
+  .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--crit); flex: none; }
   .tab-close {
     margin: 0;
     padding: 0.2rem 0.45rem;
@@ -659,47 +781,54 @@
     cursor: pointer;
   }
   .tab-add:hover:not(:disabled) {
-    border-color: var(--accent-border);
-    background: var(--accent-dim);
-    color: var(--accent);
+    border-color: var(--border-strong);
+    background: var(--card-hover);
+    color: var(--text);
   }
   .tab-add:disabled { opacity: 0.4; cursor: default; }
   .tab-label { max-width: 9.5rem; overflow: hidden; text-overflow: ellipsis; }
 
-  .sessions-card {
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: 260px;
+  .hist { border-top: 1px solid var(--border); margin-top: 0.6rem; }
+  .hist-btn {
     display: flex;
-    flex-direction: column;
-    min-height: 0;
-  }
-  .sessions-card .card-head { flex: none; }
-  .sessions { list-style: none; margin: 0; padding: 0; overflow-y: auto; min-height: 0; flex: 1; }
-  .sessions li {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 0.1rem 0.5rem;
-    padding: 0.45rem 0;
-    border-bottom: 1px solid var(--border);
     align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    margin: 0;
+    padding: 0.5rem 0.2rem;
+    border: 0;
+    border-radius: 0 0 var(--radius) var(--radius);
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
   }
-  .sessions li:last-child { border-bottom: 0; }
-  .sessions .who { grid-column: 1; grid-row: 1; color: var(--text); font-weight: 600; font-size: 0.75rem; }
-  .sessions .when { grid-column: 1; grid-row: 2; color: var(--text-faint); font-size: 0.7rem; }
-  .sessions .outcome { grid-column: 2; grid-row: 1 / span 2; color: var(--text-muted); font-size: 0.7rem; }
-  .sessions .outcome.open { color: var(--ok); }
-  .sessions-empty { margin: 0; color: var(--text-faint); font-size: 0.75rem; line-height: 1.5; }
+  .hist-btn:hover { background: var(--card-hover); color: var(--text); }
+  .hist-btn .spacer { flex: 1; }
+  .hist-btn .chev { color: var(--text-faint); transition: transform 150ms ease; }
+  .hist-btn .chev.open { transform: rotate(180deg); }
+  .hist-list { border-top: 1px solid var(--border); padding: 0.15rem 0 0.4rem; max-height: 12rem; overflow-y: auto; }
+  .hist-list > div {
+    display: grid;
+    grid-template-columns: 6rem 6rem 4.5rem 1fr;
+    gap: 0.75rem;
+    padding: 0.35rem 0.2rem;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .hist-list > div:last-child { border-bottom: 0; }
+  .hist-list .who { color: var(--text); }
+  .hist-list .when, .hist-list .dur { color: var(--text-muted); }
+  .hist-list .why { color: var(--text-muted); text-align: right; }
+  .hist-empty { margin: 0; padding: 0.4rem 0.2rem; color: var(--text-faint); font-size: 0.75rem; }
 
   @media (max-width: 760px) {
-    .remote-grid { padding-right: 0; }
-    .sessions-card {
-      position: static;
-      width: auto;
-      max-height: 220px;
-      margin-top: 0.75rem;
-    }
+    .hist-list > div { grid-template-columns: 5rem 5rem 3.75rem 1fr; gap: 0.5rem; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .unplug::after, .resume::after, .hist-btn .chev { transition: none; }
   }
 </style>
