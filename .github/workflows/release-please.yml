@@ -14,9 +14,16 @@
 # exist yet.
 #
 # ORDER OF EVENTS
-#   1. a normal PR merges        -> release-please opens/updates the release PR
-#   2. the release PR merges     -> CI runs on main, then release.yml sees the
-#                                   manifest ahead of the last tag and publishes
+#   1. a normal PR merges into main -> release-please opens/updates the release PR
+#   2. the release PR merges       -> CI runs on main, then release.yml sees the
+#                                     manifest ahead of the last tag and publishes
+#
+# TARGET BRANCH
+#   `target-branch: main` is required, not cosmetic. Without it the action uses
+#   the repository's default branch (`develop`), and because the last release
+#   commit on `main` is not an ancestor of `develop`, Release Please has no lower
+#   bound for its walk: it counted every merge on develop as unreleased and
+#   proposed a minor bump listing features that had shipped in 0.15 and 0.16.
 #
 # TOKEN
 #   The default GITHUB_TOKEN cannot trigger workflows, so CI would never run on
@@ -49,6 +56,14 @@ jobs:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+          # The action defaults target-branch to the repository's default
+          # branch, which is `develop` here. Release Please would then read
+          # develop's manifest and try to bound its walk with the last release
+          # commit, which lives on `main` and is not an ancestor of `develop`.
+          # With no lower bound it walked every merge on develop and pulled
+          # already-shipped 0.15/0.16 features into 0.18.0. Releases live on
+          # `main`, so the analysis must too.
+          target-branch: main
           # Tagging and publishing belong to release.yml, after the image is in
           # the registry. See the header.
           skip-github-release: true
