@@ -148,8 +148,6 @@ against it.
 
 Every other branch in the repository is stale; two branches is the whole model.
 
-Every other branch in the repository is stale; two branches is the whole model.
-
 `make release` runs the path end to end (merge `develop` into `main`, wait for
 release-please, merge its pull request, wait for the image): one command, no
 hand-stepped waits, and every gate intact. The release pull request skips the CI
