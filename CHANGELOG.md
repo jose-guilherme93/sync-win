@@ -11,6 +11,18 @@ Versions are decided by release-please: it reads the Conventional Commits on
 version, and a breaking change increases the major version. Merging that pull
 request publishes the image and creates the tag.
 
+## [0.17.2](https://github.com/jose-guilherme93/sync-win/compare/v0.17.1...v0.17.2) (2026-11-16)
+
+
+### Bug Fixes
+
+* a remote-terminal update can no longer lock you out ([30360c3](https://github.com/jose-guilherme93/sync-win/commit/30360c3a4a99426fb45043763df82d1c807d7c1a))
+* **agent:** run an update outside the terminal whose agent it restarts ([fa428c4](https://github.com/jose-guilherme93/sync-win/commit/fa428c457fc219bbc056ca1c1941f7f77ad78320))
+* **ci:** mark the release PR as released after publishing ([abb2aba](https://github.com/jose-guilherme93/sync-win/commit/abb2aba89479eab0b7136b8a59236c494fd6354c))
+* **ci:** mark the release PR as released after publishing ([af9dea5](https://github.com/jose-guilherme93/sync-win/commit/af9dea57e46984bc212235858932534ae7576f5b))
+* **installer:** restore the previous unit and detach from the session ([1bccfa4](https://github.com/jose-guilherme93/sync-win/commit/1bccfa4aec20b25e101d3101a7e5736b3293e0c5))
+* **remote-access:** host sessions in the helper so an update cannot drop them ([7dee833](https://github.com/jose-guilherme93/sync-win/commit/7dee833077e70b8a237df82e725624e408864fe6))
+
 ## [0.17.1](https://github.com/jose-guilherme93/sync-win/compare/v0.17.0...v0.17.1) (2026-11-16)
 
 
